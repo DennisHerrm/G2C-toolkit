@@ -1,0 +1,74 @@
+// Ressourcen der Windows-Anwendung.
+//
+// Kennung 1, nicht 101: Windows nimmt fuer das Symbol im Explorer und in
+// der Taskleiste das Icon mit der NIEDRIGSTEN Kennung in der Exe. Eine
+// hoehere Zahl waere zwar in der Datei, wuerde aber nicht als
+// Programmsymbol erscheinen.
+//
+// gui/main_win32.cpp laedt dieselbe Kennung. Aendert man eine der beiden
+// Stellen, meldet tools/check_win32.py das beim Bauen.
+#define IDI_G2C 1
+
+IDI_G2C ICON "g2c.ico"
+
+// --- Versionsangaben --------------------------------------------------------
+//
+// Nicht Zierde, sondern Notwendigkeit.
+//
+// Windows Defender arbeitet seit 2015 nicht mehr mit festen Signaturen,
+// sondern mit einem Vorhersagemodell: eine unbekannte Datei kann allein
+// wegen "Verdaechtigkeit" markiert werden, ohne dass sie bekannter
+// Schadsoftware aehnelt. Eine Exe OHNE Herkunftsangaben ist dabei die
+// unguenstigste Ausgangslage ? sie sieht aus wie etwas, das seine Herkunft
+// verbergen will.
+//
+// Das ersetzt keine Signatur, aber es kostet nichts und nimmt dem
+// Heuristikmodell einen Anhaltspunkt.
+
+#include <windows.h>
+
+#define G2C_VER_MAJOR 1
+#define G2C_VER_MINOR 0
+#define G2C_VER_PATCH 0
+#define G2C_VER_BUILD 0
+#define G2C_VER_STR   "1.0.0.0"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    G2C_VER_MAJOR,G2C_VER_MINOR,G2C_VER_PATCH,G2C_VER_BUILD
+ PRODUCTVERSION G2C_VER_MAJOR,G2C_VER_MINOR,G2C_VER_PATCH,G2C_VER_BUILD
+ FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+ FILEFLAGS      0
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040704b0"          // Deutsch, Unicode
+        BEGIN
+            VALUE "CompanyName",      "g2c"
+            VALUE "FileDescription",  "g2c - Ghoul2 Toolkit fuer Jedi Academy"
+            VALUE "FileVersion",      G2C_VER_STR
+            VALUE "InternalName",     "g2c"
+            VALUE "OriginalFilename", "g2c.exe"
+            VALUE "ProductName",      "g2c - Ghoul2 Toolkit"
+            VALUE "ProductVersion",   G2C_VER_STR
+            VALUE "Comments",         "Baut und zerlegt Ghoul2-Animationen (.gla) und Modelle (.glm)."
+        END
+        BLOCK "040904b0"          // Englisch, Unicode
+        BEGIN
+            VALUE "CompanyName",      "g2c"
+            VALUE "FileDescription",  "g2c - Ghoul2 Toolkit for Jedi Academy"
+            VALUE "FileVersion",      G2C_VER_STR
+            VALUE "InternalName",     "g2c"
+            VALUE "OriginalFilename", "g2c.exe"
+            VALUE "ProductName",      "g2c - Ghoul2 Toolkit"
+            VALUE "ProductVersion",   G2C_VER_STR
+            VALUE "Comments",         "Builds and extracts Ghoul2 animations (.gla) and models (.glm)."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x407, 1200, 0x409, 1200
+    END
+END

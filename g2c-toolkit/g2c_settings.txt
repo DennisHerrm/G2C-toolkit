@@ -1,0 +1,12 @@
+basedir=
+refgla=
+enums=
+frames=1
+mesh=1
+skin=1
+cache=1
+carcass=0
+readframes=0
+dark=1
+lang=0
+active=0
