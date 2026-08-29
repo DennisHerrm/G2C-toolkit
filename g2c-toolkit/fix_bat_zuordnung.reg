@@ -1,0 +1,29 @@
+Windows Registry Editor Version 5.00
+
+; Stellt die Dateizuordnung fuer .bat und .cmd wieder her.
+;
+; Zu benutzen NUR, wenn fenster_test.bat sich sofort schliesst. Dann ist
+; nicht die Batchdatei das Problem, sondern die Zuordnung in Windows.
+;
+; Was hier steht, ist der Auslieferungszustand von Windows 10 und 11.
+;
+; Vor dem Ausfuehren: Doppelklick, Nachfrage mit Ja bestaetigen,
+; danach abmelden und wieder anmelden.
+
+[HKEY_CLASSES_ROOT\.bat]
+@="batfile"
+
+[HKEY_CLASSES_ROOT\batfile\shell\open\command]
+@="\"%1\" %*"
+
+[HKEY_CLASSES_ROOT\.cmd]
+@="cmdfile"
+
+[HKEY_CLASSES_ROOT\cmdfile\shell\open\command]
+@="\"%1\" %*"
+
+; Die benutzerbezogene Ueberschreibung entfernen. Genau die wird von
+; Editoren und Packprogrammen gern gesetzt und sorgt dafuer, dass .bat
+; nicht mehr ausgefuehrt, sondern geoeffnet wird.
+[-HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.bat]
+[-HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.cmd]
