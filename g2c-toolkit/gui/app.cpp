@@ -157,6 +157,8 @@ void App::saveSettings() const {
     // Die Bindepose-Wahl gehoert zum Export, nicht zum Skript — sie bleibt
     // deshalb ueber Sitzungen erhalten. Wer sie einmal umstellen musste,
     // will das nicht bei jedem Start wiederholen.
+    f << "xsiver=" << (extract_.xsiVersion == xsiexp::ExportOptions::Version::V30 ? 30 : 35)
+      << "\n";
     f << "basepose=" << (extract_.basePose == xsiexp::ExportOptions::BasePose::World   ? 0
                          : extract_.basePose == xsiexp::ExportOptions::BasePose::Local ? 1
                                                                                        : 2)
@@ -198,6 +200,10 @@ void App::loadSettings() {
         else if (key == "cache") settings_.useCache = asBool();
         else if (key == "carcass") settings_.carcassCompat = asBool();
         else if (key == "backup") settings_.keepBackup = asBool();
+        else if (key == "xsiver")
+            extract_.xsiVersion = std::atoi(val.c_str()) == 35
+                                      ? xsiexp::ExportOptions::Version::V35
+                                      : xsiexp::ExportOptions::Version::V30;
         else if (key == "basepose") {
             const int v = std::atoi(val.c_str());
             extract_.basePose = v == 1   ? xsiexp::ExportOptions::BasePose::Local
@@ -535,6 +541,7 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     opt.scale = extract_.gla.skeleton.scale > 0.0f ? extract_.gla.skeleton.scale : 0.64f;
     opt.origin = extract_.origin;
     opt.basePose = extract_.basePose;
+    opt.version = extract_.xsiVersion;
     opt.origin = extract_.origin;
 
     std::size_t ok = 0, failed = 0;
@@ -2430,6 +2437,20 @@ void App::drawExtractPanel() {
     // Steht bewusst hier bei den Exportknoepfen und nicht in den
     // Einstellungen: sie betrifft nur den Export, und wer sie braucht,
     // sucht sie hier.
+    // dotXSI-Fassung.
+    ImGui::SameLine();
+    ImGui::TextDisabled("dotXSI");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70 * k);
+    {
+        const char* vn[] = {"3.0", "3.5"};
+        int cur = ex.xsiVersion == xsiexp::ExportOptions::Version::V30 ? 0 : 1;
+        if (ImGui::Combo("##xsiver", &cur, vn, 2))
+            ex.xsiVersion = cur == 0 ? xsiexp::ExportOptions::Version::V30
+                                     : xsiexp::ExportOptions::Version::V35;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::XsiVersionTip));
+
     ImGui::SameLine();
     ImGui::TextDisabled("%s", tr(S::BasePoseLabel));
     ImGui::SameLine();

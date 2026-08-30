@@ -208,6 +208,13 @@ public:
         // auswertet und den Block gar nicht ansieht.
         xsiexp::ExportOptions::BasePose basePose = xsiexp::ExportOptions::BasePose::World;
 
+        // dotXSI-Fassung der erzeugten Dateien.
+        //
+        // v3.0 benennt die Templates wie Ravens root.xsi, v3.5 laesst sie
+        // namenlos wie Ravens Animationsdateien. Aeltere Werkzeuge erwarten
+        // teils 3.0.
+        xsiexp::ExportOptions::Version xsiVersion = xsiexp::ExportOptions::Version::V30;
+
         // --- Vergleich mit einem anderen Humanoid -------------------------
         //
         // Sequenznamen der Gegenseite, klein geschrieben. Damit laesst sich

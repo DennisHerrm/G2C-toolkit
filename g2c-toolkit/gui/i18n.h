@@ -112,7 +112,7 @@ enum class S {
     SavedBeforeBuild, SameOutDir, CfgBelongsWithGla,
     CopyLog, CopyLogTip, LogCopied, ClearLog,
     BasePoseLabel, BasePoseTip, BasePoseWorld, BasePoseLocal, BasePoseNone,
-    GlaNameFromMakeSkel, KeepBackup, KeepBackupTip, AboutLogPath,
+    GlaNameFromMakeSkel, KeepBackup, KeepBackupTip, AboutLogPath, XsiVersionTip,
     ModePreview, ModePreviewHint, PreviewNoGla, PreviewPlay, PreviewPause,
     PreviewFrame, PreviewReset, PreviewHint, PreviewBones, PreviewSeq,
     OpenFrames, OriginLabel, OriginDetected, OriginNone, FramesMissing, FramesLoaded,

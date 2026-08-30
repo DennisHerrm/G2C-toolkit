@@ -1386,6 +1386,7 @@ int cmdExport(int argc, char** argv) {
     std::string makeSkel;
     g2::xsiexp::ExportOptions::BasePose basePose = g2::xsiexp::ExportOptions::BasePose::World;
     bool writeScale = true;
+    g2::xsiexp::ExportOptions::Version xsiVersion = g2::xsiexp::ExportOptions::Version::V30;
 
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1397,6 +1398,12 @@ int cmdExport(int argc, char** argv) {
         else if (a == "-car" && i + 1 < argc) carPath = argv[++i];
         else if (a == "-prefix" && i + 1 < argc) xsiPrefix = argv[++i];
         else if (a == "-noscale") writeScale = false;
+        else if (a == "-xsi" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            xsiVersion = (v == "3.5" || v == "35" || v == "0350")
+                             ? g2::xsiexp::ExportOptions::Version::V35
+                             : g2::xsiexp::ExportOptions::Version::V30;
+        }
         else if (a == "-basepose" && i + 1 < argc) {
             // Nur zum Ausprobieren gegen Carcass: welche Bindepose gehoert
             // in den BASEPOSE-Block? Siehe ExportOptions::BasePose.
@@ -1420,6 +1427,7 @@ int cmdExport(int argc, char** argv) {
 
     g2::xsiexp::ExportOptions opt;
     opt.basePose = basePose;
+    opt.version = xsiVersion;
     opt.scale = scale > 0.0f ? scale : (gla.skeleton.scale > 0.0f ? gla.skeleton.scale : 0.64f);
     opt.origin = origin;
 
