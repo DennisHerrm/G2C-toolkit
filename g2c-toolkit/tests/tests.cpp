@@ -1492,7 +1492,8 @@ void testXsiExport() {
     g2::xsiexp::ExportOptions eo;
     eo.scale = sk.scale;
     const std::string text = g2::xsiexp::exportSequence(gla, {"seq", 0, frames}, eo);
-    check(text.find("xsi 0350txt") == 0, "dotXSI-Kopf geschrieben");
+    // Vorgabe ist jetzt v3.0 — benannte Templates wie in Ravens root.xsi.
+    check(text.find("xsi 0300txt") == 0, "dotXSI-Kopf geschrieben");
     check(text.find("SI_Scene") != std::string::npos, "SI_Scene vorhanden");
 
     // SI_FCurve MUSS direktes Kind von SI_Model sein. Steckt es in einem
@@ -2125,6 +2126,65 @@ void testXsiExport() {
         // Bones und Frames bleiben davon unberuehrt.
         check(g5.numFrames == frames, "Framezahl unveraendert");
         check(g5.skeleton.bones.size() == sk.bones.size(), "Bonezahl unveraendert");
+    }
+
+    step("dotXSI-Fassung 3.0 und 3.5");
+    {
+        // Der Unterschied ist nicht nur die Zahl im Kopf: v3.0 BENENNT
+        // seine Templates, v3.5 laesst sie namenlos. Wir schrieben bisher
+        // benannte Templates unter einem 3.5-Kopf — 3.0-Inhalt mit
+        // 3.5-Etikett.
+        //
+        // Ravens JK2-root.xsi ist v3.0 (511 BASEPOSE, 514 SRT, benannte
+        // Kurven), ihre JKA-Animationsdateien sind v3.5 mit namenlosen.
+        g2::xsiexp::ExportOptions o30 = eo, o35 = eo;
+        o30.version = g2::xsiexp::ExportOptions::Version::V30;
+        o35.version = g2::xsiexp::ExportOptions::Version::V35;
+
+        const std::string t30 = g2::xsiexp::exportSequence(gla, {"v", 0, frames}, o30);
+        const std::string t35 = g2::xsiexp::exportSequence(gla, {"v", 0, frames}, o35);
+
+        check(t30.find("xsi 0300txt") == 0, "3.0 schreibt 0300txt");
+        check(t35.find("xsi 0350txt") == 0, "3.5 schreibt 0350txt");
+
+        // Und der Inhalt muss dazu passen, nicht nur der Kopf.
+        // Gegen den TATSAECHLICHEN ersten Bonenamen pruefen, nicht gegen
+        // "model_root": das Testskelett heisst anders, und ein Test, der auf
+        // einen fremden Namen prueft, misst nichts.
+        const std::string erster = "SI_FCurve " + sk.bones[0].name + "-";
+        check(t30.find(erster) != std::string::npos, "3.0 benennt die Kurven");
+        check(t35.find(erster) == std::string::npos, "3.5 benennt sie nicht");
+        check(t35.find("SI_FCurve {") != std::string::npos, "3.5 schreibt sie namenlos");
+
+        // Beide muessen sich wieder einlesen lassen und dasselbe ergeben.
+        const std::filesystem::path vd = std::filesystem::temp_directory_path() /
+                                         uniqueTestDir("xsiver");
+        std::filesystem::create_directories(vd);
+        { std::ofstream a(vd / "a.xsi", std::ios::binary); a << t30; }
+        { std::ofstream b(vd / "b.xsi", std::ios::binary); b << t35; }
+
+        const auto a30 = g2::xsi::loadAnimation(g2::xsi::parseFile((vd / "a.xsi").string()),
+                                                (vd / "a.xsi").string());
+        const auto a35 = g2::xsi::loadAnimation(g2::xsi::parseFile((vd / "b.xsi").string()),
+                                                (vd / "b.xsi").string());
+        check(a30.nodes.size() == a35.nodes.size(), "gleich viele Knoten");
+
+        g2::xsi::EvalOptions ve;
+        ve.scale = sk.scale;
+        const auto r30 = g2::xsi::evaluate(sk, a30, ve);
+        const auto r35 = g2::xsi::evaluate(sk, a35, ve);
+        double d = 0.0;
+        for (int f = 0; f < r30.frames.frameCount(); ++f)
+            for (int b = 0; b < nb; ++b) {
+                const auto A = r30.frames.at(f, b);
+                const auto B2 = r35.frames.at(f, b);
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        d = std::max(d, static_cast<double>(std::fabs(A.m[r][c] - B2.m[r][c])));
+            }
+        check(d < 1e-6, "beide Fassungen ergeben dieselbe Animation");
+
+        std::filesystem::remove_all(vd);
     }
 
     step("Ein-Frame-Sequenzen");

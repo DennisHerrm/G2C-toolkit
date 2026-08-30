@@ -3033,3 +3033,40 @@ ein — gleich viele Klammern, aber in falscher Reihenfolge.
 
 Geprueft wird jetzt die **Schachtelung**, nicht die Anzahl. Gegenprobe
 gemacht: echte Argumentfehler werden weiterhin gefunden.
+
+---
+
+## 59. dotXSI 3.0 oder 3.5
+
+Bisher stand im Kopf `xsi 0350txt`, der Inhalt war aber im **3.0-Stil**:
+
+| | v3.0 | v3.5 |
+|---|---|---|
+| Templates | **benannt** — `SI_FCurve <bone>-SCALING-X { ... }` | namenlos — `SI_FCurve { "<bone>", "SCALING-X", ... }` |
+| Bei Raven | `root.xsi` (JK2 wie JKA) | die Animationsdateien |
+
+Wir schrieben also 3.0-Inhalt mit 3.5-Etikett. Jeder tolerante Parser liest
+das, aber es ist nicht das, was draufsteht — und aeltere Werkzeuge erwarten
+teils 3.0.
+
+**Die Vorgabe ist jetzt 3.0**, weil das dem entspricht, was wir tatsaechlich
+schreiben, und weil Ravens Modelldateien es so machen. Umstellbar:
+
+    g2c export <gla> -cfg animation.cfg -o out\ -xsi 3.5
+
+In der Oberflaeche steht die Auswahl **dotXSI** neben den Exportknoepfen; die
+Wahl bleibt ueber Sitzungen erhalten.
+
+Ein Test prueft beide Seiten: dass der Kopf zur Schreibweise passt **und**
+dass beide Fassungen nach dem Wiedereinlesen dieselbe Animation ergeben
+(Abweichung unter 10⁻⁶).
+
+### Nebenbei: zwei schwache Tests
+
+Beim Umstellen fielen zwei Pruefungen auf, die nichts massen. Die eine
+erwartete fest `xsi 0350txt`, die andere suchte `SI_FCurve model_root-` in
+einem Testskelett, dessen erster Bone anders heisst — sie haette also auch
+bei kaputter Ausgabe geschwiegen.
+
+Beide pruefen jetzt gegen den tatsaechlichen Zustand statt gegen einen
+erwarteten Text.

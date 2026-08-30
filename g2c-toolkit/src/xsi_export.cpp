@@ -591,7 +591,8 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
 
     // --- Schreiben ---------------------------------------------------------
     std::ostringstream o;
-    o << "xsi 0350txt 0032\n\n";
+    o << (opt.version == ExportOptions::Version::V30 ? "xsi 0300txt 0032\n\n"
+                                                     : "xsi 0350txt 0032\n\n");
     o << "SI_CoordinateSystem coord {\n  1,\n  0,\n  1,\n  0,\n  2,\n  5,\n}\n\n";
 
     // SI_Scene: der Framebereich, den der Importeur liest. Die Rate wird
@@ -612,7 +613,12 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     const auto curve = [&](std::ostringstream& s, const std::string& bone, const char* channel,
                            int component, Part part, const std::vector<Key>& kk,
                            const std::string& ind) {
-        s << ind << "SI_FCurve " << bone << "-" << channel << " {\n";
+        // v3.0 benennt die Templates, v3.5 nicht. Der Inhalt ist identisch —
+        // der Bonename steht ohnehin als erster Wert im Block.
+        if (opt.version == ExportOptions::Version::V30)
+            s << ind << "SI_FCurve " << bone << "-" << channel << " {\n";
+        else
+            s << ind << "SI_FCurve {\n";
         s << ind << "  \"" << bone << "\",\n";
         s << ind << "  \"" << channel << "\",\n";
         s << ind << "  \"CONSTANT\",\n";

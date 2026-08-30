@@ -536,6 +536,19 @@ constexpr Entry kTable[] = {
      "animation.cfg はバックアップしません: ビルドのたびに再生成されます。"},
     {S::AboutLogPath, "Startprotokoll: %s", "Startup log: %s", "启动日志：%s",
      "起動ログ: %s"},
+    {S::XsiVersionTip,
+     "Fassung der erzeugten .xsi.\n\n"
+     "3.0 benennt die Templates wie Ravens root.xsi.\n"
+     "3.5 laesst sie namenlos wie Ravens Animationsdateien.\n\n"
+     "Der Inhalt ist derselbe. Aeltere Werkzeuge erwarten teils 3.0.",
+     "Version of the generated .xsi.\n\n"
+     "3.0 names its templates, like Raven's root.xsi.\n"
+     "3.5 leaves them unnamed, like Raven's animation files.\n\n"
+     "The content is the same. Some older tools expect 3.0.",
+     "生成的 .xsi 版本。\n\n3.0 为模板命名，与 Raven 的 root.xsi 一致。\n"
+     "3.5 不命名，与 Raven 的动画文件一致。\n\n内容相同。部分旧工具需要 3.0。",
+     "生成する .xsi のバージョン。\n\n3.0 は Raven の root.xsi と同様にテンプレートに名前を付けます。\n"
+     "3.5 は名前を付けません。\n\n内容は同じです。古いツールでは 3.0 が必要な場合があります。"},
     {S::ModePreview, "Vorschau", "Preview", "预览", "プレビュー"},
     {S::ModePreviewHint, "Skelett einer Sequenz abspielen",
      "Play back a sequence's skeleton", "播放某个序列的骨架",

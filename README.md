@@ -38,6 +38,7 @@ g2c does what they did, more accurately, and adds the direction they never had: 
 - Export selected sequences, or **everything plus a working `.car`**
 - Root motion is restored — the `.frames` file is not required, it can be reconstructed from the GLA itself
 - **Compare two humanoids**: see which sequences are missing in the other, select and export exactly those
+- Export as **dotXSI 3.0 or 3.5**, whichever your toolchain expects
 
 ### Preview
 
@@ -50,6 +51,7 @@ The same executable works from a console:
 ```
 g2c build _humanoid.car -ref _humanoid.gla -basedir C:\base
 g2c export _humanoid.gla -cfg animation.cfg -o out\ -car out\_humanoid.car
+g2c export _humanoid.gla -cfg animation.cfg -o out\ -xsi 3.5
 g2c makecar <folder>     build a .car from a folder of .xsi files
 g2c diff a.gla b.gla     compare two files bone by bone
 g2c validate / info / check / mesh / anim / xsi / car / scan / about
@@ -94,6 +96,19 @@ Found by disassembling `carcass.exe` and measuring against real files.
 **No candidate search.** Rounding each quaternion component independently does not give the nearest *rotation*. g2c evaluates the neighbours and keeps the best.
 
 ---
+
+## dotXSI 3.0 and 3.5
+
+The two versions differ in more than the header number:
+
+| | v3.0 | v3.5 |
+|---|---|---|
+| Templates | **named** — `SI_FCurve <bone>-SCALING-X { ... }` | unnamed — `SI_FCurve { "<bone>", "SCALING-X", ... }` |
+| Raven uses it for | `root.xsi`, both JKA and JK2 | the animation files |
+
+g2c writes **3.0 by default** and can write 3.5 on request — pick it next to the export buttons, or pass `-xsi 3.5`. The content is identical either way: exporting the same sequence in both and reading them back gives a difference of **0.000000000**.
+
+Older tools sometimes expect 3.0, which is why it is the default.
 
 ## Requirements
 
@@ -141,7 +156,7 @@ Stated openly, because you will run into them eventually.
 
 ## Verification
 
-403 automated checks run on every build, including round-trip tests against real files. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
+410 automated checks run on every build, including round-trip tests against real files. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
 
 Three static checkers run at build time for the parts that cannot be unit-tested: the Win32 layer, GUI wiring, and `build.bat`.
 

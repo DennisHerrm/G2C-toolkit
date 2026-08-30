@@ -74,6 +74,25 @@ struct ExportOptions {
         None,    // gar kein Block — so war es vor der Korrektur
     };
     BasePose basePose = BasePose::World;
+
+    // Welche dotXSI-Fassung im Kopf steht.
+    //
+    // Der Unterschied ist nicht nur die Zahl: v3.0 BENENNT seine Templates
+    // ("SI_FCurve <bone>-SCALING-X { ... }"), v3.5 laesst sie namenlos
+    // ("SI_FCurve { \"<bone>\", \"SCALING-X\", ... }").
+    //
+    // Wir schrieben bisher benannte Templates unter einem 3.5-Kopf — also
+    // 3.0-Inhalt mit 3.5-Etikett. Das liest zwar jeder tolerante Parser,
+    // aber es ist nicht das, was draufsteht.
+    //
+    // Ravens JK2-Modelldatei ist v3.0, die JKA-Animationsdateien sind v3.5.
+    // Wer fuer aeltere Werkzeuge exportiert, will 3.0; wer zu neueren passt,
+    // 3.5. Beides ausgeben zu koennen kostet wenig.
+    enum class Version {
+        V30,   // benannte Templates, wie Ravens root.xsi
+        V35,   // namenlose Templates, wie Ravens Animationsdateien
+    };
+    Version version = Version::V30;
 };
 
 // Liest die Wurzelbewegung einer Sequenz aus einer .frames-Datei.
