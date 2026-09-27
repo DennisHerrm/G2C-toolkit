@@ -19,10 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <fstream>
 #include <map>
-#include <algorithm>
-#include <cstdlib>
 #include <sstream>
 
 namespace g2::gui {
@@ -99,12 +96,111 @@ std::vector<std::string> App::askFiles(const char* purpose, const char* title,
     return out;
 }
 
+std::string App::askSaveFile(const char* purpose, const char* title, const char* filter,
+                             const char* defaultExt) {
+    const auto it = lastDirs_.find(purpose);
+    const std::string start = it == lastDirs_.end() ? std::string() : it->second;
+    std::string out;
+    if (platform_.saveFile) {
+        out = platform_.saveFile(title, filter, start, defaultExt);
+    } else if (platform_.openFiles) {
+        const auto f = platform_.openFiles(title, filter, false, start);
+        if (!f.empty()) out = f.front();
+    }
+    if (!out.empty()) {
+        const fs::path p = fs::path(out).parent_path();
+        if (!p.empty()) lastDirs_[purpose] = p.string();
+    }
+    return out;
+}
+
+// Diese drei Aktionen gibt es im Menue, in der Werkzeugleiste und als
+// Tastenkuerzel. Alle Wege rufen dieselbe Funktion — frueher waren es drei
+// Abschriften, und die Tastenkuerzel fehlten ganz.
+void App::newCarDialog() {
+    std::string p = askSaveFile("car", tr(S::DlgTitleNewCar), "Carcass-Skript (*.car)\0*.car\0",
+                                "car");
+    if (p.empty()) return;
+    if (fs::path(p).extension().empty()) p += ".car";
+    newCar(p);
+}
+
+void App::openScriptDialog() {
+    for (const auto& f :
+         askFiles("car", tr(S::DlgTitleCar), "Carcass-Skript (*.car)\0*.car\0Alle\0*.*\0", true))
+        openCar(f);
+}
+
+void App::openFolderDialog() {
+    const std::string dir = askFolder("carfolder", tr(S::DlgTitleCarFolder));
+    if (!dir.empty()) openFolder(dir);
+}
+
 std::string App::askFolder(const char* purpose, const char* title) {
     if (!platform_.pickFolder) return {};
     const auto it = lastDirs_.find(purpose);
     std::string out =
         platform_.pickFolder(title, it == lastDirs_.end() ? std::string() : it->second);
     if (!out.empty()) lastDirs_[purpose] = out;
+    return out;
+}
+
+bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool nachOben) {
+    if (doc >= docs_.size()) return false;
+    Document& d = docs_[doc];
+    if (grab >= d.script.grabs.size()) return false;
+    auto& von = d.script.grabs[grab].commentsBefore;
+    if (line >= von.size()) return false;
+
+    const std::string text = von[line];
+
+    if (nachOben) {
+        if (line > 0) {
+            // Innerhalb desselben Blocks tauschen.
+            std::swap(von[line], von[line - 1]);
+        } else {
+            // An den vorigen Grab anhaengen — dort ans Ende, damit der
+            // Trenner in der Anzeige genau eine Zeile hoeher landet.
+            if (grab == 0) return false;
+            von.erase(von.begin() + static_cast<long>(line));
+            d.script.grabs[grab - 1].commentsBefore.push_back(text);
+        }
+    } else {
+        if (line + 1 < von.size()) {
+            std::swap(von[line], von[line + 1]);
+        } else {
+            if (grab + 1 >= d.script.grabs.size()) {
+                // Hinter die LETZTE Animation. Dort gibt es keinen Grab
+                // mehr, an dem der Trenner haengen koennte — dafuer ist
+                // trailingComments da.
+                von.erase(von.begin() + static_cast<long>(line));
+                d.script.trailingComments.push_back(text);
+            } else {
+                // Ans Ende: zum naechsten Grab, dort an den Anfang.
+                von.erase(von.begin() + static_cast<long>(line));
+                auto& zu = d.script.grabs[grab + 1].commentsBefore;
+                zu.insert(zu.begin(), text);
+            }
+        }
+    }
+    d.dirty = true;
+    d.validated = false;
+    return true;
+}
+
+std::vector<std::string> App::askFolders(const char* purpose, const char* title) {
+    const auto it = lastDirs_.find(purpose);
+    const std::string start = it == lastDirs_.end() ? std::string() : it->second;
+
+    std::vector<std::string> out;
+    if (platform_.pickFolders) {
+        out = platform_.pickFolders(title, start);
+    } else if (platform_.pickFolder) {
+        // Rueckfall: besser einer als keiner.
+        std::string one = platform_.pickFolder(title, start);
+        if (!one.empty()) out.push_back(std::move(one));
+    }
+    if (!out.empty()) lastDirs_[purpose] = out.front();
     return out;
 }
 
@@ -115,9 +211,9 @@ std::string App::configDir() {
     const fs::path here = fs::current_path(ec);
     if (!ec && fs::exists(here / "g2c_portable.txt", ec)) return here.string();
 
-    const char* appdata = std::getenv("APPDATA");
-    if (!appdata || !*appdata) appdata = std::getenv("HOME");   // fuer Tests unter Linux
-    if (!appdata || !*appdata) return here.string();
+    std::string appdata = envValue("APPDATA");
+    if (appdata.empty()) appdata = envValue("HOME");   // fuer Tests unter Linux
+    if (appdata.empty()) return here.string();
 
     const fs::path dir = fs::path(appdata) / "g2c";
     fs::create_directories(dir, ec);
@@ -139,8 +235,9 @@ std::string App::settingsPath() const {
 }
 
 void App::saveSettings() const {
-    std::ofstream f(settingsPath());
-    if (!f) return;
+    // Erst vollstaendig im Speicher, dann in einem Zug ersetzen. Stuerzt das
+    // Programm beim Beenden ab, bleibt die alte Datei ganz statt halb.
+    std::ostringstream f;
     f << "basedir=" << settings_.baseDir << "\n";
     f << "refgla=" << settings_.referenceGla << "\n";
     f << "enums=" << settings_.enumPath << "\n";
@@ -177,6 +274,13 @@ void App::saveSettings() const {
 
     // Zuletzt benutzter Ordner je Auswahldialog.
     for (const auto& [k, v] : lastDirs_) f << "dir:" << k << "=" << v << "\n";
+
+    try {
+        writeFileChecked(settingsPath(), f.str());
+    } catch (const std::exception&) {
+        // Einstellungen sind Bequemlichkeit. Beim Beenden gibt es niemanden
+        // mehr, dem man den Fehler zeigen koennte.
+    }
 }
 
 void App::loadSettings() {
@@ -332,12 +436,7 @@ bool App::loadGlaForExtract(const std::string& path) {
         extract_.seqs.clear();
         extract_.selected.clear();
         extract_.framesPath.clear();
-
-        // Versatz schaetzen und anzeigen. Er muss beim Export wieder
-        // eingesetzt werden, sonst zieht das Neubauen ihn ein zweites Mal
-        // ab — und das faellt erst im Spiel auf.
-        extract_.origin = xsiexp::detectOrigin(extract_.gla);
-        extract_.framesPath.clear();
+        extract_.cfgPath.clear();
         extract_.withMotion = 0;
 
         // -origin erkennen. Wird es beim Export nicht wieder eingesetzt,
@@ -481,7 +580,7 @@ bool App::existsInCompare(const std::string& name) const {
 
 std::size_t App::selectMissing() {
     if (extract_.compareNames.empty()) return 0;
-    std::fill(extract_.selected.begin(), extract_.selected.end(), 0);
+    std::fill(extract_.selected.begin(), extract_.selected.end(), char{0});
     std::size_t n = 0;
     for (std::size_t i = 0; i < extract_.seqs.size(); ++i)
         if (!existsInCompare(extract_.seqs[i].name)) {
@@ -522,12 +621,20 @@ bool App::loadAnimationCfg(const std::string& path) {
         out.push_back(std::move(s));
     }
 
+    // Keine einzige passende Sequenz: die cfg gehoert zu einer anderen GLA.
+    // Dann die bisherige Liste behalten — eine leere Liste liess die
+    // Vorschau abstuerzen, und exportieren liesse sich damit ohnehin nichts.
+    if (out.empty()) {
+        log(LogLine::Kind::Bad, trf(S::LogNoSeqIn, path.c_str()));
+        return false;
+    }
+
     extract_.seqs = std::move(out);
     extract_.selected.assign(extract_.seqs.size(), 0);
     extract_.cfgPath = path;
+    const std::string rest = skipped ? trf(S::LogSeqsSkipped, skipped) : std::string();
     log(skipped ? LogLine::Kind::Warn : LogLine::Kind::Good,
-        std::to_string(extract_.seqs.size()) + " Sequenzen gelesen" +
-            (skipped ? ", " + std::to_string(skipped) + " ausserhalb der GLA uebersprungen" : ""));
+        trf(S::LogSeqsRead, extract_.seqs.size(), rest.c_str()));
     return true;
 }
 
@@ -542,18 +649,21 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     opt.origin = extract_.origin;
     opt.basePose = extract_.basePose;
     opt.version = extract_.xsiVersion;
-    opt.origin = extract_.origin;
 
     std::size_t ok = 0, failed = 0;
     for (const std::size_t r : rows) {
         if (r >= extract_.seqs.size()) continue;
         const ExtractSeq& s = extract_.seqs[r];
         opt.fps = s.fps > 0 ? s.fps : 20;
-        // Erst die .frames, wenn es eine gibt. Fehlt sie, laesst sich die
-        // Wurzelbewegung aus der GLA selbst rekonstruieren — sie steht dort
-        // als lineare Rampe auf dem Wurzelbone. Gegen Ravens eigene
-        // _humanoid.frames geprueft: bei allen 178 Sequenzen mit Bewegung
-        // stimmt der Wert ueberein.
+        // Erst die .frames, wenn es eine gibt. Fehlt sie — oder fehlt darin
+        // diese Sequenz —, laesst sich die Wurzelbewegung aus der GLA selbst
+        // rekonstruieren: sie steht dort als lineare Rampe auf dem
+        // Wurzelbone. Gegen Ravens eigene _humanoid.frames geprueft: bei allen
+        // 178 Sequenzen mit Bewegung stimmt der Wert ueberein.
+        //
+        // Frueher wurde der Wert danach ein zweites Mal aus der .frames
+        // gelesen und ueberschrieb die Rekonstruktion mit "nichts", sobald
+        // die Sequenz dort fehlte.
         opt.rootMotionPerFrame =
             extract_.framesPath.empty()
                 ? std::nullopt
@@ -562,18 +672,12 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
             opt.rootMotionPerFrame =
                 xsiexp::detectRootMotion(extract_.gla, {s.name, s.start, s.count});
         try {
-            xsiexp::ExportOptions one = opt;
-            if (!extract_.framesPath.empty())
-                one.rootMotionPerFrame = xsiexp::readAverageVec(extract_.framesPath, s.name);
             const std::string text =
-                xsiexp::exportSequence(extract_.gla, {s.name, s.start, s.count}, one);
+                xsiexp::exportSequence(extract_.gla, {s.name, s.start, s.count}, opt);
             std::string low = s.name;
             std::transform(low.begin(), low.end(), low.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            const fs::path out = fs::path(dir) / (low + ".xsi");
-            std::ofstream o(out, std::ios::binary);
-            o.write(text.data(), static_cast<std::streamsize>(text.size()));
-            if (!o) throw std::runtime_error(tr(S::LogCannotWrite));
+            writeFileChecked((fs::path(dir) / (low + ".xsi")).string(), text);
             ++ok;
         } catch (const std::exception& e) {
             if (failed < 3) log(LogLine::Kind::Bad, s.name + ": " + e.what());
@@ -626,6 +730,17 @@ std::size_t App::exportAllWithScript(const std::string& dir, const std::string& 
                                         extract_.gla.skeleton.scale, false,
                                         extract_.gla.skeleton.name);
     try {
+        // Eine vorhandene .car ist womoeglich Handarbeit — etwa wenn der
+        // Modellordner selbst als Ziel gewaehlt wurde. Vor dem Ersetzen
+        // sichern, und zwar jedes Mal: die letzte Fassung ist die, die man
+        // zurueckhaben will.
+        std::error_code ec;
+        if (fs::exists(carPath, ec)) {
+            const std::string bak = carPath + ".bak";
+            fs::copy_file(carPath, bak, fs::copy_options::overwrite_existing, ec);
+            if (ec) throw std::runtime_error(trf(S::LogCannotWrite, bak.c_str()));
+            log(LogLine::Kind::Info, trf(S::LogBackedUp, bak.c_str()));
+        }
         writeFileChecked(carPath, car::writeScript(sc));
         std::snprintf(msg, sizeof(msg), tr(S::CarWritten), carPath.c_str());
         log(LogLine::Kind::Good, msg);
@@ -633,6 +748,96 @@ std::size_t App::exportAllWithScript(const std::string& dir, const std::string& 
         log(LogLine::Kind::Bad, trf(S::LogScriptNotWritable, e.what()));
     }
     return n;
+}
+
+namespace {
+std::string lowerName(std::string v) {
+    std::transform(v.begin(), v.end(), v.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return v;
+}
+}  // namespace
+
+// Vor dem Export pruefen, was im Zielordner schon liegt.
+//
+// Der Export schrieb frueher kommentarlos ueber gleichnamige .xsi und die
+// .car. Wer versehentlich seinen Quellordner als Ziel waehlte, verlor damit
+// die Originalanimationen — die exportierten sind quantisiert, also nicht
+// dasselbe.
+void App::exportWithConfirm(std::vector<std::size_t> rows, bool withCar) {
+    const auto& ex = extract_;
+    if (!ex.loaded || ex.outDir.empty()) return;
+
+    std::vector<std::string> names;
+    if (withCar) {
+        std::vector<xsiexp::CfgSequence> in;
+        for (const auto& s : ex.seqs) in.push_back({s.name, s.start, s.count, s.loopFrame, s.fps});
+        for (const auto& m : xsiexp::groupSequences(in).masters) names.push_back(m.self.name);
+    } else {
+        for (const std::size_t r : rows)
+            if (r < ex.seqs.size()) names.push_back(ex.seqs[r].name);
+    }
+
+    std::vector<std::string> existing;
+    std::error_code ec;
+    for (const auto& n : names) {
+        const fs::path p = fs::path(ex.outDir) / (lowerName(n) + ".xsi");
+        if (fs::exists(p, ec)) existing.push_back(p.string());
+    }
+    if (withCar) {
+        const fs::path car = fs::path(ex.outDir) / (fs::path(ex.glaPath).stem().string() + ".car");
+        if (fs::exists(car, ec)) existing.push_back(car.string() + "  (.bak)");
+    }
+
+    pendingExport_ = {std::move(rows), withCar, std::move(existing), true};
+    if (pendingExport_.existing.empty()) {
+        // Nichts wird ueberschrieben: ohne Rueckfrage los.
+        const PendingExport p = pendingExport_;
+        pendingExport_ = {};
+        runExport(p.rows, p.withCar);
+    }
+}
+
+void App::runExport(const std::vector<std::size_t>& rows, bool withCar) {
+    const std::string outDir = extract_.outDir;
+    if (!withCar) {
+        exportSequences(rows, outDir);
+        return;
+    }
+    // Pfadpraefix aus dem Zielordner ableiten: alles ab "models/".
+    const std::string norm = fs::path(outDir).generic_string();
+    const std::size_t m = norm.rfind("/models/");
+    const std::string prefix = (m == std::string::npos) ? std::string() : norm.substr(m + 1) + "/";
+    const std::string carOut =
+        (fs::path(outDir) / (fs::path(extract_.glaPath).stem().string() + ".car")).string();
+    exportAllWithScript(outDir, carOut, prefix);
+}
+
+void App::drawOverwriteDialog() {
+    if (!pendingExport_.active || pendingExport_.existing.empty()) return;
+    if (!ImGui::IsPopupOpen("###overwrite")) ImGui::OpenPopup("###overwrite");
+    if (!ImGui::BeginPopupModal((std::string(tr(S::Overwrite)) + "###overwrite").c_str(), nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    const auto& list = pendingExport_.existing;
+    ImGui::TextUnformatted(trf(S::OverwriteHead, list.size()).c_str());
+    for (std::size_t i = 0; i < list.size() && i < 12; ++i) ImGui::BulletText("%s", list[i].c_str());
+    if (list.size() > 12) ImGui::BulletText("... +%zu", list.size() - 12);
+    ImGui::Spacing();
+
+    if (ImGui::Button(tr(S::Overwrite))) {
+        const PendingExport p = pendingExport_;
+        pendingExport_ = {};
+        runExport(p.rows, p.withCar);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::No)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        pendingExport_ = {};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 bool App::openPath(const std::string& path) {
@@ -659,8 +864,7 @@ bool App::openPath(const std::string& path) {
 
 std::size_t App::openFolder(const std::string& root) {
     const auto found = car::scanDirectory(root);
-    log(LogLine::Kind::Info,
-        std::to_string(found.size()) + " .car-Dateien unter " + root);
+    log(LogLine::Kind::Info, trf(S::LogCarsUnder, found.size(), root.c_str()));
     std::size_t opened = 0;
     for (const auto& f : found)
         if (openCar(f.path)) ++opened;
@@ -669,10 +873,104 @@ std::size_t App::openFolder(const std::string& root) {
 
 void App::closeDocument(std::size_t index) {
     if (index >= docs_.size()) return;
+    const std::string path = docs_[index].path;
+    // Dialoge, die sich auf dieses Skript beziehen, gleich mit schliessen.
+    if (editDocPath_ == path) {
+        editOpen_ = false;
+        editRow_ = -1;
+    }
+    if (pendingDeleteDocPath_ == path) pendingDelete_.clear();
+
+    // Den aktiven Tab behalten, wenn es nicht der geschlossene ist. Frueher
+    // sprang die Auswahl beim Schliessen eines Tabs links vom aktiven auf
+    // den Nachbarn.
+    if (active_ > static_cast<int>(index)) --active_;
     docs_.erase(docs_.begin() + static_cast<long>(index));
     if (active_ >= static_cast<int>(docs_.size())) active_ = static_cast<int>(docs_.size()) - 1;
     if (active_ < 0) active_ = 0;
     refreshTabTitles();
+}
+
+void App::requestClose(std::vector<std::size_t> indices) {
+    std::sort(indices.begin(), indices.end());
+    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+
+    bool anyDirty = false;
+    for (const std::size_t i : indices)
+        if (i < docs_.size() && docs_[i].dirty) anyDirty = true;
+
+    if (!anyDirty) {
+        for (auto it = indices.rbegin(); it != indices.rend(); ++it) closeDocument(*it);
+        return;
+    }
+    pendingClose_.clear();
+    for (const std::size_t i : indices)
+        if (i < docs_.size()) pendingClose_.push_back(docs_[i].path);
+}
+
+bool App::requestQuit() {
+    bool anyDirty = false;
+    for (const auto& d : docs_)
+        if (d.dirty) anyDirty = true;
+    if (!anyDirty) {
+        quitApproved_ = true;
+        return true;
+    }
+    quitRequested_ = true;
+    pendingClose_.clear();
+    for (const auto& d : docs_) pendingClose_.push_back(d.path);
+    return false;
+}
+
+// Ungespeicherte Aenderungen: speichern, verwerfen oder abbrechen.
+void App::drawCloseDialog() {
+    if (pendingClose_.empty()) return;
+    if (!ImGui::IsPopupOpen("###closedlg")) ImGui::OpenPopup("###closedlg");
+    if (!ImGui::BeginPopupModal((std::string(tr(S::CloseTab)) + "###closedlg").c_str(), nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    std::vector<std::size_t> dirty;
+    for (std::size_t i = 0; i < docs_.size(); ++i)
+        for (const auto& p : pendingClose_)
+            if (docs_[i].path == p && docs_[i].dirty) dirty.push_back(i);
+
+    ImGui::TextUnformatted(trf(S::UnsavedHead, dirty.size()).c_str());
+    for (const std::size_t i : dirty) ImGui::BulletText("%s", docs_[i].path.c_str());
+    ImGui::Spacing();
+
+    const auto finish = [&](bool save) {
+        bool ok = true;
+        if (save)
+            for (const std::size_t i : dirty) ok = saveDocument(i) && ok;
+        if (!ok) {
+            // Speichern schlug fehl: nichts schliessen, der Grund steht im
+            // Protokoll.
+            quitRequested_ = false;
+        } else if (quitRequested_) {
+            quitApproved_ = true;
+        } else {
+            for (std::size_t i = docs_.size(); i-- > 0;)
+                for (const auto& p : pendingClose_)
+                    if (docs_[i].path == p) {
+                        closeDocument(i);
+                        break;
+                    }
+        }
+        pendingClose_.clear();
+        ImGui::CloseCurrentPopup();
+    };
+
+    if (ImGui::Button(withIcon(ICON_SAVE, tr(S::Save)))) finish(true);
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::Discard))) finish(false);
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::No)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        pendingClose_.clear();
+        quitRequested_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) {
@@ -761,7 +1059,15 @@ bool App::saveDocument(std::size_t index) {
     std::error_code ec;
     if (settings_.keepBackup) {
         const fs::path bak = fs::path(d.path).string() + ".bak";
-        if (!fs::exists(bak, ec)) fs::copy_file(d.path, bak, ec);
+        if (!fs::exists(bak, ec) && fs::exists(d.path, ec)) {
+            fs::copy_file(d.path, bak, ec);
+            // Ohne Sicherung nicht ueberschreiben: der Nutzer hat sie
+            // eingeschaltet und verlaesst sich darauf.
+            if (ec) {
+                log(LogLine::Kind::Bad, trf(S::LogCannotWrite, bak.string().c_str()));
+                return false;
+            }
+        }
     }
 
     try {
@@ -839,6 +1145,15 @@ void App::startFrameWorker(const Document& d) {
     if (frameWorkerRunning_.load()) return;
     if (settings_.baseDir.empty()) return;
 
+    // Assetwurzel geaendert? Dann gelten die bisherigen Zahlen nicht mehr.
+    // War die Wurzel zuerst falsch geraten, stand ueberall "fehlt" — und
+    // blieb so bis zum Neustart, auch nachdem sie korrigiert war.
+    if (!frameWorkerBaseDir_.empty() && frameWorkerBaseDir_ != settings_.baseDir) {
+        std::lock_guard<std::mutex> lock(frameMutex_);
+        frameCounts_.clear();
+    }
+    frameWorkerBaseDir_ = settings_.baseDir;
+
     // Fehlende einsammeln, damit der Thread nicht auf die Dokumentliste
     // zugreifen muss — die kann sich unter ihm aendern.
     std::vector<std::string> todo;
@@ -857,7 +1172,6 @@ void App::startFrameWorker(const Document& d) {
     const std::string cacheDir =
         settings_.useCache ? (fs::path(baseDir) / "g2c_cache").string() : std::string();
 
-    frameWorkerBaseDir_ = baseDir;
     frameWorkerRunning_.store(true);
     frameWorkerStop_.store(false);
 
@@ -914,6 +1228,7 @@ bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
     const auto item = g[from];
     g.erase(g.begin() + static_cast<long>(from));
     g.insert(g.begin() + static_cast<long>(to), item);
+    closeEditorOf(docIndex);
 
     // Die Auswahl muss mitwandern. Sonst zeigt sie nach dem Verschieben auf
     // eine andere Sequenz, und der naechste Klick auf "Loeschen" trifft die
@@ -975,6 +1290,7 @@ std::size_t App::moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
 
     d.dirty = true;
     d.validated = false;
+    closeEditorOf(docIndex);
     keepRootLast(docIndex);
     return block.size();
 }
@@ -997,12 +1313,14 @@ bool App::keepRootLast(std::size_t docIndex) {
             d.selected.push_back(sel);
         }
         d.dirty = true;
+        closeEditorOf(docIndex);
         return true;
     }
     return false;
 }
 
-std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows) {
+std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
+                             bool keepComments) {
     if (docIndex >= docs_.size() || rows.empty()) return 0;
     Document& d = docs_[docIndex];
 
@@ -1014,6 +1332,21 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
     std::size_t n = 0;
     for (const std::size_t r : rows) {
         if (r >= d.script.grabs.size()) continue;
+
+        // Trenner und Ueberschriften ueber der Sequenz stehenlassen.
+        //
+        // Technisch haengen sie am folgenden Grab, fuer den Nutzer sind es
+        // eigene Zeilen — sie lassen sich einzeln ziehen und loeschen. Frueher
+        // verschwanden sie mit der Sequenz darunter, ohne dass die
+        // Rueckfrage sie erwaehnt haette.
+        auto& moved = d.script.grabs[r].commentsBefore;
+        if (keepComments && !moved.empty()) {
+            // Absteigend geloescht: der Grab dahinter ist der naechste, der
+            // bleibt.
+            auto& target = (r + 1 < d.script.grabs.size()) ? d.script.grabs[r + 1].commentsBefore
+                                                          : d.script.trailingComments;
+            target.insert(target.begin(), moved.begin(), moved.end());
+        }
         d.script.grabs.erase(d.script.grabs.begin() + static_cast<long>(r));
         if (r < d.selected.size()) d.selected.erase(d.selected.begin() + static_cast<long>(r));
         ++n;
@@ -1023,8 +1356,7 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
         d.validated = false;
         // Ein offener Bearbeitungsdialog koennte auf eine geloeschte Zeile
         // zeigen.
-        editOpen_ = false;
-        editRow_ = -1;
+        closeEditorOf(docIndex);
     }
     return n;
 }
@@ -1045,7 +1377,8 @@ std::size_t App::copyGrabs(std::size_t docIndex, const std::vector<std::size_t>&
 
 std::size_t App::cutGrabs(std::size_t docIndex, const std::vector<std::size_t>& rows) {
     const std::size_t n = copyGrabs(docIndex, rows);
-    if (n) deleteGrabs(docIndex, rows);
+    // Die Kommentare wandern mit in die Ablage und kommen beim Einfuegen mit.
+    if (n) deleteGrabs(docIndex, rows, false);
     return n;
 }
 
@@ -1054,14 +1387,30 @@ std::size_t App::pasteGrabs(std::size_t docIndex, std::size_t before) {
     Document& d = docs_[docIndex];
     if (before > d.script.grabs.size()) before = d.script.grabs.size();
 
-    d.script.grabs.insert(d.script.grabs.begin() + static_cast<long>(before), clipboard_.begin(),
-                          clipboard_.end());
-    d.selected.insert(d.selected.begin() + static_cast<long>(before), clipboard_.size(), 0);
+    // Eingefuegt wird eine eigene Zeile dieses Skripts, auch wenn die Vorlage
+    // aus einer $include-Datei stammte — sonst liesse der Schreiber sie weg.
+    std::vector<car::GrabDirective> items = clipboard_;
+    for (auto& g : items) g.fromInclude = -1;
+    d.script.grabs.insert(d.script.grabs.begin() + static_cast<long>(before), items.begin(),
+                          items.end());
+    d.selected.insert(d.selected.begin() + static_cast<long>(before), items.size(), 0);
 
     d.dirty = true;
     d.validated = false;
+    closeEditorOf(docIndex);
     keepRootLast(docIndex);
-    return clipboard_.size();
+    return items.size();
+}
+
+// Der Sequenzdialog merkt sich eine Zeilennummer. Verschiebt sich die Liste
+// darunter, zeigt sie auf eine andere Sequenz — der Dialog bearbeitete dann
+// still eine fremde Zeile. Deshalb schliessen, sobald sich die Reihenfolge
+// im selben Skript aendert.
+void App::closeEditorOf(std::size_t docIndex) {
+    if (docIndex < docs_.size() && docs_[docIndex].path == editDocPath_) {
+        editOpen_ = false;
+        editRow_ = -1;
+    }
 }
 
 bool App::newCar(const std::string& path) {
@@ -1138,22 +1487,32 @@ void App::validateAll() {
 
 // --- Bauen -----------------------------------------------------------------
 
-void App::buildOne(const Document& d) {
+bool App::writeOutput(const std::string& title, const std::string& path, const std::string& data) {
+    try {
+        writeFileChecked(path, data);
+        return true;
+    } catch (const std::exception& e) {
+        log(LogLine::Kind::Bad, trf(S::LogWriteFailed, title.c_str(), e.what()));
+        return false;
+    }
+}
+
+void App::buildOne(const Document& d, const Settings& st) {
     if (!d.loadError.empty()) return;
     try {
         if (d.outputDir.empty())
             throw std::runtime_error(tr(S::LogNoOutputDir));
-        if (settings_.referenceGla.empty())
+        if (st.referenceGla.empty())
             throw std::runtime_error(tr(S::LogNoRefGla));
 
-        const MdxaFile ref = readMdxa(readWholeFileBytes(settings_.referenceGla));
+        const MdxaFile ref = readMdxa(readWholeFileBytes(st.referenceGla));
 
         car::BuildOptions bo;
-        bo.baseDir = settings_.baseDir;
+        bo.baseDir = st.baseDir;
         bo.threads = 0;   // alle Kerne
-        bo.carcassCompatible = settings_.carcassCompat;
-        if (settings_.useCache && !settings_.baseDir.empty())
-            bo.cacheDir = (fs::path(settings_.baseDir) / "g2c_cache").string();
+        bo.carcassCompatible = st.carcassCompat;
+        if (st.useCache && !st.baseDir.empty())
+            bo.cacheDir = (fs::path(st.baseDir) / "g2c_cache").string();
 
         // Fehlende Dateien vorab melden — uebersetzt und mit Zuordnung.
         //
@@ -1176,7 +1535,7 @@ void App::buildOne(const Document& d) {
                 // Alles fehlt: die Liste selbst aufbauen.
                 for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
                     const auto& g = d.script.grabs[i];
-                    if (!car::resolveAssetPath(g.file, settings_.baseDir,
+                    if (!car::resolveAssetPath(g.file, st.baseDir,
                                                fs::path(d.path).parent_path().string())
                              .empty())
                         continue;
@@ -1195,9 +1554,9 @@ void App::buildOne(const Document& d) {
                 std::snprintf(head, sizeof(head), tr(S::MissingHead), chk.missing.size(),
                               d.script.grabs.size());
                 log(LogLine::Kind::Bad, d.title + ": " + head);
-                if (!settings_.baseDir.empty())
+                if (!st.baseDir.empty())
                     log(LogLine::Kind::Bad,
-                        std::string(tr(S::MissingSearched)) + " " + settings_.baseDir);
+                        std::string(tr(S::MissingSearched)) + " " + st.baseDir);
                 log(LogLine::Kind::Bad, tr(S::MissingList));
 
                 for (std::size_t i = 0; i < chk.missing.size() && i < 8; ++i) {
@@ -1206,10 +1565,10 @@ void App::buildOne(const Document& d) {
                                        m.sequence + "]";
                     if (m.line) line += " (.car " + std::to_string(m.line) + ")";
                     log(LogLine::Kind::Bad, line);
-                    if (!settings_.baseDir.empty())
+                    if (!st.baseDir.empty())
                         log(LogLine::Kind::Info,
                             "      " +
-                                (fs::path(settings_.baseDir) / m.file).lexically_normal().string());
+                                (fs::path(st.baseDir) / m.file).lexically_normal().string());
                 }
                 if (chk.missing.size() > 8) {
                     char more[80];
@@ -1222,26 +1581,70 @@ void App::buildOne(const Document& d) {
             }
         }
 
-        // Geaenderte Skripte vor dem Bauen speichern.
+        // Schreibt der Bau auf die Referenz-GLA?
         //
-        // Gebaut wurde bisher der Zustand im Speicher, waehrend die Datei auf
-        // der Platte die alte blieb. Wer das Programm danach schloss, hatte
-        // eine GLA, die zu keiner .car mehr passte — und beim naechsten
-        // Oeffnen war die Aenderung weg.
-        //
-        // Die Datei ist das, was gebaut wurde; beides auseinanderlaufen zu
-        // lassen ist in keinem Fall richtig.
-        if (d.dirty && !d.path.empty()) {
-            if (saveDocument(static_cast<std::size_t>(&d - docs_.data())))
-                log(LogLine::Kind::Info, trf(S::SavedBeforeBuild, d.title.c_str()));
+        // Dann wird dieselbe Datei gelesen und beschrieben, und Windows
+        // sperrt sie: "Kann ... nicht oeffnen", bei jedem Grab erneut.
+        // Die Meldung nennt den Pfad, aber nicht den Grund — man sucht dann
+        // nach fehlenden Rechten statt nach der Ueberschneidung.
+        if (!d.outputDir.empty() && !st.referenceGla.empty()) {
+            std::error_code rec;
+            const fs::path refPath(st.referenceGla);
+            const fs::path refDir = refPath.parent_path();
+            if (!refDir.empty() && fs::exists(refDir, rec) && fs::exists(d.outputDir, rec) &&
+                fs::equivalent(refDir, d.outputDir, rec) && !rec) {
+                log(LogLine::Kind::Bad, trf(S::RefIsTarget, d.title.c_str()));
+            }
         }
+
+        // Geaenderte Skripte wurden schon in startBuild gespeichert, im
+        // Hauptthread. Hier waere es falsch: d ist eine Kopie, und docs_
+        // gehoert der Oberflaeche.
 
         const car::BuildResult br = car::build(d.script, ref.skeleton, d.path, bo);
         for (const auto& w : br.warnings) log(LogLine::Kind::Warn, d.title + ": " + w);
 
+        // Doppelte Namen auch beim BAUEN melden, nicht nur beim Validieren.
+        //
+        // Wer baut, ohne vorher zu validieren, bekaeme sonst eine
+        // animation.cfg, in der eine Animation unerreichbar ist — und merkt
+        // es erst im Spiel, wo nichts darauf hindeutet.
+        {
+            std::map<std::string, int> gesehen;
+            for (const auto& sq : br.sequences) {
+                std::string n = sq.name;
+                for (auto& c : n)
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                ++gesehen[n];
+            }
+            std::vector<std::string> doppelt;
+            for (const auto& [name, anzahl] : gesehen)
+                if (anzahl > 1) {
+                    log(LogLine::Kind::Bad,
+                        trf(S::DupInCfg, d.title.c_str(), name.c_str(), anzahl));
+                    doppelt.push_back(name);
+                }
+
+            // NICHT schreiben, solange Namen doppelt sind.
+            //
+            // Eine GLA mit unerreichbaren Animationen sieht fertig aus und
+            // faellt erst im Spiel auf — dort deutet dann nichts auf die
+            // Ursache. Lieber gar nichts schreiben und es hier sagen.
+            if (!doppelt.empty()) {
+                // Die Namen mitgeben: der Aufrufer traegt sie als Meldungen
+                // ein, damit der Klick darauf zu den Zeilen springt.
+                {
+                    std::lock_guard<std::mutex> lock(dupMutex_);
+                    pendingDuplicates_ = doppelt;
+                    pendingDupDoc_ = d.title;
+                }
+                throw std::runtime_error(trf(S::BuildStoppedDup, doppelt.size()));
+            }
+        }
+
         MdxaWriteOptions wo;
         wo.threads = 0;   // alle Kerne
-        if (settings_.carcassCompat) {
+        if (st.carcassCompat) {
             wo.compress.rounding = Rounding::Legacy;
             wo.compress.optimizeQuat = false;
             wo.compress.canonicalizeSign = false;
@@ -1275,12 +1678,16 @@ void App::buildOne(const Document& d) {
             stem = (sl == std::string::npos) ? ms : ms.substr(sl + 1);
         }
 
+        // Jede Ausgabe ueber writeOutput: erst in eine Nebendatei, dann in
+        // einem Zug ersetzen, Fehler ins Protokoll. Frueher schrieben
+        // ungepruefte ofstreams direkt ins Ziel — war die GLA gesperrt (Spiel
+        // oder ModView offen) oder die Platte voll, stand trotzdem "gebaut" im
+        // Protokoll, und die alte Datei war schon auf null gekuerzt.
         const fs::path gla = outDir / (stem + ".gla");
-        {
-            std::ofstream f(gla, std::ios::binary);
-            f.write(reinterpret_cast<const char*>(res.data.data()),
-                    static_cast<std::streamsize>(res.data.size()));
-        }
+        if (!writeOutput(d.title, gla.string(),
+                         std::string(reinterpret_cast<const char*>(res.data.data()),
+                                     res.data.size())))
+            return;
         log(LogLine::Kind::Good, d.title + " -> " + gla.string() + " (" +
                                      std::to_string(br.totalFrames()) + " Frames)");
 
@@ -1293,13 +1700,17 @@ void App::buildOne(const Document& d) {
             // neu erzeugt, eine Sicherung davon waere wertlos und liegt nur
             // im Ordner herum. Fuer .car-Dateien, die von Hand bearbeitet
             // werden, ist das anders — dort bleibt die Sicherung.
-            const fs::path cfgPath = outDir / "animation.cfg";
-            std::ofstream f(cfgPath, std::ios::binary);
-            f.write(cfg.data(), static_cast<std::streamsize>(cfg.size()));
+            if (!writeOutput(d.title, (outDir / "animation.cfg").string(), cfg)) return;
         }
         log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
 
-        if (settings_.writeFrames && !br.frameBlocks.empty()) {
+        // Ausgabeordner merken, damit er sich oeffnen laesst.
+        {
+            std::lock_guard<std::mutex> lock(outputDirMutex_);
+            lastOutputDir_ = outDir.string();
+        }
+
+        if (st.writeFrames && !br.frameBlocks.empty()) {
             std::vector<FrameEntry> fe;
             for (const auto& b : br.frameBlocks) {
                 FrameEntry e;
@@ -1310,16 +1721,14 @@ void App::buildOne(const Document& d) {
                 for (int k = 0; k < 3; ++k) e.averageVec[k] = b.averageVec[k];
                 fe.push_back(std::move(e));
             }
-            const std::string txt = writeFrames(fe);
-            std::ofstream f(outDir / (stem + ".frames"), std::ios::binary);
-            f.write(txt.data(), static_cast<std::streamsize>(txt.size()));
+            writeOutput(d.title, (outDir / (stem + ".frames")).string(), writeFrames(fe));
         }
 
-        if (settings_.writeMesh && d.script.convert && !d.script.convert->root.empty()) {
+        if (st.writeMesh && d.script.convert && !d.script.convert->root.empty()) {
             const std::string carDir = fs::path(d.path).parent_path().string();
             std::string xsi;
             for (const char* ext : {".xsi", ".XSI"}) {
-                xsi = car::resolveAssetPath(d.script.convert->root + ext, settings_.baseDir, carDir);
+                xsi = car::resolveAssetPath(d.script.convert->root + ext, st.baseDir, carDir);
                 if (!xsi.empty()) break;
             }
             if (xsi.empty()) {
@@ -1332,17 +1741,15 @@ void App::buildOne(const Document& d) {
                 for (const auto& b : ref.skeleton.bones) mo.boneNames.push_back(b.name);
                 const auto mr = xsi::importMeshFile(xsi, mo);
                 const auto mw = writeMdxm(mr.mesh);
-                std::ofstream f(outDir / (stem + ".glm"), std::ios::binary);
-                f.write(reinterpret_cast<const char*>(mw.data.data()),
-                        static_cast<std::streamsize>(mw.data.size()));
-                log(LogLine::Kind::Good,
-                    d.title + " -> " + stem + ".glm (" + std::to_string(mr.stats.surfaces) +
-                        " Surfaces, " + std::to_string(mr.stats.vertices) + " Verts)");
-
-                if (settings_.writeSkin) {
-                    const std::string skin = writeSkin(mr.mesh);
-                    std::ofstream sf(outDir / (stem + ".skin"), std::ios::binary);
-                    sf.write(skin.data(), static_cast<std::streamsize>(skin.size()));
+                if (writeOutput(d.title, (outDir / (stem + ".glm")).string(),
+                                std::string(reinterpret_cast<const char*>(mw.data.data()),
+                                            mw.data.size()))) {
+                    log(LogLine::Kind::Good,
+                        d.title + " -> " + stem + ".glm (" + std::to_string(mr.stats.surfaces) +
+                            " Surfaces, " + std::to_string(mr.stats.vertices) + " Verts)");
+                    if (st.writeSkin)
+                        writeOutput(d.title, (outDir / (stem + ".skin")).string(),
+                                    writeSkin(mr.mesh));
                 }
             }
         }
@@ -1355,13 +1762,31 @@ void App::startBuild(bool allTabs) {
     if (job_.running.load()) return;
     job_.join();
 
-    std::vector<Document> targets;
+    std::vector<std::size_t> which;
     if (allTabs) {
-        for (const auto& d : docs_)
-            if (d.loadError.empty()) targets.push_back(d);
+        for (std::size_t i = 0; i < docs_.size(); ++i)
+            if (docs_[i].loadError.empty()) which.push_back(i);
     } else if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
-        targets.push_back(docs_[static_cast<std::size_t>(active_)]);
+        which.push_back(static_cast<std::size_t>(active_));
     }
+
+    // Geaenderte Skripte vor dem Bauen speichern — hier, im Hauptthread.
+    //
+    // Gebaut wird der Zustand im Speicher. Blieb die Datei auf der Platte die
+    // alte, hatte man nach dem Schliessen eine GLA, die zu keiner .car mehr
+    // passte, und beim naechsten Oeffnen war die Aenderung weg.
+    //
+    // Frueher geschah das im Arbeitsthread ueber "&d - docs_.data()" — aber d
+    // war dort eine Kopie, die Zeigerdifferenz also undefiniert. Gespeichert
+    // wurde praktisch nie, schlimmstenfalls ein anderes Skript.
+    for (const std::size_t i : which) {
+        if (!docs_[i].dirty || docs_[i].path.empty()) continue;
+        if (!docs_[i].outputDir.empty() && saveDocument(i))
+            log(LogLine::Kind::Info, trf(S::SavedBeforeBuild, docs_[i].title.c_str()));
+    }
+
+    std::vector<Document> targets;
+    for (const std::size_t i : which) targets.push_back(docs_[i]);
     if (targets.empty()) {
         log(LogLine::Kind::Warn, tr(S::LogNothingToBuild));
         return;
@@ -1409,16 +1834,17 @@ void App::startBuild(bool allTabs) {
     job_.total.store(targets.size());
     job_.running.store(true);
 
-    // Kopien der Dokumente, damit die Oberflaeche waehrend des Baus weiter
-    // bedienbar bleibt und nichts unter dem Arbeitsthread wegeditiert wird.
-    job_.worker = std::thread([this, targets = std::move(targets)] {
+    // Kopien der Dokumente UND der Einstellungen, damit die Oberflaeche
+    // waehrend des Baus bedienbar bleibt und nichts unter dem Arbeitsthread
+    // wegeditiert wird.
+    job_.worker = std::thread([this, targets = std::move(targets), st = settings_] {
         for (const auto& d : targets) {
             if (job_.cancel.load()) break;
             {
                 std::lock_guard<std::mutex> lock(job_.currentMutex);
                 job_.current = d.title;
             }
-            buildOne(d);
+            buildOne(d, st);
             job_.done.fetch_add(1);
         }
         job_.running.store(false);
@@ -1429,6 +1855,15 @@ void App::startBuild(bool allTabs) {
 
 void App::applyStyle() {
     ImGuiStyle& s = ImGui::GetStyle();
+
+    // Jedes Mal von der Grundeinstellung ausgehen.
+    //
+    // ScaleAllSizes multipliziert, was gerade eingestellt ist. Frueher wurden
+    // nur einige Felder zurueckgesetzt, der Rest wuchs bei jedem Wechsel
+    // zwischen Hell und Dunkel um den DPI-Faktor: nach sechs Wechseln bei
+    // 150 % lagen die Abstaende bei 63 statt 6 Pixeln, und der Greifrand der
+    // Fenster ueberdeckte die Knoepfe an ihrem unteren Rand.
+    s = ImGuiStyle();
     s.WindowRounding = 6.0f;
     s.FrameRounding = 4.0f;
     s.GrabRounding = 4.0f;
@@ -1479,24 +1914,11 @@ void App::drawMenuBar() {
     if (!ImGui::BeginMenuBar()) return;
 
     if (ImGui::BeginMenu(tr(S::MenuFile))) {
-        if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::NewCar)), "Ctrl+N")) {
-            const auto f = askFiles("car", tr(S::DlgTitleNewCar),
-                                    "Carcass-Skript (*.car)\0*.car\0", false);
-            if (!f.empty()) {
-                std::string p = f.front();
-                if (fs::path(p).extension().empty()) p += ".car";
-                newCar(p);
-            }
-        }
-        if (ImGui::MenuItem(withIcon(ICON_OPEN_FILE, tr(S::OpenScript)), "Ctrl+O") && platform_.openFiles) {
-            for (const auto& f :
-                 askFiles("car", tr(S::DlgTitleCar), "Carcass-Skript (*.car)\0*.car\0Alle\0*.*\0", true))
-                openCar(f);
-        }
-        if (ImGui::MenuItem(withIcon(ICON_FOLDER_OPEN, tr(S::OpenFolder)), "Ctrl+Shift+O") && platform_.pickFolder) {
-            const std::string dir = askFolder("carfolder", tr(S::DlgTitleCarFolder));
-            if (!dir.empty()) openFolder(dir);
-        }
+        if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::NewCar)), "Ctrl+N")) newCarDialog();
+        if (ImGui::MenuItem(withIcon(ICON_OPEN_FILE, tr(S::OpenScript)), "Ctrl+O"))
+            openScriptDialog();
+        if (ImGui::MenuItem(withIcon(ICON_FOLDER_OPEN, tr(S::OpenFolder)), "Ctrl+Shift+O"))
+            openFolderDialog();
         ImGui::Separator();
         if (ImGui::MenuItem(withIcon(ICON_SAVE, tr(S::Save)), "Ctrl+S", false, !docs_.empty()))
             saveDocument(static_cast<std::size_t>(active_));
@@ -1504,8 +1926,12 @@ void App::drawMenuBar() {
             saveAllDocuments();
         ImGui::Separator();
         if (ImGui::MenuItem(tr(S::CloseTab), "Ctrl+W", false, !docs_.empty()))
-            closeDocument(static_cast<std::size_t>(active_));
-        if (ImGui::MenuItem(tr(S::CloseAll), nullptr, false, !docs_.empty())) docs_.clear();
+            requestClose({static_cast<std::size_t>(active_)});
+        if (ImGui::MenuItem(tr(S::CloseAll), nullptr, false, !docs_.empty())) {
+            std::vector<std::size_t> all(docs_.size());
+            for (std::size_t i = 0; i < all.size(); ++i) all[i] = i;
+            requestClose(all);
+        }
         ImGui::EndMenu();
     }
 
@@ -1583,10 +2009,7 @@ void App::drawToolbar() {
     ImGui::SameLine();
 
     ImGui::BeginDisabled(busy);
-    if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::BtnOpenFolder)) && platform_.pickFolder) {
-        const std::string dir = askFolder("carfolder", tr(S::DlgTitleCarFolder));
-        if (!dir.empty()) openFolder(dir);
-    }
+    if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::BtnOpenFolder))) openFolderDialog();
     ImGui::SameLine();
     ImGui::BeginDisabled(!have);
     if (iconButton(ICON_ADD, kIconInfo, tr(S::BtnAddXsi)) && platform_.openFiles) {
@@ -1594,14 +2017,22 @@ void App::drawToolbar() {
         if (!files.empty()) addXsiFiles(files, false);
     }
     ImGui::SameLine();
-    if (iconButton(ICON_FOLDER, kIconInfo, tr(S::BtnAddXsiFolder)) && platform_.pickFolder) {
-        const std::string dir = askFolder("xsifolder", tr(S::DlgTitleXsiFolder));
-        if (!dir.empty()) addXsiFolder(dir, false);
+    if (iconButton(ICON_FOLDER, kIconInfo, tr(S::BtnAddXsiFolder)) &&
+        (platform_.pickFolders || platform_.pickFolder)) {
+        // Mehrere Ordner auf einmal: bei einem Modell mit Animationen aus
+        // zehn Quellen ist zehnmal klicken die eigentliche Arbeit.
+        const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
+        for (const auto& d : dirs) addXsiFolder(d, false);
+        if (dirs.size() > 1)
+            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), std::size_t{0}));
     }
     ImGui::SameLine();
-    if (iconButton(ICON_FOLDER, kIconAccent, tr(S::BtnAddXsiFolderAll)) && platform_.pickFolder) {
-        const std::string dir = askFolder("xsifolder", tr(S::DlgTitleXsiFolder));
-        if (!dir.empty()) addXsiFolder(dir, true);
+    if (iconButton(ICON_FOLDER, kIconAccent, tr(S::BtnAddXsiFolderAll)) &&
+        (platform_.pickFolders || platform_.pickFolder)) {
+        const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
+        for (const auto& d : dirs) addXsiFolder(d, true);
+        if (dirs.size() > 1)
+            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), std::size_t{0}));
     }
     ImGui::SameLine();
     if (iconButton(ICON_ADD, kIconAccent, tr(S::BtnAddXsiAll)) && platform_.openFiles) {
@@ -1700,6 +2131,15 @@ void App::drawSettingsPanel() {
     ImGui::EndChild();
 }
 
+// Dieselbe Regel wie beim Zeichnen: Name oder Datei enthaelt den Filtertext.
+bool App::rowVisible(const Document& d, std::size_t i) const {
+    if (filter_[0] == '\0') return true;
+    if (i >= d.script.grabs.size()) return false;
+    const auto& g = d.script.grabs[i];
+    const std::string name = g.enumName ? *g.enumName : g.derivedName();
+    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos;
+}
+
 void App::drawSequenceTable(Document& d) {
     if (!d.loadError.empty()) {
         ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", tr(S::LogUnreadable));
@@ -1720,7 +2160,9 @@ void App::drawSequenceTable(Document& d) {
         if (own) {
             ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", d.outputDir.c_str());
         } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1), "nicht gesetzt \xE2\x80\x94 so wird nicht gebaut");
+            // Uebersetzt, und ohne Geviertstrich: der liegt ausserhalb des
+            // Zeichensatzes der deutschen Schrift und erschien als "?".
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1), "%s", tr(S::NotSet));
         }
 
         ImGui::SameLine();
@@ -1753,7 +2195,7 @@ void App::drawSequenceTable(Document& d) {
             ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), tr(S::SelectionHint), nsel);
             ImGui::SameLine();
             if (ImGui::SmallButton(tr(S::CutSelection)))
-                std::fill(d.selected.begin(), d.selected.end(), 0);
+                std::fill(d.selected.begin(), d.selected.end(), char{0});
         } else if (filter_[0] == '\0') {
             ImGui::SameLine();
             ImGui::TextDisabled("%s", tr(S::DragHint));
@@ -1770,12 +2212,12 @@ void App::drawSequenceTable(Document& d) {
     if (d.validated) {
         ImGui::SameLine();
         if (d.validation.errors)
-            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%zu Fehler", d.validation.errors);
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), tr(S::NErrors), d.validation.errors);
         else
-            ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "geprueft");
+            ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "%s", tr(S::Validated));
         if (d.validation.warnings) {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%zu Warnungen", d.validation.warnings);
+            ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), tr(S::NWarnings), d.validation.warnings);
         }
     }
 
@@ -1784,7 +2226,11 @@ void App::drawSequenceTable(Document& d) {
                                   ImGuiTableFlags_SizingStretchProp;
     // Ausdruecklich die verbleibende Hoehe. Mit -1 blieb je nach Umgebung
     // Platz uebrig, und darunter klaffte eine Leerflaeche.
-    if (!ImGui::BeginTable("seqs", 7, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
+    // Achte Spalte: der Zeilenkommentar. Die Zahl MUSS zur Anzahl der
+    // TableSetupColumn-Aufrufe passen — sonst meldet ImGui
+    // "Called TableSetupColumn() too many times", und die ueberzaehlige
+    // Spalte rutscht in eine eigene Zeile.
+    if (!ImGui::BeginTable("seqs", 8, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
         return;
 
     ImGui::TableSetupScrollFreeze(0, 1);
@@ -1795,6 +2241,9 @@ void App::drawSequenceTable(Document& d) {
     ImGui::TableSetupColumn(tr(S::ColExtra), ImGuiTableColumnFlags_WidthFixed, 60);
     ImGui::TableSetupColumn(tr(S::ColSource), ImGuiTableColumnFlags_WidthStretch, 3.0f);
     ImGui::TableSetupColumn(tr(S::ColEnum), ImGuiTableColumnFlags_WidthFixed, 70);
+    // Zeilenkommentar ganz rechts: er ist ein Hinweis, keine Angabe, die
+    // man beim Ueberfliegen braucht.
+    ImGui::TableSetupColumn(tr(S::ColComment), ImGuiTableColumnFlags_WidthStretch, 1.5f);
     ImGui::TableHeadersRow();
     if (ImGui::TableGetHoveredColumn() == 6 && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::TipEnumColumn));
@@ -1809,6 +2258,115 @@ void App::drawSequenceTable(Document& d) {
         if (!needle.empty() && name.find(needle) == std::string::npos &&
             g.file.find(needle) == std::string::npos)
             continue;
+
+        // Kommentarzeilen ueber der Sequenz anzeigen.
+        //
+        // Ohne das sieht man in der Tabelle nicht, wo die Gliederung sitzt —
+        // und sie waere nur in der fertigen animation.cfg sichtbar, also zu
+        // spaet zum Nachbessern.
+        for (std::size_t ci = 0; ci < g.commentsBefore.size(); ++ci) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+
+            const bool bearbeite = editCommentGrab_ == static_cast<int>(i) &&
+                                   editCommentLine_ == static_cast<int>(ci);
+            // Eigene Kennung aus Grab und Zeile. Frueher i*1000+ci: das
+            // kollidierte ab Grab 900 mit den Schlusskommentaren (900000+ti)
+            // und ab Grab 1 mit den Zeilen-IDs grosser Skripte.
+            char cid[48];
+            std::snprintf(cid, sizeof(cid), "cmt%zu_%zu", i, ci);
+            ImGui::PushID(cid);
+
+            if (bearbeite) {
+                // Direkt in der Zeile bearbeiten.
+                ImGui::SetNextItemWidth(-1);
+                // Einmal Fokus anfordern, wenn das Bearbeiten beginnt — nicht in
+                // jedem Bild, solange gerade nichts aktiv ist. Direkt nach dem
+                // Doppelklick haelt noch die Maus das Element darunter, und
+                // die wiederholte Anforderung kam nie zum Zug: das Feld
+                // erschien, aber getippter Text ging ins Leere.
+                if (focusEditField_) {
+                    ImGui::SetKeyboardFocusHere();
+                    focusEditField_ = false;
+                }
+                const bool fertig = ImGui::InputText(
+                    "##cedit", editCommentBuf_, sizeof(editCommentBuf_),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+                // Uebernehmen bei Enter ODER wenn der Fokus weggeht —
+                // sonst geht die Eingabe verloren, wenn jemand danebenklickt.
+                if (fertig || (!ImGui::IsItemActive() && ImGui::IsItemDeactivated())) {
+                    std::string neu = editCommentBuf_;
+                    if (neu.empty()) {
+                        // Leer = Zeile loeschen. Eine leere Kommentarzeile
+                        // haette in der cfg keinen Zweck.
+                        d.script.grabs[i].commentsBefore.erase(
+                            d.script.grabs[i].commentsBefore.begin() + static_cast<long>(ci));
+                    } else {
+                        d.script.grabs[i].commentsBefore[ci] = neu;
+                    }
+                    d.dirty = true;
+                    editCommentGrab_ = -1;
+                    editCommentLine_ = -1;
+                }
+            } else {
+                const std::string& c = g.commentsBefore[ci];
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
+                ImGui::Selectable(c.empty() ? " " : c.c_str(), false,
+                                  ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowDoubleClick);
+                ImGui::PopStyleColor();
+
+                // Ziehen wie eine Sequenz.
+                //
+                // Eigene Kennung "g2c_cmt": ein Trenner soll sich nicht mit
+                // einer Sequenz vertauschen lassen, und umgekehrt.
+                if (!hasFilter &&
+                    ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
+                    const std::size_t payload[3] = {static_cast<std::size_t>(active_), i, ci};
+                    ImGui::SetDragDropPayload("g2c_cmt", payload, sizeof(payload));
+                    ImGui::TextUnformatted(c.empty() ? " " : c.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if (!hasFilter && ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+                        const auto* q = static_cast<const std::size_t*>(pl->Data);
+                        if (q[0] == static_cast<std::size_t>(active_))
+                            pendingCommentMove_ = {q[1], q[2], i, false, true};
+                        else
+                            log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                    editCommentGrab_ = static_cast<int>(i);
+                    focusEditField_ = true;
+                    editCommentLine_ = static_cast<int>(ci);
+                    std::snprintf(editCommentBuf_, sizeof(editCommentBuf_), "%s", c.c_str());
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CommentEditHint));
+
+                // Rechtsklick auf die Kommentarzeile: loeschen.
+                if (ImGui::BeginPopupContextItem("cctx")) {
+                    // Der Trenner laesst sich unabhaengig von den
+                    // Animationen verschieben — er gehoert keiner Sequenz,
+                    // auch wenn er im Dateiformat an einer haengt.
+                    if (ImGui::MenuItem(tr(S::MoveUp)))
+                        moveComment(static_cast<std::size_t>(active_), i, ci, true);
+                    if (ImGui::MenuItem(tr(S::MoveDown)))
+                        moveComment(static_cast<std::size_t>(active_), i, ci, false);
+                    ImGui::Separator();
+                    if (ImGui::MenuItem(tr(S::DeleteSeq))) {
+                        d.script.grabs[i].commentsBefore.erase(
+                            d.script.grabs[i].commentsBefore.begin() + static_cast<long>(ci));
+                        d.dirty = true;
+                    }
+                    ImGui::EndPopup();
+                }
+            }
+            ImGui::PopID();
+        }
 
         ImGui::TableNextRow();
         ImGui::PushID(static_cast<int>(i));
@@ -1827,9 +2385,14 @@ void App::drawSequenceTable(Document& d) {
         // Auswahl. So macht es der Explorer.
         const bool wasSelected = sel;
 
+        // AllowOverlap: die Zeile spannt ueber alle Spalten, darf aber die
+        // Elemente darin nicht verdecken. Ohne das kam kein Klick beim
+        // Zeilenkommentar an — ein Doppelklick darauf oeffnete stattdessen
+        // den Sequenzdialog —, und die Tooltips der Enum-Spalte erschienen nie.
         if (ImGui::Selectable(name.c_str(), sel || isJumpTarget,
                               ImGuiSelectableFlags_SpanAllColumns |
-                                  ImGuiSelectableFlags_AllowDoubleClick)) {
+                                  ImGuiSelectableFlags_AllowDoubleClick |
+                                  ImGuiSelectableFlags_AllowOverlap)) {
             // Mehrfachauswahl wie in jedem Dateimanager:
             //   einfacher Klick   - nur diese Zeile
             //   Strg + Klick      - einzelne dazu oder weg
@@ -1840,14 +2403,17 @@ void App::drawSequenceTable(Document& d) {
             if (shift && selAnchor_ >= 0) {
                 std::size_t a = static_cast<std::size_t>(selAnchor_), b = i;
                 if (a > b) std::swap(a, b);
-                if (!ctrl) std::fill(d.selected.begin(), d.selected.end(), 0);
+                if (!ctrl) std::fill(d.selected.begin(), d.selected.end(), char{0});
+                // Nur sichtbare Zeilen. Mit Filter lagen dazwischen
+                // ausgeblendete Sequenzen, die mit ausgewaehlt wurden — und
+                // "Loeschen" traf dann Zeilen, die man nicht sehen konnte.
                 for (std::size_t k = a; k <= b && k < d.selected.size(); ++k)
-                    d.selected[k] = 1;
+                    if (rowVisible(d, k)) d.selected[k] = 1;
             } else if (ctrl) {
                 d.selected[i] = static_cast<char>(!sel);
                 selAnchor_ = static_cast<int>(i);
             } else {
-                std::fill(d.selected.begin(), d.selected.end(), 0);
+                std::fill(d.selected.begin(), d.selected.end(), char{0});
                 d.selected[i] = 1;
                 selAnchor_ = static_cast<int>(i);
             }
@@ -1855,6 +2421,7 @@ void App::drawSequenceTable(Document& d) {
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 editRow_ = static_cast<int>(i);
                 editOpen_ = true;
+                editDocPath_ = d.path;
             }
         }
 
@@ -1873,8 +2440,9 @@ void App::drawSequenceTable(Document& d) {
             ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             std::size_t a = static_cast<std::size_t>(selAnchor_), b = i;
             if (a > b) std::swap(a, b);
-            std::fill(d.selected.begin(), d.selected.end(), 0);
-            for (std::size_t k = a; k <= b && k < d.selected.size(); ++k) d.selected[k] = 1;
+            std::fill(d.selected.begin(), d.selected.end(), char{0});
+            for (std::size_t k = a; k <= b && k < d.selected.size(); ++k)
+                if (rowVisible(d, k)) d.selected[k] = 1;
         }
 
         // Umordnen durch Ziehen.
@@ -1883,23 +2451,38 @@ void App::drawSequenceTable(Document& d) {
         // Zielposition ist eindeutig. Mit Filter waere "hierhin" mehrdeutig,
         // weil dazwischen ausgeblendete Sequenzen liegen.
         if (!hasFilter) {
+            // Die Nutzlast traegt das Skript mit. ImGui schaltet beim
+            // Darueberziehen den Tab um; ohne diese Angabe verschob ein Ziehen
+            // von Tab A nach Tab B die Zeile mit derselben Nummer in B.
             if (wasSelected &&
                 ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
-                const int payload = static_cast<int>(i);
-                ImGui::SetDragDropPayload("g2c_row", &payload, sizeof(payload));
+                const std::size_t payload[2] = {static_cast<std::size_t>(active_), i};
+                ImGui::SetDragDropPayload("g2c_row", payload, sizeof(payload));
                 ImGui::TextUnformatted(name.c_str());
                 ImGui::EndDragDropSource();
             }
             if (ImGui::BeginDragDropTarget()) {
+                // Ein Trenner, der auf einer Sequenz abgelegt wird, landet
+                // DAVOR — dort, wo die blaue Zeile dann erscheint.
+                if (const ImGuiPayload* pc = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+                    const auto* q = static_cast<const std::size_t*>(pc->Data);
+                    if (q[0] == static_cast<std::size_t>(active_))
+                        pendingCommentMove_ = {q[1], q[2], i, false, true};
+                    else
+                        log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                }
                 if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_row")) {
-                    const int from = *static_cast<const int*>(pl->Data);
-                    std::vector<std::size_t> rows;
-                    for (std::size_t k = 0; k < d.selected.size(); ++k)
-                        if (d.selected[k]) rows.push_back(k);
-                    if (std::find(rows.begin(), rows.end(),
-                                  static_cast<std::size_t>(from)) == rows.end())
-                        rows = {static_cast<std::size_t>(from)};
-                    pendingBlock_ = {rows, i};
+                    const auto* q = static_cast<const std::size_t*>(pl->Data);
+                    if (q[0] != static_cast<std::size_t>(active_)) {
+                        log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                    } else {
+                        const std::size_t from = q[1];
+                        std::vector<std::size_t> rows;
+                        for (std::size_t k = 0; k < d.selected.size(); ++k)
+                            if (d.selected[k]) rows.push_back(k);
+                        if (std::find(rows.begin(), rows.end(), from) == rows.end()) rows = {from};
+                        pendingBlock_ = {rows, i};
+                    }
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -1910,6 +2493,7 @@ void App::drawSequenceTable(Document& d) {
             if (ImGui::MenuItem(withIcon(ICON_EDIT, tr(S::CtxEdit)))) {
                 editRow_ = static_cast<int>(i);
                 editOpen_ = true;
+                editDocPath_ = d.path;
             }
             ImGui::Separator();
 
@@ -1957,6 +2541,24 @@ void App::drawSequenceTable(Document& d) {
                 }
             }
 
+            // Schnellweg fuer die Gliederung, ohne den Dialog zu oeffnen.
+            if (ImGui::MenuItem(tr(S::AddDivider))) {
+                d.script.grabs[i].commentsBefore.push_back(
+                    "//////////////////////////////////////////");
+                d.dirty = true;
+            }
+            if (ImGui::MenuItem(tr(S::AddComment))) {
+                // Leere Zeile anlegen und sofort zum Bearbeiten oeffnen —
+                // ohne Umweg ueber den Dialog.
+                d.script.grabs[i].commentsBefore.emplace_back();
+                editCommentGrab_ = static_cast<int>(i);
+                focusEditField_ = true;
+                editCommentLine_ =
+                    static_cast<int>(d.script.grabs[i].commentsBefore.size()) - 1;
+                editCommentBuf_[0] = '\0';
+                d.dirty = true;
+            }
+
             ImGui::Separator();
             if (ImGui::MenuItem(tr(S::Copy))) {
                 const std::size_t n = copyGrabs(static_cast<std::size_t>(active_), rows);
@@ -1966,6 +2568,8 @@ void App::drawSequenceTable(Document& d) {
                 const std::size_t n = copyGrabs(static_cast<std::size_t>(active_), rows);
                 log(LogLine::Kind::Info, trf(S::Copied, n));
                 pendingDelete_ = rows;
+                pendingDeleteDocPath_ = d.path;
+                pendingDeleteIsCut_ = true;
             }
             if (!clipboard_.empty()) {
                 char lbl[128];
@@ -1979,9 +2583,15 @@ void App::drawSequenceTable(Document& d) {
             if (rows.size() > 1) {
                 char lbl[128];
                 std::snprintf(lbl, sizeof(lbl), tr(S::DeleteSelected), rows.size());
-                if (ImGui::MenuItem(withIcon(ICON_DELETE, lbl))) pendingDelete_ = rows;
+                if (ImGui::MenuItem(withIcon(ICON_DELETE, lbl))) {
+                    pendingDelete_ = rows;
+                    pendingDeleteDocPath_ = d.path;
+                    pendingDeleteIsCut_ = false;
+                }
             } else if (ImGui::MenuItem(withIcon(ICON_DELETE, tr(S::DeleteSeq)))) {
                 pendingDelete_ = {i};
+                pendingDeleteDocPath_ = d.path;
+                pendingDeleteIsCut_ = false;
             }
             ImGui::EndPopup();
         }
@@ -2016,9 +2626,169 @@ void App::drawSequenceTable(Document& d) {
                 ImGui::SetTooltip(tr(S::EnumTooltipMissing), name.c_str());
         }
 
+        // Zeilenkommentar: anzeigen und per Doppelklick bearbeiten.
+        //
+        // Er steht in der .car hinter der Grab-Zeile und wandert in die
+        // animation.cfg an dieselbe Stelle — so macht es Raven auch.
+        ImGui::TableNextColumn();
+        {
+            const bool bearbeite = editTrailGrab_ == static_cast<int>(i);
+            if (bearbeite) {
+                ImGui::SetNextItemWidth(-1);
+                // Einmal Fokus anfordern, wenn das Bearbeiten beginnt — nicht in
+                // jedem Bild, solange gerade nichts aktiv ist. Direkt nach dem
+                // Doppelklick haelt noch die Maus das Element darunter, und
+                // die wiederholte Anforderung kam nie zum Zug: das Feld
+                // erschien, aber getippter Text ging ins Leere.
+                if (focusEditField_) {
+                    ImGui::SetKeyboardFocusHere();
+                    focusEditField_ = false;
+                }
+                const bool fertig =
+                    ImGui::InputText("##tc", editTrailBuf_, sizeof(editTrailBuf_),
+                                     ImGuiInputTextFlags_EnterReturnsTrue);
+                if (fertig || (!ImGui::IsItemActive() && ImGui::IsItemDeactivated())) {
+                    std::string neu = editTrailBuf_;
+                    // Ohne "//" davor waere es in der Datei keine
+                    // Kommentarzeile, sondern Unsinn hinter den Zahlen.
+                    if (!neu.empty() && neu.compare(0, 2, "//") != 0) neu = "// " + neu;
+                    d.script.grabs[i].trailingComment = neu;
+                    d.dirty = true;
+                    editTrailGrab_ = -1;
+                }
+            } else {
+                const std::string& tc = d.script.grabs[i].trailingComment;
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      ImVec4(0.55f, 0.55f, 0.58f, tc.empty() ? 0.45f : 0.95f));
+                ImGui::Selectable(tc.empty() ? "..." : tc.c_str(), false,
+                                  ImGuiSelectableFlags_AllowDoubleClick);
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                    editTrailGrab_ = static_cast<int>(i);
+                    focusEditField_ = true;
+                    std::snprintf(editTrailBuf_, sizeof(editTrailBuf_), "%s", tc.c_str());
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::TrailCommentTip));
+            }
+        }
+
         ImGui::PopID();
     }
+    // Ablagezeile ganz unten.
+    //
+    // Ohne sie liesse sich ein Trenner nur dann ans Ende ziehen, wenn dort
+    // schon einer liegt — also genau dann nicht, wenn man den ersten
+    // hinsetzen will.
+    if (!d.script.grabs.empty()) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::PushID("dropend");
+        ImGui::Selectable("##dropend", false, ImGuiSelectableFlags_SpanAllColumns);
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+                const auto* q = static_cast<const std::size_t*>(pl->Data);
+                if (q[0] == static_cast<std::size_t>(active_))
+                    pendingCommentMove_ = {q[1], q[2], 0, true, true};
+                else
+                    log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+            }
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::PopID();
+    }
+
+    // Kommentare hinter der letzten Animation.
+    //
+    // Sie haengen an keinem Grab und wuerden sonst nur in der fertigen
+    // animation.cfg auftauchen — also da, wo man sie nicht mehr bearbeiten
+    // kann.
+    for (std::size_t ti = 0; ti < d.script.trailingComments.size(); ++ti) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::PushID("trail");
+        ImGui::PushID(static_cast<int>(ti));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
+        const std::string& c = d.script.trailingComments[ti];
+        ImGui::Selectable(c.empty() ? " " : c.c_str(), false,
+                          ImGuiSelectableFlags_SpanAllColumns);
+        ImGui::PopStyleColor();
+
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
+            // Schlusszeilen sitzen nicht an einem Grab — die Herkunft wird
+            // mit dem Grab-Index "ganz hinten" verschluesselt.
+            const std::size_t payload[3] = {static_cast<std::size_t>(active_), d.script.grabs.size(), ti};
+            ImGui::SetDragDropPayload("g2c_cmt", payload, sizeof(payload));
+            ImGui::TextUnformatted(c.empty() ? " " : c.c_str());
+            ImGui::EndDragDropSource();
+        }
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+                const auto* q = static_cast<const std::size_t*>(pl->Data);
+                if (q[0] == static_cast<std::size_t>(active_))
+                    pendingCommentMove_ = {q[1], q[2], 0, true, true};
+                else
+                    log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        if (ImGui::BeginPopupContextItem("tctx")) {
+            if (ImGui::MenuItem(tr(S::MoveUp)) && !d.script.grabs.empty()) {
+                // Zurueck an den letzten Grab.
+                d.script.grabs.back().commentsBefore.push_back(c);
+                d.script.trailingComments.erase(
+                    d.script.trailingComments.begin() + static_cast<long>(ti));
+                d.dirty = true;
+            }
+            if (ImGui::MenuItem(tr(S::DeleteSeq))) {
+                d.script.trailingComments.erase(
+                    d.script.trailingComments.begin() + static_cast<long>(ti));
+                d.dirty = true;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        ImGui::PopID();
+    }
+
     ImGui::EndTable();
+
+    // Verschobenen Trenner jetzt umhaengen — nicht mitten im Zeichnen.
+    if (pendingCommentMove_.aktiv) {
+        const auto m = pendingCommentMove_;
+        pendingCommentMove_ = {};
+
+        // Text holen und an der alten Stelle entfernen.
+        std::string text;
+        bool gefunden = false;
+        if (m.vonGrab >= d.script.grabs.size()) {
+            if (m.vonZeile < d.script.trailingComments.size()) {
+                text = d.script.trailingComments[m.vonZeile];
+                d.script.trailingComments.erase(
+                    d.script.trailingComments.begin() + static_cast<long>(m.vonZeile));
+                gefunden = true;
+            }
+        } else {
+            auto& von = d.script.grabs[m.vonGrab].commentsBefore;
+            if (m.vonZeile < von.size()) {
+                text = von[m.vonZeile];
+                von.erase(von.begin() + static_cast<long>(m.vonZeile));
+                gefunden = true;
+            }
+        }
+
+        if (gefunden) {
+            if (m.ansEnde) {
+                d.script.trailingComments.push_back(text);
+            } else if (m.zuGrab < d.script.grabs.size()) {
+                d.script.grabs[m.zuGrab].commentsBefore.push_back(text);
+            } else {
+                d.script.trailingComments.push_back(text);
+            }
+            d.dirty = true;
+            d.validated = false;
+        }
+    }
 
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) rangeSelecting_ = false;
 
@@ -2062,6 +2832,7 @@ void App::drawTabs() {
                                         ImGuiTabBarFlags_FittingPolicyScroll))
         return;
 
+    std::vector<std::size_t> closeClicked;
     for (std::size_t i = 0; i < docs_.size();) {
         Document& d = docs_[i];
         std::string label = d.title;
@@ -2069,6 +2840,8 @@ void App::drawTabs() {
         label += "###" + d.path;
 
         bool open = true;
+        // Tab-Kreuze erst nach der Schleife auswerten: mitten im Zeichnen die
+        // Liste zu verkleinern, ueber die gerade iteriert wird, geht nicht gut.
         // Der Tab waehlt nur aus; die Tabelle wird unten EINMAL gezeichnet.
         //
         // Innerhalb des Tabs haette die Tabelle je Tab eine eigene Kennung,
@@ -2081,10 +2854,23 @@ void App::drawTabs() {
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
             ImGui::SetTooltip("%s", d.path.c_str());
-        if (!open) { closeDocument(i); continue; }
+        if (!open) closeClicked.push_back(i);
         ++i;
     }
     ImGui::EndTabBar();
+
+    // Erst nach der Tableiste schliessen — und mit Rueckfrage, wenn das
+    // Skript Aenderungen hat. Das Kreuz verwarf sie frueher ohne Warnung.
+    if (!closeClicked.empty()) requestClose(closeClicked);
+
+    // Der Sequenzdialog gehoert zu einem Skript. Wird ein anderer Tab
+    // aktiv, schliesst er — sonst bearbeitete er dieselbe Zeilennummer im
+    // neuen Skript.
+    if (editOpen_ && (active_ < 0 || active_ >= static_cast<int>(docs_.size()) ||
+                      docs_[static_cast<std::size_t>(active_)].path != editDocPath_)) {
+        editOpen_ = false;
+        editRow_ = -1;
+    }
 
     if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
         Document& d = docs_[static_cast<std::size_t>(active_)];
@@ -2110,6 +2896,12 @@ void App::drawPreviewPanel() {
     }
 
     // Sequenzauswahl.
+    // Ohne Sequenz gibt es nichts abzuspielen. Der Zugriff auf seqs[0] lief
+    // frueher trotzdem — mit einer leeren Liste ausserhalb des Feldes.
+    if (ex.seqs.empty()) {
+        ImGui::TextDisabled("%s", tr(S::PreviewNoGla));
+        return;
+    }
     if (previewSeq_ < 0 || previewSeq_ >= static_cast<int>(ex.seqs.size())) previewSeq_ = 0;
     const ExtractSeq& seq = ex.seqs[static_cast<std::size_t>(previewSeq_)];
 
@@ -2201,7 +2993,8 @@ void App::drawPreviewPanel() {
         const int v = static_cast<int>(230.0f - 130.0f * t);
         dl->AddLine(ImVec2(origin.x + l.x0, origin.y + l.y0),
                     ImVec2(origin.x + l.x1, origin.y + l.y1),
-                    IM_COL32(v, v, static_cast<int>(v * 0.85f), 255), 1.6f * k);
+                    IM_COL32(v, v, static_cast<int>(static_cast<float>(v) * 0.85f), 255),
+                    1.6f * k);
     }
     for (const auto& l : lines)
         dl->AddCircleFilled(ImVec2(origin.x + l.x1, origin.y + l.y1), 2.0f * k,
@@ -2428,7 +3221,7 @@ void App::drawExtractPanel() {
         std::vector<std::size_t> rows;
         for (std::size_t i = 0; i < ex.selected.size(); ++i)
             if (ex.selected[i]) rows.push_back(i);
-        exportSequences(rows, ex.outDir);
+        exportWithConfirm(rows, false);
     }
     ImGui::EndDisabled();
 
@@ -2470,13 +3263,7 @@ void App::drawExtractPanel() {
     ImGui::SameLine();
     ImGui::BeginDisabled(ex.outDir.empty() || ex.cfgPath.empty());
     if (iconButton(ICON_DOCUMENT, kIconGood, tr(S::ExportAllWithCar))) {
-        // Pfadpraefix aus dem Zielordner ableiten: alles ab "models/".
-        const std::string norm = fs::path(ex.outDir).generic_string();
-        const std::size_t m = norm.rfind("/models/");
-        std::string prefix = (m == std::string::npos) ? std::string() : norm.substr(m + 1) + "/";
-        const std::string carOut =
-            (fs::path(ex.outDir) / (fs::path(ex.glaPath).stem().string() + ".car")).string();
-        exportAllWithScript(ex.outDir, carOut, prefix);
+        exportWithConfirm({}, true);
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ExportAllWithCarTip));
     ImGui::EndDisabled();
@@ -2486,7 +3273,7 @@ void App::drawExtractPanel() {
     if (iconButton(ICON_SAVE_ALL, kIconInfo, tr(S::ExportAll))) {
         std::vector<std::size_t> rows(ex.seqs.size());
         for (std::size_t i = 0; i < rows.size(); ++i) rows[i] = i;
-        exportSequences(rows, ex.outDir);
+        exportWithConfirm(rows, false);
     }
     ImGui::EndDisabled();
 
@@ -2523,13 +3310,21 @@ void App::drawExtractPanel() {
             if (shift && extractAnchor_ >= 0) {
                 std::size_t a = static_cast<std::size_t>(extractAnchor_), b = i;
                 if (a > b) std::swap(a, b);
-                if (!ctrl) std::fill(ex.selected.begin(), ex.selected.end(), 0);
-                for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j) ex.selected[j] = 1;
+                if (!ctrl) std::fill(ex.selected.begin(), ex.selected.end(), char{0});
+                // Nur, was gerade zu sehen ist: Filter und "nur fehlende"
+                // blenden Zeilen aus, die sonst still mit exportiert wuerden.
+                for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j) {
+                    const auto& q = ex.seqs[j];
+                    if (!needle.empty() && q.name.find(needle) == std::string::npos) continue;
+                    if (ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name))
+                        continue;
+                    ex.selected[j] = 1;
+                }
             } else if (ctrl) {
                 ex.selected[i] = static_cast<char>(!sel);
                 extractAnchor_ = static_cast<int>(i);
             } else {
-                std::fill(ex.selected.begin(), ex.selected.end(), 0);
+                std::fill(ex.selected.begin(), ex.selected.end(), char{0});
                 ex.selected[i] = 1;
                 extractAnchor_ = static_cast<int>(i);
             }
@@ -2558,6 +3353,27 @@ void App::drawExtractPanel() {
 void App::drawIssues() {
     if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return;
     Document& d = docs_[static_cast<std::size_t>(active_)];
+
+    // Doppelte Namen aus dem letzten Bauversuch als Meldungen uebernehmen.
+    //
+    // Damit landet der Fehler dort, wo man ihn anklicken kann — eine
+    // Protokollzeile allein springt nirgendwohin.
+    {
+        std::lock_guard<std::mutex> lock(dupMutex_);
+        if (!pendingDuplicates_.empty() && pendingDupDoc_ == d.title) {
+            for (const auto& name : pendingDuplicates_) {
+                car::Issue is;
+                is.level = car::Issue::Level::Error;
+                is.sequence = name;
+                is.message = trf(S::DupIssue, name.c_str());
+                d.validation.issues.push_back(std::move(is));
+                ++d.validation.errors;
+            }
+            d.validated = true;
+            pendingDuplicates_.clear();
+            pendingDupDoc_.clear();
+        }
+    }
 
     if (!d.validated) {
         ImGui::TextDisabled("%s", tr(S::NotValidatedHint));
@@ -2593,15 +3409,49 @@ void App::drawIssues() {
         const bool sel = (issueSelected_ == static_cast<int>(i));
         if (ImGui::Selectable("##row", sel, ImGuiSelectableFlags_SpanAllColumns)) {
             issueSelected_ = static_cast<int>(i);
-            // Zur betroffenen Sequenz springen.
+            // Zu den betroffenen Sequenzen springen.
+            //
+            // ALLE Treffer sammeln, nicht nur den ersten: bei einem
+            // doppelten Namen sind es zwei, und man will beide sehen, um zu
+            // entscheiden, welcher bleibt.
             if (!is.sequence.empty()) {
+                // Beide Seiten gross schreiben. Die Pruefung meldet Namen in
+                // ihrer Originalschreibung ("BOTH_Walk1_galen"); verglichen
+                // mit der gross geschriebenen Zeile sprang der Klick nie.
+                std::string want = is.sequence;
+                for (auto& c : want)
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                std::vector<std::size_t> treffer;
                 for (std::size_t g = 0; g < d.script.grabs.size(); ++g) {
                     const auto& gr = d.script.grabs[g];
-                    const std::string nm = gr.enumName ? *gr.enumName : gr.derivedName();
-                    bool hit = (nm == is.sequence);
-                    for (const auto& a : gr.additional)
-                        if (a.name == is.sequence) hit = true;
-                    if (hit) { jumpToRow_ = static_cast<int>(g); break; }
+                    std::string nm = gr.enumName ? *gr.enumName : gr.derivedName();
+                    for (auto& c : nm)
+                        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                    bool hit = (nm == want);
+                    for (const auto& a : gr.additional) {
+                        std::string an = a.name;
+                        for (auto& c : an)
+                            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                        if (an == want) hit = true;
+                    }
+                    if (hit) treffer.push_back(g);
+                }
+
+                if (!treffer.empty()) {
+                    // Alle markieren, damit man sie in der Tabelle sieht.
+                    std::fill(d.selected.begin(), d.selected.end(), char{0});
+                    for (const std::size_t g : treffer)
+                        if (g < d.selected.size()) d.selected[g] = 1;
+
+                    // Und der Reihe nach anspringen: erneutes Klicken geht
+                    // zum naechsten Vorkommen, dann wieder zum ersten.
+                    if (issueCycleFor_ != static_cast<int>(i)) {
+                        issueCycleFor_ = static_cast<int>(i);
+                        issueCycleIdx_ = 0;
+                    } else {
+                        issueCycleIdx_ = (issueCycleIdx_ + 1) % static_cast<int>(treffer.size());
+                    }
+                    jumpToRow_ = static_cast<int>(treffer[static_cast<std::size_t>(issueCycleIdx_)]);
                 }
             }
         }
@@ -2673,11 +3523,16 @@ void App::drawSequenceDialog(Document& d) {
         editOpen_ = false;
         return;
     }
+    // Nur fuer das Skript, zu dem der Dialog geoeffnet wurde.
+    if (d.path != editDocPath_) {
+        editOpen_ = false;
+        return;
+    }
     car::GrabDirective& g = d.script.grabs[static_cast<std::size_t>(editRow_)];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
 
     ImGui::SetNextWindowSize(ImVec2(760 * settings_.dpiScale, 0), ImGuiCond_Appearing);
-    if (!ImGui::Begin(("Sequenz: " + name + "###seqdlg").c_str(), &editOpen_,
+    if (!ImGui::Begin((trf(S::DlgSeqTitle, name.c_str()) + "###seqdlg").c_str(), &editOpen_,
                       ImGuiWindowFlags_None)) {
         ImGui::End();
         return;
@@ -2813,6 +3668,47 @@ void App::drawSequenceDialog(Document& d) {
         }
     }
 
+    // Kommentar, der VOR dieser Sequenz steht.
+    //
+    // Er wird im Skript gespeichert und landet in der erzeugten
+    // animation.cfg — damit laesst sich eine Liste mit tausend Eintraegen
+    // gliedern, statt eine Wand aus Zahlen zu hinterlassen.
+    ImGui::Separator();
+    ImGui::TextUnformatted(tr(S::DlgComment));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::DlgCommentTip));
+    {
+        // Die Zeilen als einen Text bearbeiten, eine je Zeile.
+        std::string joined;
+        for (const auto& c : g.commentsBefore) {
+            if (!joined.empty()) joined += "\n";
+            joined += c;
+        }
+        // Puffer nach Inhalt bemessen, mit Luft zum Tippen. Mit festen 2048
+        // Zeichen schnitt der erste Tastendruck einen laengeren Block ab.
+        std::vector<char> buf(joined.size() + 4096, '\0');
+        std::memcpy(buf.data(), joined.data(), joined.size());
+        if (ImGui::InputTextMultiline("##comment", buf.data(), buf.size(),
+                                      ImVec2(-1, 70 * settings_.dpiScale))) {
+            g.commentsBefore.clear();
+            std::istringstream is{std::string(buf.data())};
+            std::string line;
+            while (std::getline(is, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                g.commentsBefore.push_back(line);
+            }
+            // Endende Leerzeilen wegnehmen: sie entstehen beim Tippen und
+            // haetten in der cfg keinen Zweck.
+            while (!g.commentsBefore.empty() && g.commentsBefore.back().empty())
+                g.commentsBefore.pop_back();
+            d.dirty = true;
+        }
+    }
+    if (ImGui::Button(tr(S::AddDivider))) {
+        g.commentsBefore.push_back("//////////////////////////////////////////");
+        d.dirty = true;
+    }
+    ImGui::Separator();
+
     if (ImGui::Button(tr(S::DlgAddExtra))) {
         car::GrabDirective::Additional a;
         a.name = name + "_2";
@@ -2905,6 +3801,18 @@ void App::drawLog() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CopyLogTip));
 
+    // Ausgabeordner oeffnen — erst sinnvoll, wenn etwas gebaut wurde.
+    std::string outDir;
+    {
+        std::lock_guard<std::mutex> lock(outputDirMutex_);
+        outDir = lastOutputDir_;
+    }
+    if (!outDir.empty() && platform_.revealInExplorer) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, tr(S::OpenOutputDir))))
+            platform_.revealInExplorer(outDir);
+    }
+
     ImGui::SameLine();
     if (ImGui::SmallButton(withIcon(ICON_DELETE, tr(S::ClearLog)))) {
         std::lock_guard<std::mutex> lock(logMutex_);
@@ -2966,6 +3874,34 @@ void App::drawStatusBar() {
     }
 }
 
+// Tastenkuerzel — alle, die im Menue angeschrieben stehen.
+//
+// Frueher waren nur Strg+N und Strg+S umgesetzt. Strg+O, Strg+Umschalt+O,
+// Strg+W, F5, Umschalt+F5 und F7 standen im Menue, taten aber nichts.
+void App::handleShortcuts() {
+    // Waehrend eine Rueckfrage offen ist, keine weiteren Aktionen.
+    if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool ctrl = io.KeyCtrl, shift = io.KeyShift;
+    const auto pressed = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };
+    const bool have = !docs_.empty();
+
+    if (ctrl && !shift && pressed(ImGuiKey_N)) newCarDialog();
+    if (ctrl && pressed(ImGuiKey_O)) {
+        if (shift) openFolderDialog();
+        else openScriptDialog();
+    }
+    if (ctrl && pressed(ImGuiKey_S) && have) {
+        if (shift) saveAllDocuments();
+        else saveDocument(static_cast<std::size_t>(active_));
+    }
+    if (ctrl && !shift && pressed(ImGuiKey_W) && have)
+        requestClose({static_cast<std::size_t>(active_)});
+    if (!ctrl && pressed(ImGuiKey_F5) && have && !buildRunning()) startBuild(shift);
+    if (!ctrl && !shift && pressed(ImGuiKey_F7) && have) validateAll();
+}
+
 void App::draw() {
     if (!styleApplied_) applyStyle();
 
@@ -2977,20 +3913,7 @@ void App::draw() {
                                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                                    ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    // Tastenkuerzel.
-    if (ImGui::IsKeyDown(ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_N, false)) {
-        const auto f = askFiles("car", tr(S::DlgTitleNewCar), "Carcass-Skript (*.car)\0*.car\0",
-                                false);
-        if (!f.empty()) {
-            std::string np = f.front();
-            if (fs::path(np).extension().empty()) np += ".car";
-            newCar(np);
-        }
-    }
-    if (ImGui::IsKeyDown(ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-        if (ImGui::IsKeyDown(ImGuiMod_Shift)) saveAllDocuments();
-        else if (!docs_.empty()) saveDocument(static_cast<std::size_t>(active_));
-    }
+    handleShortcuts();
 
     if (ImGui::Begin("##main", nullptr, flags)) {
         drawMenuBar();
@@ -3094,8 +4017,13 @@ void App::draw() {
             ImGui::Text(tr(S::ConfirmDelete), pendingDelete_.size());
             ImGui::Spacing();
             if (ImGui::Button(withIcon(ICON_DELETE, tr(S::DeleteSeq)))) {
-                const std::size_t n =
-                    deleteGrabs(static_cast<std::size_t>(active_), pendingDelete_);
+                // Im Skript, fuer das die Rueckfrage gestellt wurde — nicht im
+                // gerade aktiven. Ein zwischendurch aufs Fenster gezogenes
+                // Skript wird aktiv und haette sonst die Zeilen verloren.
+                std::size_t n = 0;
+                for (std::size_t di = 0; di < docs_.size(); ++di)
+                    if (docs_[di].path == pendingDeleteDocPath_)
+                        n = deleteGrabs(di, pendingDelete_, !pendingDeleteIsCut_);
                 char msg[128];
                 std::snprintf(msg, sizeof(msg), tr(S::Deleted), n);
                 log(LogLine::Kind::Info, msg);
@@ -3109,6 +4037,9 @@ void App::draw() {
             }
             ImGui::EndPopup();
         }
+
+        drawCloseDialog();
+        drawOverwriteDialog();
     }
     ImGui::End();
 }

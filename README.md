@@ -154,9 +154,22 @@ Stated openly, because you will run into them eventually.
 
 ---
 
+## What's new (September 2026)
+
+A full test pass against Raven's shipped `_humanoid.gla`, Carcass v2.2 and 53 real `.car` scripts. Highlights:
+
+- **Rebuild your GLAs.** `$keepmotion` wrongly disabled root-motion compensation. Animations with net travel (strafe runs, landings, kicks) drifted up to 96 units off-centre and snapped back on loop. Only `model_root` changes; everything else stays bit-identical.
+- **Saving a `.car` keeps every line.** Header comments, end-of-line comments, `-makeskin`, unknown flags, quoted paths and `$include` lines survive unchanged. All 53 test scripts round-trip line for line.
+- **No more silent data loss in the GUI.** Unsaved changes prompt before closing. Outputs are written atomically, so a failed write can no longer truncate an existing GLA. Exports ask before overwriting and back up an existing `.car`.
+- **Fixed crashes and broken features.** The Chinese/Japanese UI crashed, umlaut paths failed, "New .car" could never create a file, advertised shortcuts did nothing, and deleting a sequence removed the divider above it.
+
+The full list is in [`g2c-toolkit/docs/BUGS.md`](g2c-toolkit/docs/BUGS.md).
+
+---
+
 ## Verification
 
-410 automated checks run on every build, including round-trip tests against real files. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
+448 automated checks run on every build, including round-trip tests against real files. A separate driver (`g2_gui_driver`) clicks, drags and types through every window of the real interface — 118 checks, reporting every ImGui assertion and ID conflict. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
 
 Three static checkers run at build time for the parts that cannot be unit-tested: the Win32 layer, GUI wiring, and `build.bat`.
 

@@ -43,6 +43,79 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     if (script.grabs.empty())
         add(r, Issue::Level::Error, "Das Skript enthaelt keine $aseanimgrab-Anweisungen");
 
+    // --- 0a. Groesse der animation.cfg ------------------------------------
+    //
+    // Die Engine hat einen FESTEN Puffer und bricht ab:
+    //
+    //     UI_ParseAnimationFile: File ... too long (172308 > 159999)
+    //
+    // Das faellt erst beim Starten des Spiels auf, und die Meldung nennt
+    // keine Sequenz — man sucht dann in einer 2463 Zeilen langen Datei nach
+    // etwas, das gar kein einzelner Eintrag ist.
+    //
+    // Geschaetzt wird grosszuegig: der Name plus vier Zahlen plus Trenner.
+    {
+        std::size_t bytes = 200;   // Kopfzeilen
+        std::size_t n = 0;
+        for (const auto& g : script.grabs) {
+            const std::string nm = g.enumName ? *g.enumName : g.derivedName();
+            bytes += std::max<std::size_t>(nm.size(), 20) + 24;
+            for (const auto& c : g.commentsBefore) bytes += c.size() + 6;
+            n += 1 + g.additional.size();
+            for (const auto& a : g.additional) bytes += std::max<std::size_t>(a.name.size(), 20) + 24;
+        }
+        constexpr std::size_t kLimit = 159999;
+        if (bytes > kLimit)
+            add(r, Issue::Level::Error,
+                "Die animation.cfg wird etwa " + std::to_string(bytes) +
+                    " Byte gross - die Engine liest hoechstens " + std::to_string(kLimit) +
+                    ". Weniger Sequenzen oder kuerzere Namen sind noetig.");
+        else if (bytes > kLimit * 9 / 10)
+            add(r, Issue::Level::Warning,
+                "Die animation.cfg wird etwa " + std::to_string(bytes) +
+                    " Byte gross - die Grenze der Engine liegt bei " + std::to_string(kLimit) +
+                    ".");
+    }
+
+    // --- 0. Doppelte Sequenznamen -----------------------------------------
+    //
+    // Die Engine schlaegt in animation.cfg nach dem NAMEN nach. Steht einer
+    // zweimal drin, gewinnt der letzte Eintrag — die erste Animation ist
+    // dann unerreichbar, obwohl ihre Frames in der GLA liegen und Platz
+    // belegen.
+    //
+    // Das faellt im Spiel als "die Animation tut nichts" auf, und niemand
+    // sucht die Ursache in der cfg. Beim Zusammenfuehren mehrerer Quellen
+    // passiert es leicht.
+    {
+        std::map<std::string, std::vector<std::size_t>> gesehen;
+        for (std::size_t i = 0; i < script.grabs.size(); ++i) {
+            const auto& g = script.grabs[i];
+            std::string n = g.enumName ? *g.enumName : g.derivedName();
+            for (auto& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            gesehen[n].push_back(i);
+            for (const auto& a : g.additional) {
+                std::string an = a.name;
+                for (auto& c : an)
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                gesehen[an].push_back(i);
+            }
+        }
+        for (const auto& [name, wo] : gesehen) {
+            if (wo.size() < 2) continue;
+            std::string zeilen;
+            for (const std::size_t k : wo) {
+                if (!zeilen.empty()) zeilen += ", ";
+                zeilen += std::to_string(script.grabs[k].line);
+            }
+            add(r, Issue::Level::Error,
+                name + " steht " + std::to_string(wo.size()) +
+                    "x im Skript (Zeilen " + zeilen +
+                    "). Die Engine nimmt den letzten - die uebrigen sind unerreichbar.",
+                name, script.grabs[wo.front()].line);
+        }
+    }
+
     // --- 1. Quelldateien vorhanden ----------------------------------------
     // Fehlende Dateien werden zusammengefasst gemeldet. Bei einem falschen
     // -basedir fehlen alle 1289 auf einmal, und 1289 gleichlautende Zeilen
@@ -96,12 +169,12 @@ ValidateResult validate(const Script& script, const std::string& carPath,
         for (const auto& n : allNames) {
             if (opt.enums->contains(n)) continue;
             ++unknown;
-            if (unknown <= 20)
+            if (unknown <= opt.maxEnumWarnings)
                 add(r, Issue::Level::Warning, "Kein Enum in " + opt.enums->sourcePath, n);
         }
-        if (unknown > 20)
+        if (unknown > opt.maxEnumWarnings)
             add(r, Issue::Level::Warning,
-                std::to_string(unknown - 20) + " weitere Sequenzen ohne Enum");
+                std::to_string(unknown - opt.maxEnumWarnings) + " weitere Sequenzen ohne Enum");
 
         // Gegenrichtung: Enums, fuer die keine Sequenz gebaut wird. Assimilate
         // prueft das nicht. Im Spiel aeussert sich so ein Fall als Figur, die
@@ -210,53 +283,226 @@ void addGrabFrame(Script& s) {
     }
 }
 
+namespace {
+
+constexpr const char* kNl = "\r\n";
+
+void writeComments(std::ostringstream& os, const std::vector<std::string>& cs) {
+    for (const auto& c : cs) {
+        if (c.empty()) os << kNl;
+        else if (c.size() >= 2 && c[0] == '/' && c[1] == '/') os << c << kNl;
+        else os << "// " << c << kNl;
+    }
+}
+
+// Argumente mit Leerzeichen in Anfuehrungszeichen. Der Leser haelt sie
+// damit zusammen; ohne wuerde "models/my anims/walk.xsi" beim naechsten
+// Einlesen zu "models/my" und einem unbekannten Flag.
+std::string quoted(const std::string& a) {
+    if (a.empty() || a.find_first_of(" \t") != std::string::npos) return "\"" + a + "\"";
+    return a;
+}
+
+std::string commentSuffix(const std::string& c) {
+    if (c.empty()) return {};
+    return (c.size() >= 2 && c[0] == '/' && c[1] == '/') ? "  " + c : "  // " + c;
+}
+
+bool sameAdditional(const GrabDirective::Additional& a, const GrabDirective::Additional& b) {
+    return a.targetOffset == b.targetOffset && a.frameCount == b.frameCount &&
+           a.loopFrame == b.loopFrame && a.frameSpeed == b.frameSpeed && a.name == b.name &&
+           a.insideQdSkip == b.insideQdSkip;
+}
+
+bool sameGrab(const GrabDirective& a, const GrabDirective& b) {
+    if (a.file != b.file || a.loop != b.loop || a.frameSpeed != b.frameSpeed ||
+        a.enumName != b.enumName || a.hasQdSkip != b.hasQdSkip ||
+        a.extraArgs != b.extraArgs || a.trailingComment != b.trailingComment ||
+        a.additional.size() != b.additional.size())
+        return false;
+    for (std::size_t i = 0; i < a.additional.size(); ++i)
+        if (!sameAdditional(a.additional[i], b.additional[i])) return false;
+    return true;
+}
+
+std::string grabText(const GrabDirective& g) {
+    // Unveraendert? Dann die Zeile genau so, wie sie in der Datei stand.
+    if (!g.sourceLine.empty() && sameGrab(parseGrabLine(g.sourceLine), g)) return g.sourceLine;
+
+    std::ostringstream os;
+    os << "$aseanimgrab " << quoted(g.file);
+    if (g.loop) os << " -loop " << *g.loop;
+    if (g.frameSpeed) os << " -framespeed " << *g.frameSpeed;
+    if (g.enumName) os << " -enum " << quoted(*g.enumName);
+
+    // Die qdskip-Klammer genau um die Eintraege legen, die in ihr standen.
+    // Frueher wurde sie erst hinter dem letzten -additional geschlossen; ein
+    // Eintrag, der ausserhalb stand, rutschte beim naechsten Einlesen hinein.
+    bool qd = false;
+    bool anyInside = false;
+    for (const auto& a : g.additional) {
+        if (a.insideQdSkip != qd) {
+            os << (a.insideQdSkip ? " -qdskipstart" : " -qdskipstop");
+            qd = a.insideQdSkip;
+        }
+        anyInside = anyInside || a.insideQdSkip;
+        os << " -additional " << a.targetOffset << " " << a.frameCount << " " << a.loopFrame << " "
+           << a.frameSpeed << " " << quoted(a.name);
+    }
+    if (qd) os << " -qdskipstop";
+    else if (g.hasQdSkip && !anyInside) os << " -qdskipstart -qdskipstop";
+    for (const auto& x : g.extraArgs) os << " " << quoted(x);
+    os << commentSuffix(g.trailingComment);
+    return os.str();
+}
+
+bool sameConvert(const ConvertDirective& a, const ConvertDirective& b) {
+    return a.root == b.root && a.makeSkel == b.makeSkel && a.origin == b.origin &&
+           a.noAsk == b.noAsk && a.makeSkin == b.makeSkin && a.extraArgs == b.extraArgs &&
+           a.trailingComment == b.trailingComment;
+}
+
+std::string convertText(const ConvertDirective& c) {
+    if (!c.sourceLine.empty() && sameConvert(parseConvertLine(c.sourceLine), c)) return c.sourceLine;
+
+    std::ostringstream os;
+    os << (c.noAsk ? "$aseanimconvertmdx_noask " : "$aseanimconvertmdx ") << quoted(c.root);
+    if (c.makeSkin) os << " -makeskin";
+    if (!c.makeSkel.empty()) os << " -makeskel " << quoted(c.makeSkel);
+    if (c.origin)
+        os << " -origin " << (*c.origin)[0] << " " << (*c.origin)[1] << " " << (*c.origin)[2];
+    for (const auto& x : c.extraArgs) os << " " << quoted(x);
+    os << commentSuffix(c.trailingComment);
+    return os.str();
+}
+
+std::string statementText(const Statement& st) {
+    if (!st.sourceLine.empty()) return st.sourceLine;
+    std::string s = st.raw;
+    for (const auto& a : st.args) s += " " + quoted(a);
+    return s;
+}
+
+}  // namespace
+
 std::string writeScript(const Script& s) {
     std::ostringstream os;
-    const char* nl = "\r\n";
 
-    for (const auto& st : s.statements) {
-        switch (st.cmd) {
-            case Cmd::AseAnimGrab:
-            case Cmd::AseAnimConvertMdx:
-            case Cmd::AseAnimConvertMdxNoAsk:
-                // Diese werden unten aus den strukturierten Daten erzeugt,
-                // damit Aenderungen daran auch ankommen.
-                continue;
-            default:
-                break;
-        }
-        os << st.raw;
-        for (const auto& a : st.args) os << " " << a;
-        os << nl;
-        if (st.cmd == Cmd::AseAnimGrabInit) {
-            // Direkt nach $aseanimgrabinit folgen die Grabs.
-            for (const auto& g : s.grabs) {
-                os << "$aseanimgrab " << g.file;
-                if (g.loop) os << " -loop " << *g.loop;
-                if (g.frameSpeed) os << " -framespeed " << *g.frameSpeed;
-                if (g.enumName) os << " -enum " << *g.enumName;
-                bool qd = false;
-                for (const auto& a : g.additional) {
-                    if (a.insideQdSkip && !qd) { os << " -qdskipstart"; qd = true; }
-                    os << " -additional " << a.targetOffset << " " << a.frameCount << " "
-                       << a.loopFrame << " " << a.frameSpeed << " " << a.name;
-                }
-                if (qd) os << " -qdskipstop";
-                else if (g.hasQdSkip) os << " -qdskipstart -qdskipstop";
-                os << nl;
+    // $include-Dateien bleiben $include-Zeilen. Ihre Grabs stehen zum Bauen
+    // mit in s.grabs, gehoeren aber der anderen Datei — ins Hauptskript
+    // kopiert, stuenden sie beim naechsten Bau doppelt da.
+    std::set<int> includeWritten;
+    const auto writeInclude = [&](int id) {
+        if (!includeWritten.insert(id).second) return;
+        for (const auto& st : s.statements)
+            if (st.cmd == Cmd::Include && st.includeId == id) {
+                writeComments(os, st.commentsBefore);
+                os << statementText(st) << kNl;
             }
+    };
+    const auto includeHasGrabs = [&](int id) {
+        for (const auto& g : s.grabs)
+            if (g.fromInclude == id) return true;
+        return false;
+    };
+
+    // $include-Zeilen ohne eingebundene Grabs (nicht verfolgt, oder die Datei
+    // enthaelt keine), die in der Datei zwischen zwei Grabs standen: sie
+    // gehoeren wieder an dieselbe Stelle der Grab-Liste, nicht hinter sie.
+    std::size_t firstGrabStmt = s.statements.size(), lastGrabStmt = 0;
+    for (std::size_t i = 0; i < s.statements.size(); ++i)
+        if (s.statements[i].cmd == Cmd::AseAnimGrab && s.statements[i].fromInclude < 0) {
+            firstGrabStmt = std::min(firstGrabStmt, i);
+            lastGrabStmt = i;
+        }
+    std::vector<const Statement*> anchored;
+    for (std::size_t i = 0; i < s.statements.size(); ++i) {
+        const Statement& st = s.statements[i];
+        if (st.cmd == Cmd::Include && st.fromInclude < 0 && !includeHasGrabs(st.includeId) &&
+            i > firstGrabStmt && i < lastGrabStmt)
+            anchored.push_back(&st);
+    }
+    const auto isAnchored = [&](const Statement& st) {
+        return std::find(anchored.begin(), anchored.end(), &st) != anchored.end();
+    };
+
+    const auto writeGrabs = [&] {
+        std::size_t own = 0;
+        const auto flushAnchored = [&](bool all) {
+            for (const Statement* st : anchored)
+                if (all || st->grabsBefore <= own) writeInclude(st->includeId);
+        };
+        for (const auto& g : s.grabs) {
+            if (g.fromInclude >= 0) {
+                // An der Stelle des ersten eingebundenen Grabs steht das
+                // $include — so bleibt die Reihenfolge der Sequenzen gleich.
+                writeInclude(g.fromInclude);
+                continue;
+            }
+            flushAnchored(false);
+            writeComments(os, g.commentsBefore);
+            os << grabText(g) << kNl;
+            ++own;
+        }
+        flushAnchored(true);
+        // Kommentare NACH dem letzten Grab.
+        writeComments(os, s.trailingComments);
+    };
+
+    // Die Grabs stehen als Block dort, wo in der Datei der erste stand.
+    //
+    // In Ravens Skripten folgen auf $aseanimgrabinit erst $scale und
+    // $keepmotion, dann die Grabs, danach die $pcj-Zeilen. Direkt hinter
+    // $aseanimgrabinit geschrieben, waeren all diese Zeilen umgezogen.
+    bool hasGrabStatement = false;
+    for (const auto& st : s.statements)
+        if (st.cmd == Cmd::AseAnimGrab && st.fromInclude < 0) hasGrabStatement = true;
+
+    bool grabsWritten = false;
+    bool convertWritten = false;
+    for (const auto& st : s.statements) {
+        if (st.fromInclude >= 0) continue;          // steht in der anderen Datei
+        if (st.cmd == Cmd::AseAnimGrab) {           // kommt aus s.grabs
+            if (!grabsWritten) {
+                writeGrabs();
+                grabsWritten = true;
+            }
+            continue;
+        }
+        if (st.cmd == Cmd::Include && (includeHasGrabs(st.includeId) || isAnchored(st))) {
+            // Wird zwischen den Grabs geschrieben, wo es in der Datei stand.
+            if (grabsWritten) writeInclude(st.includeId);
+            continue;
+        }
+
+        writeComments(os, st.commentsBefore);
+        if (st.cmd == Cmd::AseAnimConvertMdx || st.cmd == Cmd::AseAnimConvertMdxNoAsk) {
+            // An ihrer alten Stelle, aber aus den aktuellen Daten.
+            if (s.convert && !convertWritten) os << convertText(*s.convert) << kNl;
+            convertWritten = true;
+            continue;
+        }
+        os << statementText(st) << kNl;
+        // Ohne Grab in der Datei (neues Skript): direkt hinter den Anfang.
+        if (st.cmd == Cmd::AseAnimGrabInit && !grabsWritten && !hasGrabStatement) {
+            writeGrabs();
+            grabsWritten = true;
         }
     }
 
-    if (s.convert) {
-        os << (s.convert->noAsk ? "$aseanimconvertmdx_noask " : "$aseanimconvertmdx ")
-           << s.convert->root;
-        if (!s.convert->makeSkel.empty()) os << " -makeskel " << s.convert->makeSkel;
-        if (s.convert->origin)
-            os << " -origin " << (*s.convert->origin)[0] << " " << (*s.convert->origin)[1] << " "
-               << (*s.convert->origin)[2];
-        os << nl;
+    // Kein $aseanimgrabinit im Skript: den Rahmen selbst setzen, statt die
+    // Grabs stillschweigend zu verlieren. Frueher war die Datei danach leer.
+    if (!grabsWritten && !s.grabs.empty()) {
+        os << "$aseanimgrabinit" << kNl;
+        writeGrabs();
+        os << "$aseanimgrabfinalize" << kNl;
     }
+    // Noch keine Stelle dafuer, etwa bei einem neu angelegten Skript: ans Ende.
+    // Stammt sie aus einer $include-Datei, steht sie dort schon.
+    if (s.convert && !convertWritten && s.convert->fromInclude < 0)
+        os << convertText(*s.convert) << kNl;
+
+    writeComments(os, s.endComments);
     return os.str();
 }
 

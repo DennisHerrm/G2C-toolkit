@@ -6,8 +6,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
+#include <string>
 #include <system_error>
+#include <thread>
 
 namespace g2 {
 namespace fs = std::filesystem;
@@ -63,6 +66,7 @@ public:
     Reader(const std::uint8_t* p, std::size_t n) : p_(p), n_(n) {}
 
     bool ok() const { return ok_; }
+    bool atEnd() const { return i_ == n_; }
 
     std::uint32_t u32() {
         if (i_ + 4 > n_) { ok_ = false; return 0; }
@@ -141,14 +145,21 @@ std::optional<xsi::AnimFile> AnimCache::load(const std::string& sourcePath) {
     a.lastFrame = r.i32();
     a.frameRate = r.f32();
     a.hasScene = r.u32() != 0;
+    a.sceneFirst = r.i32();
+    a.sceneLast = r.i32();
 
     const std::uint32_t nodeCount = r.u32();
     if (!r.ok() || nodeCount > (1u << 20)) return std::nullopt;
     a.nodes.resize(nodeCount);
 
-    for (auto& n : a.nodes) {
+    for (std::size_t idx = 0; idx < a.nodes.size(); ++idx) {
+        auto& n = a.nodes[idx];
         n.name = r.str();
         n.parent = r.i32();
+        // worldMatrices setzt voraus, dass Eltern vor ihren Kindern stehen.
+        // Ein beschaedigter Eintrag darf das nicht unterlaufen, sonst wird
+        // ausserhalb des Feldes gelesen. Dann lieber neu parsen.
+        if (n.parent < -1 || n.parent >= static_cast<std::int32_t>(idx)) return std::nullopt;
         n.hasSrt = r.u32() != 0;
         for (auto& v : n.srt) v = r.f32();
 
@@ -166,7 +177,9 @@ std::optional<xsi::AnimFile> AnimCache::load(const std::string& sourcePath) {
             }
         }
     }
-    if (!r.ok()) return std::nullopt;
+    // Ueberzaehlige Bytes heissen: der Eintrag ist nicht der, den store()
+    // geschrieben hat.
+    if (!r.ok() || !r.atEnd()) return std::nullopt;
 
     stats_.bytesRead += data.size();
     return a;
@@ -192,6 +205,8 @@ void AnimCache::store(const std::string& sourcePath, const xsi::AnimFile& anim) 
     b.i32(anim.lastFrame);
     b.f32(anim.frameRate);
     b.u32(anim.hasScene ? 1u : 0u);
+    b.i32(anim.sceneFirst);
+    b.i32(anim.sceneLast);
     b.u32(static_cast<std::uint32_t>(anim.nodes.size()));
 
     const auto putStr = [&](const std::string& s) {
@@ -218,8 +233,15 @@ void AnimCache::store(const std::string& sourcePath, const xsi::AnimFile& anim) 
     // Erst in eine Nebendatei schreiben, dann umbenennen. Bricht der Lauf
     // mittendrin ab, liegt kein halber Eintrag herum, den ein spaeterer Lauf
     // fuer gueltig haelt.
+    //
+    // Die Nebendatei traegt die Kennung des Threads: steht dieselbe .xsi
+    // zweimal im Skript, schreiben zwei Threads gleichzeitig denselben
+    // Eintrag, und ein gemeinsamer Name liesse beide in dieselbe Datei
+    // schreiben.
     const std::string finalPath = entryPath(sourcePath);
-    const std::string tmpPath = finalPath + ".tmp";
+    const std::string tmpPath =
+        finalPath + "." + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) +
+        ".tmp";
     {
         std::ofstream f(tmpPath, std::ios::binary);
         if (!f) return;

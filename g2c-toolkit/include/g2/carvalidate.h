@@ -44,6 +44,11 @@ struct ValidateOptions {
     std::string cacheDir;
 
     unsigned threads = 0;
+
+    // Hoechstens so viele Einzelmeldungen "Kein Enum", der Rest als
+    // Sammelzeile. Bei einem Mod mit Hunderten eigener Sequenzen ginge die
+    // Liste sonst in ihnen unter. "validate -all" hebt die Grenze auf.
+    std::size_t maxEnumWarnings = 20;
 };
 
 struct ValidateResult {
@@ -70,9 +75,14 @@ ValidateResult validate(const Script& script, const std::string& carPath,
 // Gibt das Skript wieder als Text aus. Grundlage fuer jede Bearbeitung: ohne
 // Schreiben bleibt das Werkzeug ein Betrachter.
 //
-// Die Ausgabe ist bewusst nicht zeichengleich mit der Eingabe — Einrueckungen
-// und Kommentare gehen verloren. Was erhalten bleibt, ist die Bedeutung:
-// Reihenfolge der Anweisungen, alle Flags, alle -additional-Eintraege.
+// Unveraenderte Zeilen kommen genau so zurueck, wie sie in der Datei standen:
+// Flag-Reihenfolge, Abstaende, Kommentare am Zeilenende. Nur Grabs und die
+// Konvertierungsanweisung, an denen sich etwas geaendert hat, werden neu
+// erzeugt. Kommentarzeilen vor jedem Befehl und am Dateiende bleiben
+// erhalten; $include-Zeilen bleiben $include-Zeilen.
+//
+// Frueher formte jedes Speichern jede Grab-Zeile um und verlor unterwegs
+// Kopfkommentare, unbekannte Flags und -makeskin.
 std::string writeScript(const Script& script);
 
 // Legt die Rahmenanweisungen an, zwischen denen die Grabs stehen.

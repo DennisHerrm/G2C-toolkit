@@ -70,8 +70,89 @@ std::vector<std::string> tokenize(const std::string& line) {
     return out;
 }
 
+// Kommentar am Zeilenende, samt "//". Leer, wenn die Zeile keinen hat oder
+// selbst nur ein Kommentar ist.
+std::string trailingCommentOf(const std::string& line) {
+    std::string c;
+    const std::size_t k = line.find("//");
+    if (k != std::string::npos && line.find_first_not_of(" \t") != k) {
+        c = line.substr(k);
+        while (!c.empty() && (c.back() == ' ' || c.back() == '\t')) c.pop_back();
+    }
+    return c;
+}
+
+Statement statementFromTokens(const std::vector<std::string>& tokens, std::size_t lineNo,
+                              const std::string& file) {
+    Statement st;
+    st.raw = tokens[0];
+    st.line = lineNo;
+    st.file = file;
+    st.cmd = cmdFromString(toLower(tokens[0]));
+    st.args.assign(tokens.begin() + 1, tokens.end());
+    return st;
+}
+
+// Argumente eines $aseanimgrab auswerten. Dieselbe Funktion dient beim
+// Speichern als Vergleich, ob sich der Eintrag geaendert hat — zwei
+// verschiedene Lesarten derselben Zeile darf es nicht geben.
+GrabDirective grabFromStatement(const Statement& st) {
+    GrabDirective g;
+    g.line = st.line;
+    g.file = st.arg(0, "$aseanimgrab");
+    bool inQd = false;
+    for (std::size_t i = 1; i < st.args.size(); ++i) {
+        const std::string f = toLower(st.args[i]);
+        if (f == "-loop" && i + 1 < st.args.size())
+            g.loop = static_cast<int>(st.argNumber(++i, "-loop"));
+        else if (f == "-framespeed" && i + 1 < st.args.size())
+            g.frameSpeed = static_cast<int>(st.argNumber(++i, "-framespeed"));
+        else if (f == "-enum" && i + 1 < st.args.size())
+            g.enumName = st.args[++i];
+        else if (f == "-qdskipstart") { inQd = true; g.hasQdSkip = true; }
+        else if (f == "-qdskipstop") inQd = false;
+        else if (f == "-additional" && i + 5 < st.args.size()) {
+            GrabDirective::Additional a;
+            a.targetOffset = static_cast<int>(st.argNumber(i + 1, "-additional"));
+            a.frameCount   = static_cast<int>(st.argNumber(i + 2, "-additional"));
+            a.loopFrame    = static_cast<int>(st.argNumber(i + 3, "-additional"));
+            a.frameSpeed   = static_cast<int>(st.argNumber(i + 4, "-additional"));
+            a.name         = st.args[i + 5];
+            a.insideQdSkip = inQd;
+            g.additional.push_back(std::move(a));
+            i += 5;
+        } else {
+            // Unbekannt: aufheben, damit es beim Speichern nicht verloren geht.
+            g.extraArgs.push_back(st.args[i]);
+        }
+    }
+    return g;
+}
+
+ConvertDirective convertFromStatement(const Statement& st) {
+    ConvertDirective c;
+    c.noAsk = st.cmd == Cmd::AseAnimConvertMdxNoAsk;
+    c.root = st.arg(0, "$aseanimconvertmdx");
+    for (std::size_t i = 1; i < st.args.size(); ++i) {
+        const std::string f = toLower(st.args[i]);
+        if (f == "-makeskel" && i + 1 < st.args.size()) c.makeSkel = st.args[++i];
+        else if (f == "-origin" && i + 3 < st.args.size()) {
+            c.origin = std::array<double, 3>{st.argNumber(i + 1, "-origin"),
+                                             st.argNumber(i + 2, "-origin"),
+                                             st.argNumber(i + 3, "-origin")};
+            i += 3;
+        } else if (f == "-makeskin") {
+            c.makeSkin = true;
+        } else {
+            c.extraArgs.push_back(st.args[i]);
+        }
+    }
+    return c;
+}
+
 void parseInto(Script& script, const std::string& text, const std::string& originName,
-               const ParseOptions& opt, int depth, const std::string& baseDirForIncludes) {
+               const ParseOptions& opt, int depth, const std::string& baseDirForIncludes,
+               int fromInclude, int& nextIncludeId) {
     if (depth > opt.maxIncludeDepth)
         throw std::runtime_error("$include tiefer als " + std::to_string(opt.maxIncludeDepth) +
                                  " Ebenen verschachtelt (in \"" + originName + "\")");
@@ -80,19 +161,47 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
     std::string line;
     std::size_t lineNo = 0;
 
+    // Kommentarzeilen sammeln, bis ein Befehl kommt.
+    //
+    // Sie gehoerten bisher zu nichts und gingen beim Schreiben verloren.
+    // Wer sein Skript gliedert, will das in der erzeugten animation.cfg
+    // wiederfinden — bei 1683 Sequenzen ist der Unterschied zwischen einer
+    // gegliederten Datei und einer Wand aus Zahlen erheblich.
+    std::vector<std::string> pendingComments;
+
     while (std::getline(in, line)) {
         ++lineNo;
         if (!line.empty() && line.back() == '\r') line.pop_back();
 
+        {
+            // Reine Kommentar- oder Leerzeile? Merken statt verwerfen.
+            std::string t = line;
+            const std::size_t a = t.find_first_not_of(" \t");
+            if (a == std::string::npos) {
+                // Leerzeile: nur behalten, wenn schon Kommentare anliegen —
+                // sonst sammeln sich die Leerzeilen zwischen den Bloecken an.
+                if (!pendingComments.empty()) pendingComments.emplace_back();
+                continue;
+            }
+            if (t[a] == '/' && a + 1 < t.size() && t[a + 1] == '/') {
+                pendingComments.push_back(t.substr(a));
+                continue;
+            }
+        }
+
+        // Kommentar am Zeilenende abtrennen und merken.
+        //
+        // tokenize() wirft alles ab "//" weg — richtig fuer die
+        // Auswertung, aber der Text soll erhalten bleiben und spaeter in
+        // der animation.cfg wieder auftauchen.
+        const std::string zeilenKommentar = trailingCommentOf(line);
+
         auto tokens = tokenize(line);
         if (tokens.empty()) continue;
 
-        Statement st;
-        st.raw = tokens[0];
-        st.line = lineNo;
-        st.file = originName;
-        st.cmd = cmdFromString(toLower(tokens[0]));
-        st.args.assign(tokens.begin() + 1, tokens.end());
+        Statement st = statementFromTokens(tokens, lineNo, originName);
+        st.sourceLine = line;
+        st.fromInclude = fromInclude;
 
         switch (st.cmd) {
             case Cmd::BaseDir:
@@ -121,50 +230,24 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 }
                 break;
             case Cmd::AseAnimGrab: {
-                GrabDirective g;
-                g.line = lineNo;
-                g.file = st.arg(0, "$aseanimgrab");
-                bool inQd = false;
-                for (std::size_t i = 1; i < st.args.size(); ++i) {
-                    const std::string f = toLower(st.args[i]);
-                    if (f == "-loop" && i + 1 < st.args.size())
-                        g.loop = static_cast<int>(st.argNumber(++i, "-loop"));
-                    else if (f == "-framespeed" && i + 1 < st.args.size())
-                        g.frameSpeed = static_cast<int>(st.argNumber(++i, "-framespeed"));
-                    else if (f == "-enum" && i + 1 < st.args.size())
-                        g.enumName = st.args[++i];
-                    else if (f == "-qdskipstart") { inQd = true; g.hasQdSkip = true; }
-                    else if (f == "-qdskipstop") inQd = false;
-                    else if (f == "-additional" && i + 5 < st.args.size()) {
-                        GrabDirective::Additional a;
-                        a.targetOffset = static_cast<int>(st.argNumber(i + 1, "-additional"));
-                        a.frameCount   = static_cast<int>(st.argNumber(i + 2, "-additional"));
-                        a.loopFrame    = static_cast<int>(st.argNumber(i + 3, "-additional"));
-                        a.frameSpeed   = static_cast<int>(st.argNumber(i + 4, "-additional"));
-                        a.name         = st.args[i + 5];
-                        a.insideQdSkip = inQd;
-                        g.additional.push_back(std::move(a));
-                        i += 5;
-                    }
-                }
+                // Gesammelte Kommentare gehoeren zu diesem Grab.
+                GrabDirective g = grabFromStatement(st);
+                g.commentsBefore = std::move(pendingComments);
+                pendingComments.clear();
+                g.trailingComment = zeilenKommentar;
+                g.sourceLine = line;
+                g.fromInclude = fromInclude;
                 script.grabs.push_back(std::move(g));
                 break;
             }
             case Cmd::AseAnimConvertMdx:
             case Cmd::AseAnimConvertMdxNoAsk: {
-                ConvertDirective c;
-                c.noAsk = st.cmd == Cmd::AseAnimConvertMdxNoAsk;
-                c.root = st.arg(0, "$aseanimconvertmdx");
-                for (std::size_t i = 1; i < st.args.size(); ++i) {
-                    const std::string f = toLower(st.args[i]);
-                    if (f == "-makeskel" && i + 1 < st.args.size()) c.makeSkel = st.args[++i];
-                    else if (f == "-origin" && i + 3 < st.args.size()) {
-                        c.origin = std::array<double, 3>{st.argNumber(i + 1, "-origin"),
-                                                         st.argNumber(i + 2, "-origin"),
-                                                         st.argNumber(i + 3, "-origin")};
-                        i += 3;
-                    }
-                }
+                ConvertDirective c = convertFromStatement(st);
+                c.sourceLine = line;
+                c.trailingComment = zeilenKommentar;
+                // Eine Konvertierung aus einer $include-Datei gilt, gehoert
+                // aber nicht ins Hauptskript und wird dort nicht geschrieben.
+                c.fromInclude = fromInclude;
                 script.convert = std::move(c);
                 break;
             }
@@ -173,8 +256,17 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 break;
             case Cmd::Include: {
                 const std::string rel = st.arg(0, "$include");
+                if (depth == 0) {
+                    st.includeId = nextIncludeId++;
+                    st.grabsBefore = static_cast<std::size_t>(
+                        std::count_if(script.grabs.begin(), script.grabs.end(),
+                                      [](const GrabDirective& g) { return g.fromInclude < 0; }));
+                }
+                st.commentsBefore = std::move(pendingComments);
+                pendingComments.clear();
                 script.statements.push_back(st);
-                if (!opt.followIncludes) break;
+                // Bereits eingetragen: nicht nach dem switch ein zweites Mal.
+                if (!opt.followIncludes) continue;
 
                 namespace fs = std::filesystem;
                 fs::path p(rel);
@@ -192,10 +284,13 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                                              std::to_string(lineNo) + ": kann \"" + p.string() +
                                              "\" nicht oeffnen");
                 }
-                parseInto(script, sub, p.string(), opt, depth + 1, baseDirForIncludes);
+                parseInto(script, sub, p.string(), opt, depth + 1, baseDirForIncludes,
+                          depth == 0 ? st.includeId : fromInclude, nextIncludeId);
                 continue;
             }
             case Cmd::Exit:
+                st.commentsBefore = std::move(pendingComments);
+                pendingComments.clear();
                 script.statements.push_back(st);
                 return;
             case Cmd::Unknown:
@@ -205,7 +300,28 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
             default:
                 break;
         }
+        // Kommentare vor einem anderen Befehl gehoeren zu diesem Befehl, nicht
+        // zur naechsten Sequenz — sonst wanderten Kopfzeilen des Skripts an
+        // die erste Animation. Frueher gingen sie beim Speichern verloren.
+        //
+        // Ausnahme: vor $aseanimgrabfinalize. Was dort steht, gehoert hinter
+        // die letzte Animation, wo die Oberflaeche es zum Verschieben zeigt.
+        if (st.cmd == Cmd::AseAnimGrabFinalize && !pendingComments.empty()) {
+            if (fromInclude < 0)
+                for (auto& c : pendingComments) script.trailingComments.push_back(std::move(c));
+        } else if (st.cmd != Cmd::AseAnimGrab) {
+            st.commentsBefore = std::move(pendingComments);
+        }
+        pendingComments.clear();
+
         script.statements.push_back(std::move(st));
+    }
+
+    // Was nach dem letzten Befehl steht, gehoert ans Dateiende.
+    if (depth == 0) {
+        while (!pendingComments.empty() && pendingComments.back().empty())
+            pendingComments.pop_back();
+        script.endComments = std::move(pendingComments);
     }
 }
 
@@ -308,20 +424,128 @@ std::string writeAnimationCfg(const std::vector<Sequence>& seqs, const std::stri
     std::ostringstream os;
     os << "// " << headerComment << "\r\n//\r\n"
        << "// Format:  enum, targetFrame, frameCount, loopFrame, frameSpeed\r\n//\r\n";
+    bool erste = true;
+
+    // Spaltenbreiten aus dem tatsaechlichen Inhalt.
+    //
+    // Carcass fuellt den Namen fest auf 20 Zeichen auf. Das reicht fuer
+    // "BOTH_STAND1", aber nicht fuer
+    // "BOTH_BOLT_BLOCK_TWO_HAND_BOTTOM_LEFT_ANAKIN" — dort rutschen die
+    // Zahlen aus der Spalte, und die Datei wird unlesbar.
+    //
+    // Stattdessen einmal durch die Liste gehen und die breiteste Angabe je
+    // Spalte merken. Die Engine trennt an Leerraum, die Ausrichtung ist ihr
+    // gleichgueltig; sie ist fuer den Menschen da, der die Datei aufmacht.
+    std::size_t wName = 20, wStart = 1, wCount = 1, wLoop = 1;
+    std::size_t zeilen = 0;
     for (const auto& s : seqs) {
+        wName = std::max(wName, s.name.size());
+        wStart = std::max(wStart, std::to_string(s.targetFrame).size());
+        wCount = std::max(wCount, std::to_string(s.frameCount).size());
+        wLoop = std::max(wLoop, std::to_string(s.loopFrame).size());
+        ++zeilen;
+    }
+
+    // Die Engine hat einen FESTEN Puffer fuer animation.cfg.
+    //
+    //     UI_ParseAnimationFile: File ... too long (172308 > 159999)
+    //
+    // Die Ausrichtung am laengsten Namen fuellt JEDE Zeile auf dessen
+    // Breite auf. Bei 2463 Sequenzen und einem 46 Zeichen langen Namen sind
+    // das rund 70000 Byte allein an Leerzeichen — genug, um eine Datei ueber
+    // die Grenze zu heben, die vorher hineinpasste.
+    //
+    // Deshalb: erst rechnen, dann ausrichten. Passt es nicht, wird die
+    // Namensspalte auf Ravens Mass von 20 zurueckgenommen und lange Namen
+    // stehen ueber. Unschoener, aber die Datei bleibt brauchbar — und
+    // Schoenheit, die das Laden verhindert, ist keine.
+    constexpr std::size_t kEngineLimit = 159999;
+    {
+        const std::size_t proZeile = wName + 2 + wStart + 2 + wCount + 2 + wLoop + 2 + 3 + 2;
+        if (zeilen * proZeile > kEngineLimit * 9 / 10) wName = 20;
+    }
+    for (const auto& s : seqs) {
+        // Kommentare vor der Sequenz, mit Luft davor und danach.
+        //
+        // Ohne sie ist eine Datei mit 1683 Eintraegen eine Wand aus Zahlen.
+        // Ravens eigene animation.cfg gliedert sie mit Trennern und
+        // Ueberschriften, und das soll beim Neubauen erhalten bleiben.
+        //
+        // Die Leerzeilen sind kein Zierrat: eine Ueberschrift, die direkt
+        // an der Zeile darueber klebt, wirkt wie ein Nachtrag zur vorigen
+        // Sequenz statt wie der Anfang eines neuen Blocks.
+        if (!s.commentsBefore.empty()) {
+            if (!erste) os << "\r\n";   // nicht gleich hinter dem Kopf
+            for (const auto& c : s.commentsBefore) {
+                if (c.empty()) {
+                    os << "\r\n";   // Leerzeile bleibt leer, nicht "//"
+                } else if (c.size() >= 2 && c[0] == '/' && c[1] == '/') {
+                    os << c << "\r\n";
+                } else {
+                    os << "// " << c << "\r\n";
+                }
+            }
+            os << "\r\n";
+        }
+        erste = false;
+
+        // Name linksbuendig, Zahlen rechtsbuendig — so stehen die Ziffern
+        // untereinander und lassen sich vergleichen.
         std::string name = s.name;
-        // Carcass fuellt den Namen auf 20 Zeichen auf, danach ein Tabulator.
-        if (name.size() < 20) name.append(20 - name.size(), ' ');
-        os << name << "\t" << s.targetFrame << "\t" << s.frameCount << "\t" << s.loopFrame
-           << "\t" << s.frameSpeed << "\r\n";
+        if (name.size() < wName) name.append(wName - name.size(), ' ');
+
+        const auto rechts = [](long v, std::size_t breite) {
+            std::string t = std::to_string(v);
+            return t.size() < breite ? std::string(breite - t.size(), ' ') + t : t;
+        };
+
+        os << name << "  " << rechts(s.targetFrame, wStart) << "  "
+           << rechts(s.frameCount, wCount) << "  " << rechts(s.loopFrame, wLoop) << "  "
+           << s.frameSpeed;
+        if (!s.trailingComment.empty()) {
+            const std::string& c = s.trailingComment;
+            os << (c.size() >= 2 && c[0] == '/' && c[1] == '/' ? "  " : "  // ") << c;
+        }
+        os << "\r\n";
     }
     return os.str();
 }
 
 Script parse(const std::string& text, const std::string& originName, const ParseOptions& opt) {
     Script s;
-    parseInto(s, text, originName, opt, 0, "");
+    int nextIncludeId = 0;
+    parseInto(s, text, originName, opt, 0, "", -1, nextIncludeId);
     return s;
+}
+
+// Eine einzelne Zeile auswerten. Liefert einen leeren Eintrag (ohne Datei
+// bzw. ohne Wurzel), wenn die Zeile kein solcher Befehl ist oder sich nicht
+// lesen laesst — der Vergleich beim Speichern schlaegt dann fehl, und die
+// Zeile wird neu erzeugt. Das ist immer der sichere Ausgang.
+GrabDirective parseGrabLine(const std::string& line) {
+    const auto tokens = tokenize(line);
+    if (tokens.empty() || toLower(tokens[0]) != "$aseanimgrab") return {};
+    try {
+        GrabDirective g = grabFromStatement(statementFromTokens(tokens, 0, "<zeile>"));
+        g.trailingComment = trailingCommentOf(line);
+        return g;
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+ConvertDirective parseConvertLine(const std::string& line) {
+    const auto tokens = tokenize(line);
+    if (tokens.empty()) return {};
+    const Cmd c = cmdFromString(toLower(tokens[0]));
+    if (c != Cmd::AseAnimConvertMdx && c != Cmd::AseAnimConvertMdxNoAsk) return {};
+    try {
+        ConvertDirective d = convertFromStatement(statementFromTokens(tokens, 0, "<zeile>"));
+        d.trailingComment = trailingCommentOf(line);
+        return d;
+    } catch (const std::exception&) {
+        return {};
+    }
 }
 
 Script parseFile(const std::string& path, const ParseOptions& opt) {

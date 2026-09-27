@@ -11,6 +11,8 @@
 #include "g2/animenums.h"
 #include "g2/carvalidate.h"
 #include "g2/carscript.h"
+#include "g2/readfile.h"
+#include "g2/gladiff.h"
 
 #include <cmath>
 #include <algorithm>
@@ -1528,10 +1530,13 @@ void testXsiExport() {
     std::cout << "  groesster Rundlauffehler: " << worst << " (1 Quantisierungsstufe = 0.015625)\n";
     check(worst < 0.05, "Rundlauf innerhalb zweier Quantisierungsstufen");
 
-    step("$keepmotion beachten");
+    step("$keepmotion wie bei Raven");
     {
-        // Wurde gelesen, aber nie beachtet: bei einem Skript mit
-        // $keepmotion wurde die Bewegung trotzdem herausgerechnet.
+        // $keepmotion behaelt nur den Motion-Bone. Die Wurzelbewegung wird in
+        // beiden Faellen herausgerechnet — so steht es in Carcass' Ausgabe
+        // ("Keeping motion bone", danach "Compensating for motion bone"), und
+        // so ist Ravens eigene _humanoid.gla gebaut, deren Skript $keepmotion
+        // enthaelt.
         const std::filesystem::path kr = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("keepmotion");
         std::filesystem::create_directories(kr / "models");
@@ -1583,12 +1588,12 @@ void testXsiExport() {
         const float mit = runWith(true);
         std::cout << "  Wurzelversatz ohne $keepmotion: " << ohne << ", mit: " << mit << "\n";
 
-        // Ohne $keepmotion legt Carcass eine Gegenrampe auf den Wurzelbone.
         check(ohne > 1.0f, "ohne $keepmotion wird die Bewegung herausgerechnet");
-        // Mit $keepmotion bleibt der Wurzelbone stehen.
-        check(mit < 0.01f, "mit $keepmotion bleibt sie in der Animation");
+        check(std::fabs(mit - ohne) < 1e-4f,
+              "mit $keepmotion ebenso — die Gegenrampe liegt in beiden Faellen an");
 
-        std::filesystem::remove_all(kr);
+        std::error_code ec;
+        std::filesystem::remove_all(kr, ec);
     }
 
     step("Wurzelbewegung aus der GLA holen");
@@ -1725,6 +1730,151 @@ void testXsiExport() {
         check(g2p.partial == 1, "teilweise ueberlappender Bereich wird gemeldet");
     }
 
+    step("Kommentare in der animation.cfg");
+    {
+        // Ravens animation.cfg gliedert 1683 Sequenzen mit Trennern und
+        // Ueberschriften. Ohne sie ist die Datei eine Wand aus Zahlen — und
+        // beim Neubauen gingen sie verloren, weil die cfg neu entsteht.
+        const std::filesystem::path kd = std::filesystem::temp_directory_path() /
+                                         uniqueTestDir("kommentar");
+        std::filesystem::create_directories(kd);
+        {
+            std::ofstream c(kd / "t.car");
+            c << "$aseanimgrabinit\n"
+              << "\n"
+              << "//////////////////////////////\n"
+              << "//  NEUE KATA-ANIMATIONEN\n"
+              << "//////////////////////////////\n"
+              << "$aseanimgrab a.xsi -enum BOTH_SMASHDOWN_DUAL\n"
+              << "// einzelne Animationen je Charakter\n"
+              << "$aseanimgrab b.xsi -enum BOTH_WALK1_ANI\n"
+              << "$aseanimgrabfinalize\n";
+        }
+        const auto sc3 = g2::car::parseFile((kd / "t.car").string());
+        check(sc3.grabs.size() == 2, "zwei Grabs");
+        if (sc3.grabs.size() == 2) {
+            check(sc3.grabs[0].commentsBefore.size() == 3,
+                  "drei Kommentarzeilen vor dem ersten");
+            check(sc3.grabs[1].commentsBefore.size() == 1,
+                  "eine vor dem zweiten");
+            // Die Leerzeile nach $aseanimgrabinit darf nicht mitwandern.
+            for (const auto& c : sc3.grabs[0].commentsBefore)
+                check(!c.empty(), "keine leere Zeile vorangestellt");
+        }
+
+        // Und sie muessen in der geschriebenen cfg landen.
+        std::vector<g2::car::Sequence> sq;
+        for (const auto& g : sc3.grabs) {
+            g2::car::Sequence q;
+            q.name = g.enumName ? *g.enumName : g.derivedName();
+            q.frameCount = 2;
+            q.commentsBefore = g.commentsBefore;
+            sq.push_back(std::move(q));
+        }
+        const std::string cfg = g2::car::writeAnimationCfg(sq, "test");
+        check(cfg.find("NEUE KATA-ANIMATIONEN") != std::string::npos,
+              "Ueberschrift in der cfg");
+
+        // Luft um den Block: eine Ueberschrift, die an der Zeile darueber
+        // klebt, wirkt wie ein Nachtrag zur vorigen Sequenz statt wie der
+        // Anfang eines neuen Blocks.
+        {
+            const std::size_t k = cfg.find("//////////////////////////////");
+            check(k != std::string::npos, "Trennlinie vorhanden");
+
+            // Beim ERSTEN Block steht bewusst keine Leerzeile: er folgt
+            // direkt auf den Dateikopf, und dort waere sie ueberfluessig.
+            // Geprueft wird deshalb der zweite Kommentar, der mitten in der
+            // Liste steht.
+
+            const std::size_t e = cfg.find("einzelne Animationen je Charakter");
+            check(e != std::string::npos, "zweiter Block vorhanden");
+            if (e != std::string::npos) {
+                // Davor: der Zeilenanfang, und die Zeile darueber ist leer.
+                const std::size_t za = cfg.rfind("\r\n", e);
+                if (za != std::string::npos && za >= 2)
+                    check(cfg.compare(za - 2, 2, "\r\n") == 0, "Leerzeile VOR dem Block");
+
+                // Danach: Zeilenende, dann eine leere Zeile.
+                const std::size_t nz = cfg.find("\r\n", e);
+                check(nz != std::string::npos && cfg.compare(nz + 2, 2, "\r\n") == 0,
+                      "Leerzeile NACH dem Block");
+            }
+        }
+        check(cfg.find("einzelne Animationen je Charakter") != std::string::npos,
+              "zweiter Kommentar in der cfg");
+        // Und VOR der zugehoerigen Sequenz, nicht irgendwo.
+        check(cfg.find("NEUE KATA") < cfg.find("BOTH_SMASHDOWN_DUAL"),
+              "Kommentar steht vor seiner Sequenz");
+
+        { std::error_code rmEc; std::filesystem::remove_all(kd, rmEc); }
+    }
+
+    step("Spalten in der animation.cfg richten sich aus");
+    {
+        // Carcass fuellt den Namen fest auf 20 Zeichen auf. Das reicht fuer
+        // "BOTH_STAND1", aber nicht fuer die langen Namen aus
+        // Charaktersaetzen — dort rutschen die Zahlen aus der Spalte.
+        std::vector<g2::car::Sequence> sp;
+        const auto mach = [&](const char* n, int t, int c, int l, int f) {
+            g2::car::Sequence q;
+            q.name = n;
+            q.targetFrame = t;
+            q.frameCount = c;
+            q.loopFrame = l;
+            q.frameSpeed = f;
+            sp.push_back(std::move(q));
+        };
+        mach("ROOT", 1, 2, -1, 20);
+        mach("BOTH_BOLT_BLOCK_TWO_HAND_BOTTOM_LEFT_ANAKIN", 36789, 20, 0, 30);
+        mach("BOTH_WALK1", 300, 152, 0, 20);
+
+        const std::string txt = g2::car::writeAnimationCfg(sp, "t");
+
+        // Aus jeder Datenzeile die Position der ersten Zahl bestimmen.
+        std::vector<std::size_t> spalten;
+        std::istringstream is(txt);
+        std::string zeile;
+        while (std::getline(is, zeile)) {
+            if (zeile.empty() || zeile[0] == '/') continue;
+            if (!zeile.empty() && zeile.back() == '\r') zeile.pop_back();
+            // Position, an der das ZAHLENFELD beginnt — also hinter dem
+            // Namen samt Auffuellung. Nicht die erste Ziffer suchen: die
+            // Zahlen sind rechtsbuendig, ihre Anfaenge liegen daher
+            // unterschiedlich weit rechts.
+            const std::size_t leer = zeile.find(' ');
+            if (leer == std::string::npos) continue;
+            spalten.push_back(zeile.find_first_not_of(' ', leer) - 0);
+            // Fuer den Vergleich zaehlt das ENDE der ersten Zahl: dort
+            // stehen die Ziffern buendig.
+            const std::size_t start = zeile.find_first_not_of(' ', leer);
+            const std::size_t ende = zeile.find(' ', start);
+            spalten.back() = ende == std::string::npos ? zeile.size() : ende;
+        }
+        check(spalten.size() == 3, "drei Datenzeilen");
+
+        bool gleich = true;
+        for (std::size_t k = 1; k < spalten.size(); ++k)
+            if (spalten[k] != spalten[0]) gleich = false;
+        check(gleich, "erste Zahl steht in allen Zeilen an derselben Stelle");
+
+        // Und die Engine muss es weiterhin lesen koennen: der Name bleibt
+        // das erste Feld, danach kommen vier Zahlen.
+        {
+            std::istringstream p2(txt);
+            int datenzeilen = 0;
+            std::string z2;
+            while (std::getline(p2, z2)) {
+                if (z2.empty() || z2[0] == '/') continue;
+                std::istringstream f(z2);
+                std::string nm;
+                int a = 0, b = 0, c = 0, d = 0;
+                if (f >> nm >> a >> b >> c >> d) ++datenzeilen;
+            }
+            check(datenzeilen == 3, "alle drei Zeilen bleiben lesbar");
+        }
+    }
+
     step("animation.cfg heisst wie die Engine sie sucht");
     {
         // Sie hiess frueher "<name>_animation.cfg". Das ueberschreibt nichts
@@ -1741,7 +1891,14 @@ void testXsiExport() {
         std::filesystem::create_directories(cd);
 
         std::vector<g2::car::Sequence> sq;
-        sq.push_back({"BOTH_STAND1", 0, 2, -1, 20, "a.xsi", false, false});
+        {
+            g2::car::Sequence q;
+            q.name = "BOTH_STAND1";
+            q.frameCount = 2;
+            q.frameSpeed = 20;
+            q.sourceFile = "a.xsi";
+            sq.push_back(std::move(q));
+        }
         const std::string text = g2::car::writeAnimationCfg(sq, "2 frames");
 
         // Der Name muss genau so lauten.
@@ -1750,18 +1907,121 @@ void testXsiExport() {
         check(std::filesystem::exists(erwartet), "heisst animation.cfg");
 
         // Und wieder eingelesen muss dieselbe Sequenz herauskommen.
-        std::ifstream in(erwartet);
-        std::string line, gefunden;
-        while (std::getline(in, line)) {
-            if (line.empty() || line[0] == '/') continue;
-            std::istringstream is(line);
-            std::string nm;
-            int a = 0, b = 0, c = 0, d = 0;
-            if (is >> nm >> a >> b >> c >> d) gefunden = nm;
+        //
+        // Der Stream steht in einem eigenen Block: unter Windows sperrt eine
+        // offene Datei ihren Ordner, und remove_all wuerde werfen — die
+        // Ausnahme brach frueher den ganzen Test samt aller folgenden
+        // Pruefungen ab.
+        std::string gefunden;
+        {
+            std::ifstream in(erwartet);
+            std::string line;
+            while (std::getline(in, line)) {
+                if (line.empty() || line[0] == '/') continue;
+                std::istringstream is(line);
+                std::string nm;
+                int a = 0, b = 0, c = 0, d = 0;
+                if (is >> nm >> a >> b >> c >> d) gefunden = nm;
+            }
         }
         check(gefunden == "BOTH_STAND1", "Sequenz wieder lesbar");
 
-        std::filesystem::remove_all(cd);
+        std::error_code ec;
+        std::filesystem::remove_all(cd, ec);
+    }
+
+    step("Groessengrenze der animation.cfg");
+    {
+        // Die Engine hat einen festen Puffer:
+        //   UI_ParseAnimationFile: File ... too long (172308 > 159999)
+        //
+        // Aus einem echten Fall: die Ausrichtung am laengsten Namen fuellte
+        // jede der 2463 Zeilen auf 46 Zeichen auf — rund 70000 Byte allein
+        // an Leerzeichen, genug um eine vorher passende Datei ueber die
+        // Grenze zu heben.
+        std::vector<g2::car::Sequence> viele;
+        for (int i = 0; i < 2500; ++i) {
+            g2::car::Sequence q;
+            q.name = "BOTH_SEQUENCE_NUMBER_" + std::to_string(i);
+            q.targetFrame = i * 20;
+            q.frameCount = 20;
+            q.loopFrame = -1;
+            q.frameSpeed = 20;
+            viele.push_back(std::move(q));
+        }
+        // Ein sehr langer Name darf die ganze Datei nicht aufblaehen.
+        viele[1000].name = "BOTH_BOLT_BLOCK_TWO_HAND_BOTTOM_LEFT_ANAKIN_EXTRA_LANG";
+
+        const std::string gross = g2::car::writeAnimationCfg(viele, "test");
+        std::cout << "  2500 Sequenzen ergeben " << gross.size() << " Byte\n";
+        check(gross.size() <= 159999, "bleibt unter der Grenze der Engine");
+
+        // Bei wenigen Sequenzen soll die Ausrichtung dagegen greifen.
+        std::vector<g2::car::Sequence> wenige(viele.begin(), viele.begin() + 5);
+        wenige[2].name = "BOTH_EIN_SEHR_LANGER_NAME_FUER_DEN_TEST";
+        const std::string klein = g2::car::writeAnimationCfg(wenige, "test");
+        const std::size_t p1 = klein.find("BOTH_SEQUENCE_NUMBER_0");
+        check(p1 != std::string::npos, "erste Sequenz vorhanden");
+        if (p1 != std::string::npos) {
+            const std::size_t ze = klein.find("\r\n", p1);
+            check(ze - p1 > 40, "bei wenigen Zeilen wird ausgerichtet");
+        }
+    }
+
+    step("Doppelte Sequenznamen melden");
+    {
+        // Die Engine schlaegt in animation.cfg nach dem NAMEN nach. Steht
+        // einer zweimal drin, gewinnt der letzte — die erste Animation ist
+        // unerreichbar, obwohl ihre Frames Platz belegen.
+        //
+        // Im Spiel sieht das aus, als tue die Animation nichts, und niemand
+        // sucht die Ursache in der cfg. Aus einem echten Fall: zwei
+        // Sequenzen standen in einer 2463 Eintraege langen Datei doppelt.
+        const std::filesystem::path dd = std::filesystem::temp_directory_path() /
+                                         uniqueTestDir("doppelt");
+        std::filesystem::create_directories(dd);
+        {
+            std::ofstream c(dd / "t.car");
+            c << "$aseanimgrabinit\n"
+              << "$aseanimgrab a.xsi -enum BOTH_RUN_DUAL\n"
+              << "$aseanimgrab b.xsi -enum BOTH_WALK1\n"
+              << "$aseanimgrab c.xsi -enum BOTH_RUN_DUAL\n"
+              << "$aseanimgrabfinalize\n";
+        }
+        const auto sc = g2::car::parseFile((dd / "t.car").string());
+        g2::car::ValidateOptions vo;
+        vo.baseDir = dd.string();
+        const auto vr = g2::car::validate(sc, (dd / "t.car").string(), vo);
+
+        bool gemeldet = false;
+        for (const auto& is : vr.issues)
+            if (is.message.find("BOTH_RUN_DUAL") != std::string::npos &&
+                is.message.find("2x") != std::string::npos)
+                gemeldet = true;
+        check(gemeldet, "Doppelung wird als Fehler gemeldet");
+
+        // Der eindeutige Name darf NICHT gemeldet werden.
+        bool falschAlarm = false;
+        for (const auto& is : vr.issues)
+            if (is.message.find("BOTH_WALK1 steht") != std::string::npos) falschAlarm = true;
+        check(!falschAlarm, "eindeutige Namen bleiben unbeanstandet");
+
+        // Auch -additional-Namen zaehlen mit: sie landen ebenso in der cfg.
+        {
+            std::ofstream c(dd / "u.car");
+            c << "$aseanimgrabinit\n"
+              << "$aseanimgrab a.xsi -enum BOTH_STAND1 -additional 0 2 -1 20 BOTH_WALK1\n"
+              << "$aseanimgrab b.xsi -enum BOTH_WALK1\n"
+              << "$aseanimgrabfinalize\n";
+        }
+        const auto sc2 = g2::car::parseFile((dd / "u.car").string());
+        const auto vr2 = g2::car::validate(sc2, (dd / "u.car").string(), vo);
+        bool add2 = false;
+        for (const auto& is : vr2.issues)
+            if (is.message.find("BOTH_WALK1 steht") != std::string::npos) add2 = true;
+        check(add2, "auch -additional-Namen werden geprueft");
+
+        { std::error_code rmEc; std::filesystem::remove_all(dd, rmEc); }
     }
 
     step("Fehlende Dateien mit Zuordnung melden");
@@ -1818,7 +2078,7 @@ void testXsiExport() {
         // Die alte Liste muss weiterhin gefuellt sein.
         check(br.missingFiles.size() == 2, "Pfadliste bleibt erhalten");
 
-        std::filesystem::remove_all(mr);
+        { std::error_code rmEc; std::filesystem::remove_all(mr, rmEc); }
     }
 
     step("parallelFor: Threadnummer und Blockvergabe");
@@ -1934,18 +2194,19 @@ void testXsiExport() {
 
     step("Rahmen um die Grabs");
     {
-        // writeScript gibt die Grabs NUR nach einem $aseanimgrabinit aus.
-        // Ohne addGrabFrame sieht die geschriebene Datei vollstaendig aus
-        // und enthaelt keine einzige Sequenz — ein Fehler, den weder der
-        // Uebersetzer noch ein Blick auf die Datei zeigt.
+        // Frueher gab writeScript die Grabs NUR nach einem $aseanimgrabinit
+        // aus. Ohne addGrabFrame sah die Datei vollstaendig aus und enthielt
+        // keine einzige Sequenz. Jetzt setzt writeScript den Rahmen selbst.
         g2::car::Script leer;
         g2::car::GrabDirective gd;
         gd.file = "models/x/a.xsi";
         leer.grabs.push_back(gd);
 
         const std::string ohne = g2::car::writeScript(leer);
-        check(ohne.find("$aseanimgrab ") == std::string::npos,
-              "ohne Rahmen geht der Grab verloren (belegt das Problem)");
+        check(ohne.find("$aseanimgrab models/x/a.xsi") != std::string::npos &&
+                  ohne.find("$aseanimgrabinit") != std::string::npos &&
+                  ohne.find("$aseanimgrabfinalize") != std::string::npos,
+              "ohne Rahmen bleibt der Grab erhalten, der Rahmen wird ergaenzt");
 
         g2::car::addGrabFrame(leer);
         const std::string mit = g2::car::writeScript(leer);
@@ -2031,7 +2292,7 @@ void testXsiExport() {
         // Ohne Polarzerlegung lag der Fehler hier bei ueber 0,5 — mit ihr
         // bleibt er in derselben Groessenordnung wie die Quantisierung.
         check(worst2 < 0.2, "flaches Skelett bleibt brauchbar");
-        std::filesystem::remove_all(tp);
+        { std::error_code rmEc; std::filesystem::remove_all(tp, rmEc); }
     }
 
     step("Restbewegung erkennen");
@@ -2101,7 +2362,7 @@ void testXsiExport() {
         }
         check(geworfen, "fehlende Klammer bricht weiterhin ab");
 
-        std::filesystem::remove_all(td);
+        { std::error_code rmEc; std::filesystem::remove_all(td, rmEc); }
     }
 
     step("GLA-Name aus -makeskel");
@@ -2184,7 +2445,7 @@ void testXsiExport() {
             }
         check(d < 1e-6, "beide Fassungen ergeben dieselbe Animation");
 
-        std::filesystem::remove_all(vd);
+        { std::error_code rmEc; std::filesystem::remove_all(vd, rmEc); }
     }
 
     step("Ein-Frame-Sequenzen");
@@ -2229,7 +2490,7 @@ void testXsiExport() {
         check(many.find("0,\n  " + std::to_string(frames - 1) + ",\n") != std::string::npos,
               "mehrframige Sequenz unveraendert");
 
-        std::filesystem::remove_all(od);
+        { std::error_code rmEc; std::filesystem::remove_all(od, rmEc); }
     }
 
     step("BASEPOSE-Block");
@@ -2390,7 +2651,7 @@ void testXsiExport() {
                   << (worstBone.empty() ? "" : " bei " + worstBone) << "\n";
         check(worstRest < 0.01, "SI_Transform traegt die Bindepose, nicht Frame 0");
 
-        std::filesystem::remove_all(rp);
+        { std::error_code rmEc; std::filesystem::remove_all(rp, rmEc); }
     }
 
     step("averagevec lesen");
@@ -2413,7 +2674,167 @@ void testXsiExport() {
               "unbekannte Sequenz liefert nichts");
     }
 
-    std::filesystem::remove_all(tmp);
+    { std::error_code rmEc; std::filesystem::remove_all(tmp, rmEc); }
+}
+
+// Nachtests zur Pruefung vom September 2026: jede hier gepruefte Stelle war
+// ein echter Fehler. Die Kommentare nennen jeweils, was vorher passierte.
+void testRobustness() {
+    namespace fs = std::filesystem;
+    section("Speichern verliert nichts");
+    {
+        // Kopfkommentar, Zeilenendkommentar an einer Nicht-Grab-Zeile,
+        // eigenwillige Flag-Reihenfolge, unbekanntes Flag, Pfad mit
+        // Leerzeichen, -makeskin, Kommentar am Dateiende. Frueher ging davon
+        // beim ersten Speichern die Haelfte verloren.
+        const std::string src =
+            "// Kopf\r\n"
+            "$scale 0.64  // Massstab\r\n"
+            "$aseanimgrabinit\r\n"
+            "$keepmotion\r\n"
+            "$aseanimgrab models/a.xsi -loop -1 -qdskipstart -framespeed 30 -additional 0 2 -1 -10 X1 "
+            "-qdskipstop -additional 3 1 -1 20 X2 -wunder 7\r\n"
+            "$aseanimgrab \"models/my anims/b.xsi\"\r\n"
+            "$aseanimgrabfinalize\r\n"
+            "$aseanimconvertmdx_noask models/r -makeskin -makeskel models/players/x/x -origin 0 0 24\r\n"
+            "// Ende\r\n";
+        g2::car::Script sc = g2::car::parse(src);
+        check(g2::car::writeScript(sc) == src, "unveraendert gespeichert: zeichengleich");
+
+        // Jetzt aendern: die Zeilen entstehen neu und muessen trotzdem
+        // dasselbe bedeuten.
+        sc.grabs[0].loop = 5;
+        sc.grabs[1].frameSpeed = 10;
+        const std::string out = g2::car::writeScript(sc);
+        const g2::car::Script back = g2::car::parse(out);
+        check(back.grabs.size() == 2, "zwei Grabs");
+        check(back.grabs[0].loop == 5, "Aenderung kommt an");
+        check(back.grabs[0].additional.size() == 2 && back.grabs[0].additional[0].insideQdSkip &&
+                  !back.grabs[0].additional[1].insideQdSkip,
+              "qdskip-Klammer genau um den inneren Eintrag");
+        check(back.grabs[0].extraArgs == std::vector<std::string>{"-wunder", "7"},
+              "unbekanntes Flag bleibt erhalten");
+        check(back.grabs[1].file == "models/my anims/b.xsi", "Pfad mit Leerzeichen bleibt ganz");
+        check(back.convert && back.convert->makeSkin, "-makeskin bleibt erhalten");
+        check(out.find("// Kopf") != std::string::npos && out.find("// Massstab") != std::string::npos &&
+                  out.find("// Ende") != std::string::npos,
+              "Kopf-, Zeilenend- und Schlusskommentar bleiben erhalten");
+    }
+
+    section("$include wird nicht ins Hauptskript kopiert");
+    {
+        const fs::path dir = fs::temp_directory_path() / uniqueTestDir("include");
+        fs::create_directories(dir);
+        { std::ofstream f(dir / "inc.car"); f << "$aseanimgrab i.xsi\n"; }
+        {
+            std::ofstream f(dir / "main.car");
+            f << "$aseanimgrabinit\n$aseanimgrab a.xsi\n$include inc.car\n$aseanimgrab b.xsi\n"
+                 "$aseanimgrabfinalize\n";
+        }
+        for (const bool follow : {true, false}) {
+            g2::car::ParseOptions po;
+            po.followIncludes = follow;
+            const auto sc = g2::car::parseFile((dir / "main.car").string(), po);
+            const std::string out = g2::car::writeScript(sc);
+            std::size_t includes = 0;
+            for (std::size_t p = out.find("$include"); p != std::string::npos;
+                 p = out.find("$include", p + 1))
+                ++includes;
+            check(includes == 1 && out.find("i.xsi") == std::string::npos,
+                  std::string("$include genau einmal, eingebundener Grab nicht kopiert (") +
+                      (follow ? "eingebunden" : "nicht eingebunden") + ")");
+            check(out.find("a.xsi") < out.find("$include") && out.find("$include") < out.find("b.xsi"),
+                  "Reihenfolge a, $include, b bleibt");
+        }
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    section("Beschaedigte GLA wird abgewiesen statt gelesen");
+    {
+        const g2::Skeleton skel = makeSkeleton(3);
+        g2::AnimationFrames frames;
+        frames.resize(2, 3);
+        for (int f = 0; f < 2; ++f)
+            for (int b = 0; b < 3; ++b) frames.at(f, b) = g2::Mat3x4::identity();
+        const auto good = g2::writeMdxa(skel, frames).data;
+
+        // Parent des ersten Bones auf 99: frueher las jede Auswertung damit
+        // ausserhalb des Skeletts.
+        auto badParent = good;
+        std::int32_t rel = 0;
+        std::memcpy(&rel, badParent.data() + 100, 4);
+        const std::int32_t p99 = 99;
+        std::memcpy(badParent.data() + 100 + rel + 68, &p99, 4);
+        bool threw = false;
+        try { (void)g2::readMdxa(badParent); } catch (const std::exception&) { threw = true; }
+        check(threw, "ungueltiger Parent-Index wird abgewiesen");
+
+        // Negativer Offset: wurde nach size_t gewandelt riesig, mit der
+        // Laenge wieder klein, und die Groessenpruefung liess ihn durch.
+        auto badOfs = good;
+        const std::int32_t neg = -3;
+        std::memcpy(badOfs.data() + 80, &neg, 4);
+        threw = false;
+        try { (void)g2::readMdxa(badOfs); } catch (const std::exception&) { threw = true; }
+        check(threw, "negativer Frame-Offset wird abgewiesen");
+
+        // Negativer Versatz im Vergleich.
+        const auto a = g2::readMdxa(good);
+        g2::DiffOptions dopt;
+        dopt.frameOffsetB = -1;
+        threw = false;
+        try { (void)g2::diffMdxa(a, a, {}, dopt); } catch (const std::exception&) { threw = true; }
+        check(threw, "negativer Frameversatz im Vergleich wird abgewiesen");
+    }
+
+    section("Unlesbare .xsi bricht den Bau ab");
+    {
+        // Frueher wurde sie still uebersprungen; alle folgenden Sequenzen
+        // standen dann an anderen Zielframes als in der animation.cfg.
+        const fs::path dir = fs::temp_directory_path() / uniqueTestDir("unreadable");
+        fs::create_directories(dir / "models");
+        {
+            std::ofstream x(dir / "models" / "ok.xsi", std::ios::binary);
+            x << "xsi 0350txt 0032\n\nSI_Model MDL-model_root {\n"
+                 "  SI_Transform SRT-model_root {\n    1.0,\n    1.0,\n    1.0,\n"
+                 "    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n  }\n"
+                 "  SI_FCurve model_root-TRANSLATION-X {\n"
+                 "    \"model_root\",\n    \"TRANSLATION-X\",\n    \"LINEAR\",\n"
+                 "    1,\n    1,\n    2,\n    0, 0.0,\n    1, 1.0,\n  }\n}\n";
+        }
+        { std::ofstream x(dir / "models" / "kaputt.xsi", std::ios::binary); x << "kein xsi"; }
+        {
+            std::ofstream c(dir / "t.car");
+            c << "$aseanimgrabinit\n$aseanimgrab models/kaputt.xsi\n$aseanimgrab models/ok.xsi\n"
+                 "$aseanimgrabfinalize\n";
+        }
+        g2::Skeleton ks;
+        ks.name = "k";
+        ks.scale = 1.0f;
+        g2::Bone b;
+        b.name = "model_root";
+        b.parent = -1;
+        b.basePose = g2::Mat3x4::identity();
+        ks.bones.push_back(b);
+
+        const auto sc = g2::car::parseFile((dir / "t.car").string());
+        g2::car::BuildOptions bo;
+        bo.baseDir = dir.string();
+        bool threw = false;
+        try { (void)g2::car::build(sc, ks, (dir / "t.car").string(), bo); }
+        catch (const std::exception&) { threw = true; }
+        check(threw, "ohne -skipmissing: Abbruch mit Meldung");
+
+        bo.skipMissing = true;
+        threw = false;
+        g2::car::BuildResult br;
+        try { br = g2::car::build(sc, ks, (dir / "t.car").string(), bo); }
+        catch (const std::exception&) { threw = true; }
+        check(!threw && br.sequences.size() == 1, "mit -skipmissing: gebaut, Luecke gemeldet");
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
 }
 
 int main() {
@@ -2422,7 +2843,7 @@ int main() {
     // Puffer, und der Lauf sieht so aus, als waere er frueher stehen
     // geblieben. Ein Testlauf ist kurz genug, dass die Einbusse egal ist.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    g_trace = std::getenv("G2C_TRACE") != nullptr;
+    g_trace = !g2::envValue("G2C_TRACE").empty();
     std::thread watchdog(watchdogMain);
 
     // Jeden Abschnitt einzeln absichern.
@@ -2471,6 +2892,7 @@ int main() {
     run("testLocaleIndependence", testLocaleIndependence);
     run("testAnimEval", testAnimEval);
     run("testXsiExport", testXsiExport);
+    run("testRobustness", testRobustness);
 
 
     g_currentTest.store("(fertig)");
