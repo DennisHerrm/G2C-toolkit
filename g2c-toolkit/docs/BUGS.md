@@ -184,6 +184,8 @@ Alle behoben; die Tests dazu stehen in `tests/`.
 | GUI | .gla/anims.h aufs Fenster gezogen | ignoriert |
 | GUI | Framezahlen nach Korrektur der Assetwurzel | blieben "fehlt" bis zum Neustart |
 | GUI | Fensterlage | wurde nie gespeichert; `-reset` loeschte die falsche Datei |
+| GUI | Tab-Auswahl von aussen (Doppelklick auf eine .car, zuletzt aktiver Tab beim Start) | ImGui zeigte trotzdem den ersten Tab und ueberschrieb die Auswahl. Jetzt ImGuiTabItemFlags_SetSelected |
+| GUI | Doppelklick auf eine .car bei offenem g2c | zweites Fenster mit allen Tabs. Jetzt an das laufende Fenster weitergereicht (WM_COPYDATA), das auf den Tab springt |
 | Tests | `g2_gui_tests` benutzte die echten Einstellungen | konnte eine echte .car ueberschreiben |
 | Tests | offene Datei bei `remove_all` | 77 Pruefungen still uebersprungen |
 | CLI | `anim ref.gla ref.gla ...`, `build` ohne -o im Modellordner | Referenz und animation.cfg ohne Sicherung ersetzt. Jetzt .bak |

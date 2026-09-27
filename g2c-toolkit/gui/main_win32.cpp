@@ -597,6 +597,30 @@ void destroyDevice() {
     if (g_device) { g_device->Release(); g_device = nullptr; }
 }
 
+// Kennung der WM_COPYDATA-Nachricht "diese Dateien oeffnen" ("G2C1").
+constexpr ULONG_PTR kOpenFilesMessage = 0x47324331;
+
+// Dateien in der laufenden Oberflaeche oeffnen — derselbe Weg fuer Ziehen
+// aufs Fenster und fuer Dateien, die ein zweiter Programmstart weiterreicht.
+//
+// .xsi gesammelt anhaengen, alles andere ueber openPath, also genau so wie
+// beim Ziehen auf die Exe. Frueher wurden .gla und anims.h beim Ziehen aufs
+// Fenster stillschweigend ignoriert, und ein nicht (mehr) vorhandener Pfad
+// galt als Ordner, weil INVALID_FILE_ATTRIBUTES das Verzeichnisbit hat.
+void openPaths(const std::vector<std::string>& paths) {
+    if (!g_app) return;
+    std::vector<std::string> xsi;
+    for (const std::string& p : paths) {
+        std::string lower = p;
+        for (char& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
+            xsi.push_back(p);
+        else
+            g_app->openPath(p);
+    }
+    if (!xsi.empty()) g_app->addXsiFiles(xsi, false);
+}
+
 LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return true;
 
@@ -613,27 +637,35 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // das aktuelle Skript angehaengt.
             HDROP drop = reinterpret_cast<HDROP>(wp);
             const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
-            std::vector<std::string> xsi;
+            std::vector<std::string> paths;
             for (UINT i = 0; i < count; ++i) {
                 wchar_t path[MAX_PATH * 4];
-                if (!DragQueryFileW(drop, i, path, static_cast<UINT>(std::size(path)))) continue;
-                const std::string p = toUtf8(path);
-                std::string lower = p;
-                for (char& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-                if (!g_app) continue;
-                // .xsi gesammelt anhaengen, alles andere ueber openPath — also
-                // genau so wie beim Ziehen auf die Exe. Frueher wurden .gla
-                // und anims.h hier stillschweigend ignoriert, und ein nicht
-                // (mehr) vorhandener Pfad galt als Ordner, weil
-                // INVALID_FILE_ATTRIBUTES das Verzeichnisbit gesetzt hat.
-                if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
-                    xsi.push_back(p);
-                else
-                    g_app->openPath(p);
+                if (DragQueryFileW(drop, i, path, static_cast<UINT>(std::size(path))))
+                    paths.push_back(toUtf8(path));
             }
-            if (!xsi.empty() && g_app) g_app->addXsiFiles(xsi, false);
             DragFinish(drop);
+            openPaths(paths);
             return 0;
+        }
+
+        case WM_COPYDATA: {
+            // Ein zweiter Start von g2c — etwa per Doppelklick auf eine .car —
+            // reicht seine Dateien hierher weiter, statt ein zweites Fenster
+            // mit allen Tabs aufzumachen. Siehe forwardToRunningInstance.
+            const auto* cds = reinterpret_cast<const COPYDATASTRUCT*>(lp);
+            if (!cds || cds->dwData != kOpenFilesMessage || !g_app) break;
+            std::vector<std::string> paths;
+            const char* p = static_cast<const char*>(cds->lpData);
+            const char* end = p + cds->cbData;
+            while (p < end) {
+                const std::size_t n = strnlen(p, static_cast<std::size_t>(end - p));
+                if (n) paths.emplace_back(p, n);
+                p += n + 1;
+            }
+            openPaths(paths);
+            if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+            return TRUE;
         }
 
         case WM_SYSCOMMAND:
@@ -840,10 +872,64 @@ public:
         return i >= 0 && i < count() ? storage_[static_cast<std::size_t>(i)].c_str() : "";
     }
 
+    // Dateien unter den Argumenten, ohne Schalter wie -reset oder -nofont.
+    // Die wurden frueher ebenfalls als Pfad geoeffnet und erzeugten beim
+    // Start eine "nicht gefunden"-Meldung.
+    std::vector<std::string> files() const {
+        std::vector<std::string> out;
+        for (std::size_t i = 1; i < storage_.size(); ++i)
+            if (!storage_[i].empty() && storage_[i][0] != '-' && storage_[i][0] != '/')
+                out.push_back(storage_[i]);
+        return out;
+    }
+
 private:
     std::vector<std::string> storage_;
     std::vector<char*>       pointers_;
 };
+
+// Laeuft g2c schon? Dann die Dateien dorthin schicken, statt ein zweites
+// Fenster zu oeffnen.
+//
+// Ein Doppelklick auf eine .car startete frueher bei offenem g2c ein zweites
+// Fenster, das wieder alle zuletzt offenen Tabs lud. Beide schrieben beim
+// Beenden ihre Einstellungen, und das zuletzt geschlossene gewann.
+//
+// Das laufende Fenster oeffnet die Datei — oder springt auf ihren Tab, wenn
+// sie schon offen ist — und kommt nach vorn. Antwortet es nicht (aeltere
+// Fassung, haengt), startet dieses Programm ganz normal.
+bool forwardToRunningInstance(const Args& args) {
+    if (args.hasReset()) return false;
+    const auto files = args.files();
+    if (files.empty()) return false;
+    const HWND other = FindWindowW(L"g2cWindow", nullptr);
+    if (!other) return false;
+
+    // Absolut machen: das andere Programm hat ein anderes Arbeitsverzeichnis.
+    std::string data;
+    for (const auto& f : files) {
+        std::error_code ec;
+        const auto abs = std::filesystem::absolute(std::filesystem::path(toWide(f)), ec);
+        data += ec ? f : toUtf8(abs.wstring());
+        data.push_back('\0');
+    }
+
+    COPYDATASTRUCT cds{};
+    cds.dwData = kOpenFilesMessage;
+    cds.cbData = static_cast<DWORD>(data.size());
+    cds.lpData = data.data();
+
+    // Das andere Fenster darf sich nach vorn holen — ohne diese Erlaubnis
+    // blinkte es nur in der Taskleiste.
+    DWORD pid = 0;
+    GetWindowThreadProcessId(other, &pid);
+    AllowSetForegroundWindow(pid);
+
+    DWORD_PTR result = 0;
+    const LRESULT ok = SendMessageTimeoutW(other, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds),
+                                           SMTO_ABORTIFHUNG, 5000, &result);
+    return ok != 0 && result == TRUE;
+}
 
 }  // namespace
 
@@ -886,6 +972,10 @@ int wWinMainGuarded(HINSTANCE inst) {
         const int rc = g2cMain(args.count(), args.argv());
         std::fflush(stdout);
         return rc;
+    }
+    if (forwardToRunningInstance(args)) {
+        startupLog("an das laufende Fenster weitergereicht");
+        return 0;
     }
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -1057,7 +1147,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     app.settings().dpiScale = dpi;
 
     // Auf die Exe gezogene oder als Argument uebergebene Dateien oeffnen.
-    for (int i = 1; i < args.count(); ++i) app.openPath(args.at(i));
+    for (const auto& f : args.files()) app.openPath(f);
     // Der Oberflaeche sagen, wo das Protokoll liegt — sie ermittelt es
     // nicht selbst, damit die Auskunft und die tatsaechlich beschriebene
     // Datei nicht auseinanderlaufen koennen.
