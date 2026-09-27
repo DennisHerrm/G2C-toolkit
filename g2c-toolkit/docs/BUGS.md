@@ -172,6 +172,7 @@ Alle behoben; die Tests dazu stehen in `tests/`.
 | GUI | Schliessen (Kreuz, Strg+W, Alle, Fenster) | ungespeicherte Aenderungen ohne Rueckfrage weg |
 | GUI | "Neue .car" mit Oeffnen-Dialog | liess sich nie anlegen |
 | GUI | Loeschen einer Sequenz | Trennlinien darueber mitgeloescht |
+| GUI | Ziehen in der Tabelle | ganze Zielzeile eingerahmt, immer davor eingefuegt. Jetzt Linie ueber/unter der Zeile je nach Mausposition, Einfuegen genau dort; unter eine Ueberschrift gezogen bleibt sie darueber |
 | GUI | Umschalt-Auswahl mit Filter | ausgeblendete Zeilen mit ausgewaehlt und geloescht |
 | GUI | Ziehen auf anderen Tab | verschob Zeilen im falschen Skript |
 | GUI | Sequenzdialog/Loeschrueckfrage beim Tabwechsel | bearbeitete/loeschte im anderen Skript |

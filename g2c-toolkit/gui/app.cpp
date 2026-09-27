@@ -2131,6 +2131,41 @@ void App::drawSettingsPanel() {
     ImGui::EndChild();
 }
 
+namespace {
+
+// Ziehen und Ablegen in der Sequenztabelle: VOR oder HINTER der Zeile?
+//
+// ImGui rahmte beim Darueberziehen die ganze Zeile ein, und abgelegt wurde
+// immer davor. Man sah also nicht, wo die Sequenz landet, und in die
+// untere Haelfte einer Zeile zu ziehen hiess trotzdem "davor".
+//
+// Jetzt entscheidet die Mausposition: obere Haelfte davor, untere Haelfte
+// dahinter — und eine Linie zeigt genau diese Stelle.
+constexpr ImGuiDragDropFlags kDropFlags =
+    ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
+
+bool dropBelow() {
+    const float mid = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
+    return ImGui::GetMousePos().y > mid;
+}
+
+// Einfuegelinie an der Ober- oder Unterkante des zuletzt gezeichneten
+// Elements. Auf der Vordergrundebene, weil die Tabelle jede Spalte auf
+// ihren eigenen Bereich beschneidet; begrenzt auf das Tabellenfenster.
+void drawDropLine(bool below, float k) {
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    const float y = below ? b.y : a.y;
+    const ImU32 col = IM_COL32(90, 165, 255, 255);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->PushClipRect(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), true);
+    dl->AddLine(ImVec2(a.x + 4.0f * k, y), ImVec2(b.x - 4.0f * k, y), col, 3.0f * k);
+    dl->AddCircleFilled(ImVec2(a.x + 5.0f * k, y), 4.5f * k, col);
+    dl->PopClipRect();
+}
+
+}  // namespace
+
 // Dieselbe Regel wie beim Zeichnen: Name oder Datei enthaelt den Filtertext.
 bool App::rowVisible(const Document& d, std::size_t i) const {
     if (filter_[0] == '\0') return true;
@@ -2329,12 +2364,35 @@ void App::drawSequenceTable(Document& d) {
                     ImGui::EndDragDropSource();
                 }
                 if (!hasFilter && ImGui::BeginDragDropTarget()) {
-                    if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+                    // Ueber der Kommentarzeile ci oder darunter.
+                    const bool below = dropBelow();
+                    const std::size_t at = below ? ci + 1 : ci;
+                    if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
                         const auto* q = static_cast<const std::size_t*>(pl->Data);
-                        if (q[0] == static_cast<std::size_t>(active_))
-                            pendingCommentMove_ = {q[1], q[2], i, false, true};
-                        else
+                        if (q[0] == static_cast<std::size_t>(active_)) {
+                            drawDropLine(below, settings_.dpiScale);
+                            if (pl->IsDelivery()) pendingCommentMove_ = {q[1], q[2], i, at, true};
+                        } else if (pl->IsDelivery()) {
                             log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                        }
+                    }
+                    // Eine Sequenz zwischen zwei Trennlinien: die Zeilen
+                    // oberhalb der Linie gehen an die eingefuegte Sequenz.
+                    if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_row", kDropFlags)) {
+                        const auto* q = static_cast<const std::size_t*>(pl->Data);
+                        if (q[0] == static_cast<std::size_t>(active_)) {
+                            drawDropLine(below, settings_.dpiScale);
+                            if (pl->IsDelivery()) {
+                                std::vector<std::size_t> rows;
+                                for (std::size_t r = 0; r < d.selected.size(); ++r)
+                                    if (d.selected[r]) rows.push_back(r);
+                                if (std::find(rows.begin(), rows.end(), q[1]) == rows.end())
+                                    rows = {q[1]};
+                                pendingBlock_ = {rows, i, at};
+                            }
+                        } else if (pl->IsDelivery()) {
+                            log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                        }
                     }
                     ImGui::EndDragDropTarget();
                 }
@@ -2458,30 +2516,49 @@ void App::drawSequenceTable(Document& d) {
                 ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
                 const std::size_t payload[2] = {static_cast<std::size_t>(active_), i};
                 ImGui::SetDragDropPayload("g2c_row", payload, sizeof(payload));
-                ImGui::TextUnformatted(name.c_str());
+                // Bei mehreren gewaehlten Zeilen sagen, dass alle mitkommen.
+                const std::size_t nsel =
+                    static_cast<std::size_t>(std::count(d.selected.begin(), d.selected.end(), 1));
+                if (nsel > 1)
+                    ImGui::Text("%s  (+%zu)", name.c_str(), nsel - 1);
+                else
+                    ImGui::TextUnformatted(name.c_str());
                 ImGui::EndDragDropSource();
             }
             if (ImGui::BeginDragDropTarget()) {
-                // Ein Trenner, der auf einer Sequenz abgelegt wird, landet
-                // DAVOR — dort, wo die blaue Zeile dann erscheint.
-                if (const ImGuiPayload* pc = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+                // Obere Haelfte: davor, also zwischen die Kommentarzeilen
+                // dieser Sequenz und die Sequenz selbst. Untere Haelfte:
+                // dahinter, vor die Kommentarzeilen der naechsten.
+                const bool below = dropBelow();
+                const std::size_t nKomm = g.commentsBefore.size();
+                if (const ImGuiPayload* pc = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
                     const auto* q = static_cast<const std::size_t*>(pc->Data);
-                    if (q[0] == static_cast<std::size_t>(active_))
-                        pendingCommentMove_ = {q[1], q[2], i, false, true};
-                    else
+                    if (q[0] == static_cast<std::size_t>(active_)) {
+                        drawDropLine(below, settings_.dpiScale);
+                        if (pc->IsDelivery())
+                            pendingCommentMove_ = below ? PendingCommentMove{q[1], q[2], i + 1, 0, true}
+                                                        : PendingCommentMove{q[1], q[2], i, kAnhaengen, true};
+                    } else if (pc->IsDelivery()) {
                         log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                    }
                 }
-                if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_row")) {
+                if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_row", kDropFlags)) {
                     const auto* q = static_cast<const std::size_t*>(pl->Data);
                     if (q[0] != static_cast<std::size_t>(active_)) {
-                        log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                        if (pl->IsDelivery()) log(LogLine::Kind::Warn, tr(S::DragOtherTab));
                     } else {
-                        const std::size_t from = q[1];
-                        std::vector<std::size_t> rows;
-                        for (std::size_t k = 0; k < d.selected.size(); ++k)
-                            if (d.selected[k]) rows.push_back(k);
-                        if (std::find(rows.begin(), rows.end(), from) == rows.end()) rows = {from};
-                        pendingBlock_ = {rows, i};
+                        drawDropLine(below, settings_.dpiScale);
+                        if (pl->IsDelivery()) {
+                            const std::size_t from = q[1];
+                            std::vector<std::size_t> rows;
+                            for (std::size_t r = 0; r < d.selected.size(); ++r)
+                                if (d.selected[r]) rows.push_back(r);
+                            if (std::find(rows.begin(), rows.end(), from) == rows.end()) rows = {from};
+                            // Davor: die Ueberschriften dieser Sequenz stehen
+                            // oberhalb der Linie und gehen an die eingefuegte.
+                            pendingBlock_ = below ? PendingBlock{rows, i + 1, 0}
+                                                  : PendingBlock{rows, i, nKomm};
+                        }
                     }
                 }
                 ImGui::EndDragDropTarget();
@@ -2685,12 +2762,32 @@ void App::drawSequenceTable(Document& d) {
         ImGui::PushID("dropend");
         ImGui::Selectable("##dropend", false, ImGuiSelectableFlags_SpanAllColumns);
         if (ImGui::BeginDragDropTarget()) {
-            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+            // Die Linie steht immer oben: direkt hinter der letzten Animation,
+            // vor den Schlusskommentaren.
+            const std::size_t ende = d.script.grabs.size();
+            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
                 const auto* q = static_cast<const std::size_t*>(pl->Data);
-                if (q[0] == static_cast<std::size_t>(active_))
-                    pendingCommentMove_ = {q[1], q[2], 0, true, true};
-                else
+                if (q[0] == static_cast<std::size_t>(active_)) {
+                    drawDropLine(false, settings_.dpiScale);
+                    if (pl->IsDelivery()) pendingCommentMove_ = {q[1], q[2], ende, 0, true};
+                } else if (pl->IsDelivery()) {
                     log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                }
+            }
+            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_row", kDropFlags)) {
+                const auto* q = static_cast<const std::size_t*>(pl->Data);
+                if (q[0] == static_cast<std::size_t>(active_)) {
+                    drawDropLine(false, settings_.dpiScale);
+                    if (pl->IsDelivery()) {
+                        std::vector<std::size_t> rows;
+                        for (std::size_t r = 0; r < d.selected.size(); ++r)
+                            if (d.selected[r]) rows.push_back(r);
+                        if (std::find(rows.begin(), rows.end(), q[1]) == rows.end()) rows = {q[1]};
+                        pendingBlock_ = {rows, ende, 0};
+                    }
+                } else if (pl->IsDelivery()) {
+                    log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                }
             }
             ImGui::EndDragDropTarget();
         }
@@ -2722,12 +2819,17 @@ void App::drawSequenceTable(Document& d) {
             ImGui::EndDragDropSource();
         }
         if (ImGui::BeginDragDropTarget()) {
-            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt")) {
+            const bool below = dropBelow();
+            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
                 const auto* q = static_cast<const std::size_t*>(pl->Data);
-                if (q[0] == static_cast<std::size_t>(active_))
-                    pendingCommentMove_ = {q[1], q[2], 0, true, true};
-                else
+                if (q[0] == static_cast<std::size_t>(active_)) {
+                    drawDropLine(below, settings_.dpiScale);
+                    if (pl->IsDelivery())
+                        pendingCommentMove_ = {q[1], q[2], d.script.grabs.size(),
+                                               below ? ti + 1 : ti, true};
+                } else if (pl->IsDelivery()) {
                     log(LogLine::Kind::Warn, tr(S::DragOtherTab));
+                }
             }
             ImGui::EndDragDropTarget();
         }
@@ -2778,13 +2880,17 @@ void App::drawSequenceTable(Document& d) {
         }
 
         if (gefunden) {
-            if (m.ansEnde) {
-                d.script.trailingComments.push_back(text);
-            } else if (m.zuGrab < d.script.grabs.size()) {
-                d.script.grabs[m.zuGrab].commentsBefore.push_back(text);
-            } else {
-                d.script.trailingComments.push_back(text);
-            }
+            auto& ziel = m.zuGrab < d.script.grabs.size() ? d.script.grabs[m.zuGrab].commentsBefore
+                                                          : d.script.trailingComments;
+            std::size_t pos = m.zuZeile;
+            // Aus derselben Liste entfernt und dahinter eingefuegt: die
+            // Zielposition ist um eins nach vorn gerutscht.
+            const bool gleicheListe =
+                (m.vonGrab >= d.script.grabs.size() && m.zuGrab >= d.script.grabs.size()) ||
+                m.vonGrab == m.zuGrab;
+            if (pos != kAnhaengen && gleicheListe && m.vonZeile < pos) --pos;
+            if (pos == kAnhaengen || pos > ziel.size()) pos = ziel.size();
+            ziel.insert(ziel.begin() + static_cast<long>(pos), text);
             d.dirty = true;
             d.validated = false;
         }
@@ -2807,15 +2913,33 @@ void App::drawSequenceTable(Document& d) {
         pendingPaste_ = -1;
     }
 
-    if (!pendingBlock_.first.empty()) {
-        const std::size_t n = moveGrabs(static_cast<std::size_t>(active_),
-                                        pendingBlock_.first, pendingBlock_.second);
+    if (!pendingBlock_.rows.empty()) {
+        PendingBlock pb = std::move(pendingBlock_);
+        pendingBlock_ = {};
+        std::sort(pb.rows.begin(), pb.rows.end());
+        pb.rows.erase(std::unique(pb.rows.begin(), pb.rows.end()), pb.rows.end());
+
+        // Kommentare oberhalb der Ablagelinie gehoeren danach zur ersten
+        // verschobenen Sequenz — vor dem Verschieben umhaengen, dann wandern
+        // sie mit und landen genau dort, wo die Linie stand.
+        auto& grabs = d.script.grabs;
+        const bool valid = pb.before <= grabs.size() && pb.rows.back() < grabs.size() &&
+                           std::find(pb.rows.begin(), pb.rows.end(), pb.before) == pb.rows.end();
+        if (valid && pb.splitAt > 0) {
+            auto& anchor = pb.before < grabs.size() ? grabs[pb.before].commentsBefore
+                                                    : d.script.trailingComments;
+            const std::size_t k = std::min(pb.splitAt, anchor.size());
+            auto& first = grabs[pb.rows.front()].commentsBefore;
+            first.insert(first.begin(), anchor.begin(), anchor.begin() + static_cast<long>(k));
+            anchor.erase(anchor.begin(), anchor.begin() + static_cast<long>(k));
+        }
+
+        const std::size_t n = moveGrabs(static_cast<std::size_t>(active_), pb.rows, pb.before);
         if (n) {
             char msg[128];
             std::snprintf(msg, sizeof(msg), tr(S::Moved), std::to_string(n).c_str());
             log(LogLine::Kind::Info, msg);
         }
-        pendingBlock_.first.clear();
     }
 }
 

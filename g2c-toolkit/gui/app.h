@@ -582,7 +582,18 @@ private:
     bool rangeSelecting_ = false;
 
     // Aufgeschobenes Umordnen: erst nach der Tabelle ausfuehren.
-    std::pair<std::vector<std::size_t>, std::size_t> pendingBlock_{{}, 0};
+    //
+    // splitAt: so viele Kommentarzeilen des Grabs, vor dem eingefuegt wird
+    // (von oben gezaehlt), wandern an die eingefuegte Sequenz. Wer eine
+    // Sequenz unter eine Ueberschrift zieht — die Linie zwischen
+    // Ueberschrift und Zeile —, will sie unter der Ueberschrift haben, nicht
+    // darueber.
+    struct PendingBlock {
+        std::vector<std::size_t> rows;
+        std::size_t              before = 0;
+        std::size_t              splitAt = 0;
+    };
+    PendingBlock pendingBlock_;
     // Zeilen, deren Loeschung noch bestaetigt werden muss.
     std::vector<std::size_t> pendingDelete_;
 
@@ -602,11 +613,16 @@ private:
     // Wie bei den Sequenzen wird die Verschiebung NACH der Tabelle
     // ausgefuehrt. Mitten im Zeichnen die Liste zu aendern, ueber die
     // gerade iteriert wird, ist der klassische Weg zum Absturz.
+    //
+    // Ziel ist eine Stelle in einer Kommentarliste: zuGrab == Anzahl der
+    // Grabs meint die Zeilen hinter der letzten Animation, zuZeile ==
+    // kAnhaengen das Ende der Liste.
+    static constexpr std::size_t kAnhaengen = static_cast<std::size_t>(-1);
     struct PendingCommentMove {
         std::size_t vonGrab = 0;
         std::size_t vonZeile = 0;
         std::size_t zuGrab = 0;
-        bool        ansEnde = false;   // hinter die letzte Animation
+        std::size_t zuZeile = kAnhaengen;
         bool        aktiv = false;
     };
     PendingCommentMove pendingCommentMove_;
