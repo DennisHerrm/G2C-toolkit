@@ -261,6 +261,13 @@ public:
     // Nur fuer Tests: aktiven Tab setzen, ohne die Oberflaeche zu zeichnen.
     void setActiveForTest(int i) { active_ = i; }
 
+    // Tab von aussen waehlen: setzt active_ UND sagt ImGui beim naechsten
+    // Zeichnen, welchen Tab es zeigen soll.
+    void activate(int i) {
+        active_ = i;
+        selectTab_ = i;
+    }
+
     // Sucht animation.cfg und .frames neben der GLA.
     //
     // Sie liegen praktisch immer im selben Ordner; sie einzeln auswaehlen zu
@@ -501,6 +508,8 @@ private:
     // sichtbaren Zustand.
     mutable std::mutex   logMutex_;
     int                  active_ = 0;
+    // Tab, den ImGui beim naechsten Zeichnen auswaehlen soll; -1 = keiner.
+    int                  selectTab_ = -1;
     bool                 showSettings_ = true;
     Mode                 mode_ = Mode::Build;
 
