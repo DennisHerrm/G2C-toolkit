@@ -1,4 +1,4 @@
-// g2/mdxa.h — GLA schreiben und lesen.
+// g2/mdxa.h - Writing and reading GLA.
 
 #pragma once
 
@@ -11,28 +11,28 @@
 
 namespace g2 {
 
-// Echte affine Inverse einer 3x4-Matrix. Wird fuer MdxaSkel::basePoseMatInv
-// gebraucht; die Transponierte reicht nicht, sobald Skalierung im Spiel ist.
+// True affine inverse of a 3x4 matrix. Needed for MdxaSkel::basePoseMatInv;
+// the transpose is not enough as soon as scaling is involved.
 Mat3x4 affineInverse(const Mat3x4& m);
 
-// Verkettung zweier affiner 3x4-Matrizen.
+// Concatenation of two affine 3x4 matrices.
 //
-// Lag frueher lokal in xsi_anim.cpp. Als der Exporteur dieselbe Rechnung
-// brauchte, waere eine Kopie der naheliegende Weg gewesen — und genau so
-// entstehen zwei Fassungen, von denen spaeter eine korrigiert wird.
+// Used to live locally in xsi_anim.cpp. When the exporter needed the same
+// computation, a copy would have been the obvious route - and that is
+// exactly how two versions come about, one of which later gets fixed.
 Mat3x4 mul(const Mat3x4& a, const Mat3x4& b);
 
 struct MdxaWriteOptions {
     CompressOptions compress{};
 
-    // Identische komprimierte Bones teilen sich einen Pool-Eintrag. Bei
-    // Idle-Animationen und langen Haltephasen spart das erheblich; bei
-    // _humanoid.gla liegen tausende Frames mit unbewegten Fingern vor.
+    // Identical compressed bones share one pool entry. This saves a lot for
+    // idle animations and long holds; _humanoid.gla has thousands of frames
+    // with motionless fingers.
     bool dedupeBonePool = true;
 
-    // 0 = alle verfuegbaren Kerne. Parallelisiert wird nur die Kompression;
-    // der Poolaufbau bleibt seriell, damit die Eintragsreihenfolge und damit
-    // die erzeugte Datei reproduzierbar bleibt.
+    // 0 = all available cores. Only the compression is parallelized; building
+    // the pool stays serial so the entry order, and thus the generated file,
+    // stays reproducible.
     unsigned threads = 0;
 };
 
@@ -53,7 +53,7 @@ struct MdxaWriteResult {
 MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
                           const MdxaWriteOptions& opt = {});
 
-// --- Lesen -----------------------------------------------------------------
+// --- Reading ---------------------------------------------------------------
 
 struct MdxaFile {
     Skeleton                       skeleton;
@@ -66,24 +66,24 @@ struct MdxaFile {
 
 MdxaFile readMdxa(const std::vector<std::uint8_t>& data);
 
-// Weltmatrizen aller Bones fuer einen Frame.
+// World matrices of all bones for one frame.
 //
-// Die GLA speichert je Bone eine Matrix RELATIV zum Elternbone, mit der
-// Bindpose verrechnet. Die Weltpose ergibt sich aus
+// The GLA stores one matrix per bone RELATIVE to the parent bone, combined
+// with the bind pose. The world pose is obtained from
 //
-//     Wurzel:  X(b) = A(b)·B(b)
-//     sonst:   X(b) = X(p)·B(p)^-1·A(b)·B(b)
+//     root:    X(b) = A(b)·B(b)
+//     other:   X(b) = X(p)·B(p)^-1·A(b)·B(b)
 //
-// Die Reihenfolge muss topologisch sein, nicht nach Index: in Ravens
-// _humanoid.gla haben acht Bones ihren Elternbone HINTER sich.
+// The order must be topological, not by index: in Raven's _humanoid.gla,
+// eight bones have their parent bone AFTER them.
 //
-// Lag frueher dreimal im Quelltext — im Exporteur, in der Restbewegung und
-// in der Vorschau. Genau so entstehen Fassungen, von denen spaeter eine
-// korrigiert wird.
+// Used to exist three times in the source - in the exporter, in the
+// residual motion and in the preview. That is exactly how versions come
+// about, one of which later gets fixed.
 std::vector<Mat3x4> boneWorldMatrices(const MdxaFile& gla, int frame);
 
-// Liest Datei, schreibt sie neu, vergleicht. Das ist die Grundlage fuer die
-// Regressionstests gegen Originalassets.
+// Reads a file, writes it back, compares. This is the basis for the
+// regression tests against original assets.
 struct RoundTripReport {
     int    frames = 0;
     int    bones = 0;

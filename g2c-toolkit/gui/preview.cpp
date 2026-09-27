@@ -27,11 +27,10 @@ std::array<float, 3> normalize(std::array<float, 3> v) {
     return v;
 }
 
-// Kameraposition aus Winkeln und Abstand.
+// Camera position from angles and distance.
 //
-// Z ist oben. Das entspricht der Konvention der GLA — im Spiel steht die
-// Figur in Z, nicht in Y. Wer hier Y als oben annimmt, sieht das Modell
-// liegen.
+// Z is up. That matches the GLA's convention - in the game the figure
+// stands along Z, not Y. Assuming Y is up here shows the model lying down.
 std::array<float, 3> eyePosition(const PreviewCamera& cam) {
     const double yaw = cam.yawDeg * kDeg2Rad;
     const double pitch = cam.pitchDeg * kDeg2Rad;
@@ -78,8 +77,8 @@ void frameAll(PreviewCamera& cam, const Bounds& b) {
     if (!b.valid) return;
     cam.target = b.center();
 
-    // Abstand so waehlen, dass die Kugel um das Modell ins Sichtfeld passt,
-    // mit etwas Luft am Rand.
+    // Choose the distance so that the sphere around the model fits into the
+    // field of view, with some margin at the edge.
     const float halfFov = static_cast<float>(cam.fovDeg * 0.5 * kDeg2Rad);
     const float s = std::sin(halfFov);
     cam.distance = s > 1e-6f ? (b.radius() * 1.6f) / s : b.radius() * 4.0f;
@@ -95,9 +94,8 @@ bool projectPoint(const std::array<float, 3>& p, const PreviewCamera& cam, float
 
     std::array<float, 3> right = cross(fwd, worldUp);
     if (dot(right, right) < 1e-12f) {
-        // Blick genau von oben oder unten: dann ist die Rechtsachse nicht
-        // bestimmt. Eine beliebige, aber feste Wahl treffen, statt durch
-        // Null zu teilen.
+        // Looking straight down or up: then the right axis is undefined.
+        // Make an arbitrary but fixed choice instead of dividing by zero.
         right = {{1.0f, 0.0f, 0.0f}};
     }
     right = normalize(right);
@@ -105,7 +103,7 @@ bool projectPoint(const std::array<float, 3>& p, const PreviewCamera& cam, float
 
     const std::array<float, 3> rel = sub(p, eye);
     const float z = dot(rel, fwd);
-    if (z <= 1e-4f) return false;   // hinter der Kamera
+    if (z <= 1e-4f) return false;   // behind the camera
 
     const float halfFov = static_cast<float>(cam.fovDeg * 0.5 * kDeg2Rad);
     const float f = 1.0f / std::tan(halfFov);
@@ -115,7 +113,7 @@ bool projectPoint(const std::array<float, 3>& p, const PreviewCamera& cam, float
     const float ndcY = (dot(rel, up) * f) / z;
 
     outX = (ndcX * 0.5f + 0.5f) * viewW;
-    // Bildschirmkoordinaten laufen nach unten, die Hochachse nach oben.
+    // Screen coordinates run downward, the up axis runs upward.
     outY = (0.5f - ndcY * 0.5f) * viewH;
     outDepth = z;
     return true;
@@ -129,7 +127,7 @@ std::vector<BoneLine> buildBoneLines(const MdxaFile& gla, const std::vector<Mat3
 
     for (std::size_t b = 0; b < bones.size(); ++b) {
         const int p = bones[b].parent;
-        if (p < 0) continue;   // Wurzel hat keine Verbindung
+        if (p < 0) continue;   // root has no connection
 
         const std::array<float, 3> a{{world[static_cast<std::size_t>(p)].m[0][3],
                                       world[static_cast<std::size_t>(p)].m[1][3],
@@ -147,8 +145,8 @@ std::vector<BoneLine> buildBoneLines(const MdxaFile& gla, const std::vector<Mat3
         out.push_back(l);
     }
 
-    // Von hinten nach vorn: was naeher an der Kamera ist, wird zuletzt
-    // gezeichnet und liegt damit obenauf.
+    // Back to front: whatever is closer to the camera is drawn last and
+    // thus ends up on top.
     std::sort(out.begin(), out.end(),
               [](const BoneLine& a, const BoneLine& b) { return a.depth > b.depth; });
     return out;
@@ -157,8 +155,8 @@ std::vector<BoneLine> buildBoneLines(const MdxaFile& gla, const std::vector<Mat3
 void advancePlayback(Playback& pb, float dt, int fps, int frameCount) {
     if (!pb.playing || frameCount <= 1) return;
 
-    // Negative Raten bedeuten rueckwaerts. In Ravens animation.cfg steht
-    // etwa BOTH_UNCROUCH1 mit -20; das ist BOTH_CROUCH1 rueckwaerts.
+    // Negative rates mean backwards. Raven's animation.cfg has e.g.
+    // BOTH_UNCROUCH1 at -20; that is BOTH_CROUCH1 played backwards.
     const int rate = fps != 0 ? fps : 20;
     const float step = std::fabs(static_cast<float>(rate));
     pb.accumulator += dt * step;

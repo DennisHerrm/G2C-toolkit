@@ -83,4 +83,30 @@ build\Release\g2_gui_driver.exe C:\temp\g2c_gui <assetwurzel> <referenz.gla> <an
 
 Alles wird unter dem ersten Ordner geschrieben, `%APPDATA%` wird fuer den
 Lauf dorthin umgelenkt. Die uebergebenen Dateien werden nur gelesen; die
-.car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`.
+.car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`
+(144 Pruefungen mit Daten, 42 ohne - darunter die Update-Leiste gegen einen
+nachgebauten GitHub-Server).
+
+Nur mit dem Arbeitsordner laeuft der Teil, der keine Spieldaten braucht.
+So laeuft er auch in GitHub Actions.
+
+## Eine Version veroeffentlichen
+
+Gebaut wird auf GitHub, nicht lokal (`.github/workflows`):
+
+- **Jeder Push auf `main`**: bauen, alle Tests, dann die Vorabversion
+  `snapshot` ersetzen.
+- **Jeder Tag `v*`**: bauen, alle Tests, Release mit `g2c.exe`,
+  `g2c-cli.exe`, Zip und `SHA256SUMS.txt`. Tags mit Bindestrich
+  (`v1.1.0-beta`) werden Vorabversionen.
+
+Eine neue Version:
+
+```bat
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Oder auf GitHub unter *Releases > Draft a new release* einen neuen Tag
+anlegen. Die Nummer folgt [Semver](https://semver.org): Fehlerbehebung
+= letzte Stelle, neue Funktion = mittlere, Inkompatibles = erste.

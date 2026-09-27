@@ -22,7 +22,7 @@ namespace {
 
 constexpr double kRad2Deg = 57.29577951308232;
 
-// Achsentausch zwischen dotXSI und GLA, wie in xsi_anim.cpp.
+// Axis swap between dotXSI and GLA, as in xsi_anim.cpp.
 Mat3x4 axisC() {
     Mat3x4 c{};
     c.m[0][0] = 1;
@@ -39,11 +39,11 @@ Mat3x4 axisCinv() {
     return c;
 }
 
-// Baut die Rotation genauso zusammen wie der Importeur.
+// Composes the rotation exactly the way the importer does.
 //
-// Muss Zeichen fuer Zeichen zu eulerXYZ in xsi_anim.cpp passen — sonst
-// misst die Guetepruefung unten etwas anderes als das, was spaeter
-// tatsaechlich herauskommt.
+// Must match eulerXYZ in xsi_anim.cpp character for character - otherwise the
+// quality check below measures something other than what actually comes out
+// later.
 Mat3x4 composeEuler(float rxDeg, float ryDeg, float rzDeg) {
     constexpr double kDeg2Rad = 0.017453292519943295;
     const double rx = rxDeg * kDeg2Rad, ry = ryDeg * kDeg2Rad, rz = rzDeg * kDeg2Rad;
@@ -72,23 +72,23 @@ double rotError(const Mat3x4& a, const Mat3x4& b) {
     return e;
 }
 
-// Zerlegt die Rotation aus R = Rz(rz)·Ry(ry)·Rx(rx) — genau die Reihenfolge,
-// die eulerXYZ in xsi_anim.cpp aufbaut. Wird hier eine andere Reihenfolge
-// angenommen, sieht die Datei richtig aus und die Animation ist verdreht.
+// Decomposes the rotation from R = Rz(rz)·Ry(ry)·Rx(rx) - exactly the order that
+// eulerXYZ in xsi_anim.cpp builds. If a different order were assumed here, the
+// file would look correct but the animation would be twisted.
 //
-// Warum das Ergebnis geprueft und notfalls ersetzt wird:
+// Why the result is checked and replaced if necessary:
 //
-// Nahe Gimbal Lock — wenn cos(ry) gegen null geht — sind rx und rz nicht
-// mehr sauber trennbar. Die uebliche Formel liefert dort zwar Winkel, aber
-// nach dem Zusammensetzen weichen die Matrixelemente um bis zu 0,003 ab.
-// Das trifft nur 0,06 % zufaelliger Rotationen, faellt aber massiv ins
-// Gewicht, sobald ein Bone weit von seinem Elternbone entfernt ist: in JK2s
-// _humanoid.gla haengen 46 der 72 Bones direkt am Brustkorb, und dort wird
-// aus 0,003 im Winkel ueber einen Meter Hebel ein sichtbarer Versatz.
+// Near gimbal lock - when cos(ry) approaches zero - rx and rz can no longer be
+// cleanly separated. The usual formula still yields angles there, but after
+// recomposition the matrix elements deviate by up to 0.003. That only affects
+// 0.06 % of random rotations, but it matters a lot as soon as a bone is far
+// from its parent bone: in JK2's _humanoid.gla, 46 of the 72 bones hang
+// directly off the rib cage, and there an angular error of 0.003 over a
+// one-meter lever becomes a visible offset.
 //
-// Deshalb werden beide gueltigen Loesungen durchgerechnet — die uebliche und
-// die entartete mit rz = 0 — und die genommen, die sich besser
-// zurueckrechnen laesst. Das kann nie schlechter sein als eine feste Wahl.
+// Therefore both valid solutions are evaluated - the usual one and the
+// degenerate one with rz = 0 - and the one that recomposes better is taken.
+// That can never be worse than a fixed choice.
 void decomposeEuler(const Mat3x4& m, float& rxDeg, float& ryDeg, float& rzDeg) {
     const double sy = -static_cast<double>(m.m[2][0]);
     const double clamped = sy > 1.0 ? 1.0 : (sy < -1.0 ? -1.0 : sy);
@@ -110,15 +110,15 @@ void decomposeEuler(const Mat3x4& m, float& rxDeg, float& ryDeg, float& rzDeg) {
         }
     };
 
-    // Die uebliche Loesung.
+    // The usual solution.
     tryCand(std::atan2(static_cast<double>(m.m[2][1]), static_cast<double>(m.m[2][2])), ry,
             std::atan2(static_cast<double>(m.m[1][0]), static_cast<double>(m.m[0][0])));
 
-    // Die entartete: rz auf null, alles in rx. Bei echtem Gimbal Lock ist
-    // sie exakt, sonst schlechter — die Pruefung entscheidet.
+    // The degenerate one: rz set to zero, everything in rx. Under true gimbal
+    // lock it is exact, otherwise worse - the check decides.
     tryCand(std::atan2(-static_cast<double>(m.m[1][2]), static_cast<double>(m.m[1][1])), ry, 0.0);
 
-    // Die zweite Loesung des Arkussinus: ry gespiegelt an pi/2.
+    // The second solution of the arcsine: ry mirrored about pi/2.
     constexpr double kPi = 3.141592653589793;
     const double ry2 = (ry >= 0.0 ? kPi - ry : -kPi - ry);
     tryCand(std::atan2(-static_cast<double>(m.m[2][1]), -static_cast<double>(m.m[2][2])), ry2,
@@ -129,17 +129,17 @@ void decomposeEuler(const Mat3x4& m, float& rxDeg, float& ryDeg, float& rzDeg) {
     rzDeg = best.rz;
 }
 
-// Naechstgelegene Rotation zu einer 3x3-Matrix (Polarzerlegung).
+// Nearest rotation to a 3x3 matrix (polar decomposition).
 //
-// Iteration R <- (R + R^-T)/2. Konvergiert quadratisch; sechs Schritte
-// genuegen fuer float weit ueber die noetige Genauigkeit hinaus.
+// Iteration R <- (R + R^-T)/2. Converges quadratically; six steps are enough
+// for float, well beyond the required precision.
 Mat3x4 nearestRotation(const Mat3x4& m) {
     double R[3][3];
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c) R[r][c] = m.m[r][c];
 
     for (int it = 0; it < 8; ++it) {
-        // Inverse Transponierte bilden.
+        // Compute the inverse transpose.
         const double det =
             R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) -
             R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +
@@ -181,8 +181,8 @@ Mat3x4 scaled(const Mat3x4& m, float s) {
 }
 
 std::string num(double v) {
-    // Sechs Nachkommastellen wie in Ravens Dateien. Weniger verliert
-    // sichtbar Genauigkeit, mehr blaeht die Datei ohne Nutzen auf.
+    // Six decimal places, as in Raven's files. Fewer visibly loses precision,
+    // more bloats the file for no benefit.
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.6f", v);
     return buf;
@@ -195,9 +195,9 @@ std::optional<std::array<float, 3>> readAverageVec(const std::string& framesPath
     std::ifstream f(framesPath);
     if (!f) return std::nullopt;
 
-    // Vergleich ueber den Dateinamen ohne Endung, kleingeschrieben. Die
-    // .frames nennt vollstaendige Pfade mit Laufwerksbuchstabe; die passen
-    // auf keinem anderen Rechner.
+    // Compare by file name without extension, lowercased. The .frames file
+    // lists full paths with drive letters; those don't match on any other
+    // machine.
     auto key = [](std::string v) {
         const std::size_t slash = v.find_last_of("/\\");
         if (slash != std::string::npos) v = v.substr(slash + 1);
@@ -222,11 +222,10 @@ std::optional<std::array<float, 3>> readAverageVec(const std::string& framesPath
         if (current != want) continue;
         if (line.find("averagevec") == std::string::npos) continue;
 
-        // Zweites Anfuehrungszeichenpaar der Zeile: "averagevec" "x y z".
+        // Second pair of quotes on the line: "averagevec" "x y z".
         //
-        // Nicht ab einem festen Versatz suchen — der landet genau auf dem
-        // schliessenden Anfuehrungszeichen des Schluessels, und gelesen wird
-        // dann der Tabulator dazwischen.
+        // Don't search from a fixed offset - that lands exactly on the closing
+        // quote of the key, and what gets read is then the tab in between.
         std::size_t p1 = line.find('"');
         std::size_t p2 = line.find('"', p1 + 1);
         std::size_t p3 = line.find('"', p2 + 1);
@@ -244,11 +243,11 @@ std::optional<std::array<float, 3>> readAverageVec(const std::string& framesPath
 std::optional<std::array<float, 3>> detectOrigin(const MdxaFile& gla) {
     if (gla.numFrames <= 0 || gla.skeleton.bones.empty()) return std::nullopt;
 
-    // Haeufigsten Wert je Achse suchen. Der Versatz ist konstant, die
-    // Wurzelbewegung nicht — deshalb ist der haeufigste Wert der Versatz.
+    // Find the most frequent value per axis. The offset is constant, the root
+    // motion is not - so the most frequent value is the offset.
     std::array<float, 3> best{};
     for (int axis = 0; axis < 3; ++axis) {
-        std::map<int, int> hist;   // gerundet auf Viertel-Einheiten
+        std::map<int, int> hist;   // rounded to quarter units
         const int step = gla.numFrames > 4000 ? gla.numFrames / 2000 : 1;
         int total = 0;
         for (int f = 0; f < gla.numFrames; f += step) {
@@ -260,7 +259,7 @@ std::optional<std::array<float, 3>> detectOrigin(const MdxaFile& gla) {
         for (const auto& [k, c] : hist)
             if (c > bestCount) { bestCount = c; bestKey = k; }
 
-        // Nur uebernehmen, wenn der Wert wirklich vorherrscht.
+        // Only take it if the value really dominates.
         best[static_cast<std::size_t>(axis)] =
             (bestCount * 10 >= total * 8) ? -static_cast<float>(bestKey) / 4.0f : 0.0f;
     }
@@ -274,8 +273,8 @@ float residualMotion(const MdxaFile& gla, const Sequence& seq) {
     if (n == 0 || seq.frameCount < 2) return 0.0f;
     if (seq.startFrame < 0 || seq.startFrame + seq.frameCount > gla.numFrames) return 0.0f;
 
-    // Gross- und Kleinschreibung ignorieren: eigene Modelle schreiben den
-    // Bewegungsbone oft "motion" statt "Motion".
+    // Ignore case: custom models often spell the motion bone "motion" instead
+    // of "Motion".
     int mi = -1;
     for (int b = 0; b < n; ++b) {
         std::string nm = sk.bones[static_cast<std::size_t>(b)].name;
@@ -301,7 +300,7 @@ Grouping groupSequences(const std::vector<CfgSequence>& cfg) {
     std::vector<CfgSequence> sorted = cfg;
     std::sort(sorted.begin(), sorted.end(), [](const CfgSequence& a, const CfgSequence& b) {
         if (a.start != b.start) return a.start < b.start;
-        return a.count > b.count;   // der laengste Bereich wird Master
+        return a.count > b.count;   // the longest range becomes master
     });
 
     int end = -1;
@@ -312,9 +311,9 @@ Grouping groupSequences(const std::vector<CfgSequence>& cfg) {
         } else if (q.start + q.count <= end) {
             out.masters.back().inside.push_back(q);
         } else {
-            // Teilweise ueberlappend liesse sich nicht als -additional
-            // ausdruecken. In Ravens Dateien kommt das nicht vor; wenn doch,
-            // lieber melden als still verbiegen.
+            // A partial overlap cannot be expressed as -additional. It never
+            // occurs in Raven's files; if it does, better to report it than to
+            // silently bend it.
             ++out.partial;
         }
     }
@@ -345,14 +344,14 @@ car::Script buildScript(const Grouping& g, const std::string& xsiPrefix,
     car::Script sc;
     car::addGrabFrame(sc);
 
-    // $scale und $keepmotion stehen in Ravens Skripten und gehoeren hier
-    // ebenfalls hinein.
+    // $scale and $keepmotion appear in Raven's scripts and belong here as
+    // well.
     //
-    // NICHT rekonstruierbar ist dagegen $pcj — die Liste der Bones, die die
-    // Engine zur Laufzeit selbst drehen darf. Sie steht nur in der .car und
-    // hinterlaesst in der GLA keine Spur: in Ravens _humanoid.gla tragen nur
-    // zwei von 53 Bones ueberhaupt ein Flag. Wer eine bestehende .car
-    // ersetzt, sollte den $pcj-Block von dort uebernehmen.
+    // What can NOT be reconstructed, on the other hand, is $pcj - the list of
+    // bones the engine may rotate itself at runtime. It exists only in the
+    // .car and leaves no trace in the GLA: in Raven's _humanoid.gla only two
+    // of 53 bones carry any flag at all. Anyone replacing an existing .car
+    // should copy the $pcj block from there.
     if (scale > 0.0f) {
         car::Statement st;
         st.cmd = car::Cmd::Scale;
@@ -399,12 +398,12 @@ car::Script buildScript(const Grouping& g, const std::string& xsiPrefix,
     cv.noAsk = true;
     cv.root = xsiPrefix + "root";
 
-    // Der Skelettpfad kommt aus dem Kopf der GLA — dort steht genau der
-    // Wert, den Carcass seinerzeit als -makeskel bekommen hat. Nur wenn er
-    // fehlt, wird er aus dem Praefix abgeleitet.
+    // The skeleton path comes from the GLA header - it holds exactly the value
+    // Carcass was given as -makeskel back then. Only if it is missing is it
+    // derived from the prefix.
     //
-    // Ohne Praefix darf dabei kein fuehrender Schraegstrich entstehen:
-    // "/_humanoid" ist ein absoluter Pfad und wird nicht gefunden.
+    // Without a prefix, no leading slash may be produced: "/_humanoid" is an
+    // absolute path and will not be found.
     if (!makeSkel.empty()) {
         cv.makeSkel = makeSkel;
     } else {
@@ -413,9 +412,8 @@ car::Script buildScript(const Grouping& g, const std::string& xsiPrefix,
     }
 
     if (origin) {
-        // Negative Null vermeiden: aus der Schaetzung kommt -0.0, und
-        // "-origin -0 -0 24" sieht nach einem Fehler aus, obwohl es keiner
-        // ist.
+        // Avoid negative zero: the estimate yields -0.0, and
+        // "-origin -0 -0 24" looks like an error even though it isn't one.
         const auto clean = [](float v) { return v == 0.0f ? 0.0 : static_cast<double>(v); };
         cv.origin = std::array<double, 3>{clean((*origin)[0]), clean((*origin)[1]),
                                           clean((*origin)[2])};
@@ -431,21 +429,21 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     if (numBones == 0) throw std::runtime_error("GLA ohne Skelett");
     if (seq.frameCount <= 0) throw std::runtime_error("Sequenz ohne Frames");
 
-    // Eine Ein-Frame-Sequenz wird als ZWEI identische Frames geschrieben.
+    // A single-frame sequence is written as TWO identical frames.
     //
-    // Carcass weist eine .xsi mit nur einem Frame ab:
+    // Carcass rejects an .xsi with only one frame:
     //
     //   XSI file-format doesn't support 1-frames files 100% legally,
     //   re-export this file please!
     //
-    // Ravens eigene 58 Ein-Frame-Sequenzen sind denn auch alle
-    // "-additional"-Unterbereiche laengerer Dateien; einzelne
-    // Ein-Frame-Dateien gibt es dort nicht.
+    // Accordingly, all 58 of Raven's own single-frame sequences are
+    // "-additional" subranges of longer files; there are no standalone
+    // single-frame files there.
     //
-    // Der zweite Frame ist eine Kopie des ersten, die Animation also
-    // unveraendert. Wer das Skript ueber "Alles + .car" erzeugt, bekommt
-    // ohnehin -additional und merkt davon nichts; wer eine einzelne Sequenz
-    // exportiert, kann sie mit dieser Datei bauen statt gar nicht.
+    // The second frame is a copy of the first, so the animation is unchanged.
+    // Anyone generating the script via "Alles + .car" gets -additional anyway
+    // and never notices; anyone exporting a single sequence can build it with
+    // this file instead of not at all.
     const int outFrames = seq.frameCount == 1 ? 2 : seq.frameCount;
     if (seq.startFrame < 0 || seq.startFrame + seq.frameCount > gla.numFrames)
         throw std::runtime_error("Sequenzbereich liegt ausserhalb der GLA");
@@ -454,7 +452,7 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     const Mat3x4 C = axisC();
     const Mat3x4 Cinv = axisCinv();
 
-    // Bindposen und ihre Inversen.
+    // Bind poses and their inverses.
     std::vector<Mat3x4> B(static_cast<std::size_t>(numBones));
     std::vector<Mat3x4> Binv(static_cast<std::size_t>(numBones));
     for (int b = 0; b < numBones; ++b) {
@@ -462,7 +460,7 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
         Binv[static_cast<std::size_t>(b)] = affineInverse(B[static_cast<std::size_t>(b)]);
     }
 
-    // Lokale Transformationen je Frame und Bone, in dotXSI-Konvention.
+    // Local transforms per frame and bone, in dotXSI convention.
     struct Key {
         float t[3];
         float r[3];
@@ -471,12 +469,12 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     std::vector<std::vector<Key>> keys(static_cast<std::size_t>(numBones),
                                        std::vector<Key>(static_cast<std::size_t>(outFrames)));
 
-    // Topologische Reihenfolge: Eltern vor Kindern.
+    // Topological order: parents before children.
     //
-    // Die Indexreihenfolge reicht NICHT. In Ravens _humanoid.gla haben acht
-    // Bones ihren Elternbone hinter sich — "ceyebrow", "jaw" und weitere
-    // haengen an Bone 52. Rechnet man in Indexreihenfolge, ist X[parent] bei
-    // diesen Bones noch uninitialisiert, und alles darunter wird Unsinn.
+    // Index order is NOT enough. In Raven's _humanoid.gla, eight bones have
+    // their parent bone after them - "ceyebrow", "jaw" and others hang off
+    // bone 52. Computing in index order, X[parent] is still uninitialized for
+    // these bones, and everything below them becomes garbage.
     std::vector<int> topo;
     topo.reserve(static_cast<std::size_t>(numBones));
     {
@@ -499,12 +497,12 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     }
 
     for (int f = 0; f < outFrames; ++f) {
-        // Bei einer Ein-Frame-Sequenz zeigen beide Ausgabeframes auf
-        // denselben Quellframe.
+        // For a single-frame sequence, both output frames point to the same
+        // source frame.
         const int src = seq.startFrame + std::min(f, seq.frameCount - 1);
 
-        // Schritt 1: X aus A zurueckrechnen. Eltern zuerst, denn X(b) haengt
-        // an X(parent).
+        // Step 1: recover X from A. Parents first, because X(b) depends on
+        // X(parent).
         std::vector<Mat3x4> X(static_cast<std::size_t>(numBones));
         for (const int b : topo) {
             const auto bu = static_cast<std::size_t>(b);
@@ -512,11 +510,11 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             const int p = skel.bones[bu].parent;
 
             if (p < 0) {
-                // Rueckgaengig machen, was das Bauen dem Wurzelbone angetan
-                // hat. Reihenfolge umgekehrt zur Vorwaertsrichtung:
-                //   vorwaerts: A = X·B^-1;  A -= origin;  A += rampe·t
-                //   rueckwaerts: A += origin;  A -= rampe·t;  X = A·B
-                // Mit rampe·t = -averagevec·f wird aus dem Minus ein Plus.
+                // Undo what the build did to the root bone. Order reversed
+                // relative to the forward direction:
+                //   forward:  A = X·B^-1;  A -= origin;  A += ramp·t
+                //   backward: A += origin;  A -= ramp·t;  X = A·B
+                // With ramp·t = -averagevec·f the minus turns into a plus.
                 if (opt.origin) {
                     A.m[0][3] += (*opt.origin)[0];
                     A.m[1][3] += (*opt.origin)[1];
@@ -535,7 +533,7 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             }
         }
 
-        // Schritt 2: zurueck in den dotXSI-Raum und lokal machen.
+        // Step 2: back into dotXSI space and make local.
         std::vector<Mat3x4> wx(static_cast<std::size_t>(numBones));
         for (int b = 0; b < numBones; ++b) {
             const auto bu = static_cast<std::size_t>(b);
@@ -553,33 +551,32 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             k.t[1] = local.m[1][3];
             k.t[2] = local.m[2][3];
 
-            // Skalierung abtrennen, BEVOR die Rotation zerlegt wird.
+            // Split off the scale BEFORE decomposing the rotation.
             //
-            // Nicht jede lokale Transformation ist massstabstreu: die
-            // Gesichtsbones unter "face" tragen in Ravens Skelett eine
-            // Skalierung von 1,087. Verwirft man sie, kommt beim
-            // Rueckimport genau der Kehrwert heraus — 0,92 statt 1,0 — und
-            // die Gesichtsbones sitzen falsch.
+            // Not every local transform is scale-preserving: the face bones
+            // under "face" carry a scale of 1.087 in Raven's skeleton. If it
+            // is discarded, re-importing yields exactly the reciprocal -
+            // 0.92 instead of 1.0 - and the face bones end up misplaced.
             //
-            // Der Importeur setzt m = R·diag(s) zusammen, also sind die
-            // Spaltenlaengen genau die Skalierung.
+            // The importer composes m = R·diag(s), so the column lengths are
+            // exactly the scale.
             //
-            // Die Spalten nur zu normieren reicht nicht: sind sie nicht
-            // genau senkrecht zueinander — und Ravens Bindposen sind das
-            // nicht ganz —, ist das Ergebnis keine Rotation, und die
-            // Euler-Zerlegung verliert daran. Bei JK2s flacher Hierarchie,
-            // wo 46 Bones direkt am Brustkorb haengen, wird aus diesem
-            // kleinen Winkelfehler ueber den langen Hebel ein sichtbarer
-            // Versatz an der Fingerspitze.
+            // Merely normalizing the columns is not enough: if they are not
+            // exactly perpendicular to each other - and Raven's bind poses
+            // aren't quite - the result is not a rotation, and the Euler
+            // decomposition suffers for it. With JK2's flat hierarchy, where
+            // 46 bones hang directly off the rib cage, this small angular
+            // error over the long lever turns into a visible offset at the
+            // fingertip.
             //
-            // Die Polarzerlegung liefert stattdessen die Rotation, die der
-            // Matrix am naechsten kommt. Die Scherung selbst ist nicht
-            // darstellbar — der Importeur baut m = R·diag(s) —, aber der
-            // verbleibende Fehler wird so klein wie moeglich.
+            // The polar decomposition instead yields the rotation closest to
+            // the matrix. The shear itself cannot be represented - the
+            // importer builds m = R·diag(s) - but the remaining error is made
+            // as small as possible.
             const Mat3x4 rot = nearestRotation(local);
             for (int c = 0; c < 3; ++c) {
-                // Skalierung entlang der GEDREHTEN Achse messen, nicht die
-                // rohe Spaltenlaenge.
+                // Measure the scale along the ROTATED axis, not the raw
+                // column length.
                 double proj = 0.0;
                 for (int r = 0; r < 3; ++r)
                     proj += static_cast<double>(rot.m[r][c]) * local.m[r][c];
@@ -589,18 +586,18 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
         }
     }
 
-    // --- Schreiben ---------------------------------------------------------
+    // --- Writing ----------------------------------------------------------
     std::ostringstream o;
     o << (opt.version == ExportOptions::Version::V30 ? "xsi 0300txt 0032\n\n"
                                                      : "xsi 0350txt 0032\n\n");
     o << "SI_CoordinateSystem coord {\n  1,\n  0,\n  1,\n  0,\n  2,\n  5,\n}\n\n";
 
-    // SI_Scene: der Framebereich, den der Importeur liest. Die Rate wird
-    // beim Einlesen abgeschnitten, also gleich ganzzahlig schreiben.
+    // SI_Scene: the frame range the importer reads. The rate is truncated on
+    // reading, so write it as an integer right away.
     o << "SI_Scene scene {\n  \"FRAMES\",\n  0,\n  " << (outFrames - 1) << ",\n  "
       << opt.fps << ",\n}\n\n";
 
-    // Verschachtelte SI_Model, damit die Hierarchie erhalten bleibt.
+    // Nested SI_Model blocks, so the hierarchy is preserved.
     std::vector<std::vector<int>> children(static_cast<std::size_t>(numBones));
     std::vector<int> roots;
     for (int b = 0; b < numBones; ++b) {
@@ -613,8 +610,8 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     const auto curve = [&](std::ostringstream& s, const std::string& bone, const char* channel,
                            int component, Part part, const std::vector<Key>& kk,
                            const std::string& ind) {
-        // v3.0 benennt die Templates, v3.5 nicht. Der Inhalt ist identisch —
-        // der Bonename steht ohnehin als erster Wert im Block.
+        // v3.0 names the templates, v3.5 doesn't. The content is identical -
+        // the bone name is the first value in the block anyway.
         if (opt.version == ExportOptions::Version::V30)
             s << ind << "SI_FCurve " << bone << "-" << channel << " {\n";
         else
@@ -641,50 +638,50 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
 
         o << ind << "SI_Model MDL-" << name << " {\n";
 
-        // SRT als Ruhepose: der erste Frame. Ein Bone ohne Kurve stuende
-        // sonst in der Identitaet statt an seinem Platz.
-        // SI_Transform ist die RUHELAGE, nicht Frame 0 der Animation.
+        // SRT as rest pose: the first frame. Otherwise a bone without a curve
+        // would sit at identity instead of in its place.
+        // SI_Transform is the REST POSE, not frame 0 of the animation.
         //
-        // Carcass liest genau diesen Block als Bindepose, verkettet ihn ueber
-        // die Hierarchie und vergleicht das Ergebnis mit dem Zielskelett.
-        // Stand hier die animierte Pose von Frame 0, meldete es fuer jeden
-        // Bone "Basepose for bone ... differs" — bei lower_lumbar etwa um
-        // 41,35, und das ist exakt die Z-Hoehe der Bindepose.
+        // Carcass reads exactly this block as the bind pose, chains it through
+        // the hierarchy and compares the result with the target skeleton.
+        // When this held the animated pose of frame 0, it reported
+        // "Basepose for bone ... differs" for every bone - for lower_lumbar by
+        // about 41.35, which is exactly the Z height of the bind pose.
         //
-        // Der eigene Importeur nahm die Werte nie, weil er die FCurves
-        // auswertet; der Fehler blieb deshalb unbemerkt, bis jemand die
-        // Datei durch Ravens Carcass schickte.
+        // Our own importer never used these values because it evaluates the
+        // FCurves; the bug therefore went unnoticed until someone ran the file
+        // through Raven's Carcass.
         {
             const Mat3x4& Bb = skel.bones[bu].basePose;
             const int par = skel.bones[bu].parent;
-            // Lokal gegen den Elternbone, dann in XSI-Koordinaten.
+            // Local relative to the parent bone, then into XSI coordinates.
             const Mat3x4 localBind =
                 par < 0 ? Bb : mul(affineInverse(skel.bones[static_cast<std::size_t>(par)].basePose), Bb);
-            // NICHT durch scale teilen.
+            // Do NOT divide by scale.
             //
-            // Die Skelettskalierung steckt in jeder Bindepose; beim Bilden
-            // der LOKALEN Pose — Eltern^-1 mal Kind — kuerzt sie sich
-            // heraus. Wer hier nochmals teilt, schreibt Skalierung 1,5625
-            // statt 1,0 und Translation 14,06 statt 9,0.
+            // The skeleton scale is contained in every bind pose; when forming
+            // the LOCAL pose - parent^-1 times child - it cancels out. Dividing
+            // again here writes scale 1.5625 instead of 1.0 and translation
+            // 14.06 instead of 9.0.
             //
-            // Gegengeprueft an Ravens eigener Both_forcelandleft1.xsi: dort
-            // steht fuer lower_lumbar exakt Skalierung 1,0 und Translation
-            // 9,0 — genau das, was die lokale Bindepose ergibt.
-            // Bei der WURZEL die Skelettskalierung herausteilen.
+            // Cross-checked against Raven's own Both_forcelandleft1.xsi: it
+            // has exactly scale 1.0 and translation 9.0 for lower_lumbar -
+            // precisely what the local bind pose yields.
+            // For the ROOT, divide out the skeleton scale.
             //
-            // Sie steckt in jeder Bindepose. Beim Bilden der lokalen Pose —
-            // Eltern^-1 mal Kind — kuerzt sie sich heraus, aber die Wurzel
-            // hat keinen Elternbone: dort bleibt sie stehen.
+            // It is contained in every bind pose. When forming the local pose -
+            // parent^-1 times child - it cancels out, but the root has no
+            // parent bone: there it remains.
             //
-            // Carcass multipliziert die gelesene Ruhelage selbst mit der
-            // Skalierung. Blieb sie drin, kam 0,64 mal 0,64 = 0,4096 heraus,
-            // erwartet wurden 0,64 — und die Meldung lautete "Basepose for
-            // bone model_root differs by 0.230400", also genau
-            // 0,64 minus 0,4096. Weil die ganze Kette darauf aufbaut, war
-            // danach JEDER Bone falsch.
+            // Carcass itself multiplies the rest pose it reads by the scale. If
+            // it stayed in, the result was 0.64 times 0.64 = 0.4096 where 0.64
+            // was expected - and the message read "Basepose for bone
+            // model_root differs by 0.230400", i.e. exactly 0.64 minus 0.4096.
+            // Since the whole chain builds on it, EVERY bone was wrong after
+            // that.
             //
-            // Ravens eigene Dateien bestaetigen es: dort steht fuer pelvis
-            // Skalierung 1,0, nicht 0,64.
+            // Raven's own files confirm it: they have scale 1.0 for pelvis,
+            // not 0.64.
             Mat3x4 localFixed = localBind;
             if (par < 0 && scale > 0.0f)
                 for (int r = 0; r < 3; ++r)
@@ -702,40 +699,39 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             decomposeEuler(rot, rr[0], rr[1], rr[2]);
             for (int c = 0; c < 3; ++c) rt[c] = wx.m[c][3];
 
-            // BASEPOSE: das ist der Block, den Carcass als Bindepose liest.
+            // BASEPOSE: this is the block Carcass reads as the bind pose.
             //
-            // Ravens root.xsi hat pro Bone ZWEI Transform-Bloecke — "SRT-"
-            // fuer die Pose und "BASEPOSE-" fuer die Bindepose. Wir schrieben
-            // nur den ersten, und deshalb meldete Carcass fuer jeden Bone
-            // "Basepose ... differs": es fand keinen und verglich gegen das,
-            // was zufaellig dastand.
+            // Raven's root.xsi has TWO transform blocks per bone - "SRT-" for
+            // the pose and "BASEPOSE-" for the bind pose. We wrote only the
+            // first, and that's why Carcass reported "Basepose ... differs"
+            // for every bone: it found none and compared against whatever
+            // happened to be there.
             //
-            // Der Inhalt ist die WELT-Bindepose in dotXSI-Koordinaten, durch
-            // die Skelettskalierung geteilt. Gegengeprueft an Ravens eigener
-            // Datei: fuer lfemurYZ steht dort 5.643987, 55.604065, 0.322196 —
-            // und genau das ergibt die Rechnung.
-            // Die WURZEL bekommt keinen BASEPOSE-Block.
+            // The content is the WORLD bind pose in dotXSI coordinates, divided
+            // by the skeleton scale. Cross-checked against Raven's own file:
+            // for lfemurYZ it has 5.643987, 55.604065, 0.322196 - and that is
+            // exactly what the calculation yields.
+            // The ROOT gets no BASEPOSE block.
             //
-            // Ravens Dateien haben durchweg genau DREI SRT-Bloecke mehr als
-            // BASEPOSE-Bloecke — in root.xsi (277/274) wie in jeder
-            // Animationsdatei (98/95). Nachgesehen, welche fehlen:
-            // model_root, mesh_root und skeleton_root, also die
-            // Wurzelknoten.
+            // Raven's files consistently have exactly THREE more SRT blocks
+            // than BASEPOSE blocks - in root.xsi (277/274) as in every
+            // animation file (98/95). Checked which ones are missing:
+            // model_root, mesh_root and skeleton_root, i.e. the root nodes.
             //
-            // Wir schrieben fuer model_root einen, und Carcass verkettete
-            // ihn mit der Kette darunter — daher "non-uniform scaling" mit
-            // Werten um 0,4096, also 0,64 zum Quadrat.
+            // We wrote one for model_root, and Carcass chained it with the
+            // chain below it - hence "non-uniform scaling" with values around
+            // 0.4096, i.e. 0.64 squared.
             //
-            // mesh_root und skeleton_root gibt es bei uns nicht; die GLA
-            // kennt sie nicht.
+            // mesh_root and skeleton_root don't exist on our side; the GLA
+            // doesn't know them.
             if (opt.basePose != ExportOptions::BasePose::None && par >= 0) {
-                // World: die Weltpose, wie in Ravens Dateien.
-                // Local:  gegen den Elternbone — falls Carcass selbst
-                //         verkettet, waere die Weltpose doppelt skaliert.
+                // World: the world pose, as in Raven's files.
+                // Local:  relative to the parent bone - if Carcass chains
+                //         itself, the world pose would be scaled twice.
                 Mat3x4 world = opt.basePose == ExportOptions::BasePose::Local ? localBind : Bb;
                 if (scale > 0.0f) {
-                    // Bei der lokalen Pose kuerzt sich die Skalierung schon
-                    // heraus, ausser bei der Wurzel.
+                    // For the local pose the scale already cancels out,
+                    // except at the root.
                     const bool teilen =
                         opt.basePose == ExportOptions::BasePose::World || par < 0;
                     if (teilen)
@@ -769,14 +765,14 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             o << ind << "  }\n";
         }
 
-        // SI_FCurve MUSS direktes Kind von SI_Model sein.
+        // SI_FCurve MUST be a direct child of SI_Model.
         //
-        // Der Importeur sucht mit findAll nur unter den unmittelbaren
-        // Kindern. Ein umschliessender SI_Animation-Block macht die Kurven
-        // unsichtbar: es kamen null Kanaele an, jeder Bone blieb auf seiner
-        // SRT-Ruhepose stehen, und deshalb stimmte ausgerechnet Frame 0
-        // immer und alles danach nicht. Ravens eigene Dateien legen die
-        // Kurven ebenfalls direkt unter SI_Model.
+        // The importer's findAll searches only the immediate children. An
+        // enclosing SI_Animation block makes the curves invisible: zero
+        // channels arrived, every bone stayed at its SRT rest pose, and that's
+        // why frame 0 of all frames was always right and everything after it
+        // wasn't. Raven's own files likewise place the curves directly under
+        // SI_Model.
         const char* scCh[3] = {"SCALING-X", "SCALING-Y", "SCALING-Z"};
         const char* rotCh[3] = {"ROTATION-X", "ROTATION-Y", "ROTATION-Z"};
         const char* trCh[3] = {"TRANSLATION-X", "TRANSLATION-Y", "TRANSLATION-Z"};

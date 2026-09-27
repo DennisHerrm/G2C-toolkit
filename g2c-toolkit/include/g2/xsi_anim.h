@@ -1,26 +1,26 @@
-// g2/xsi_anim.h — Animationen aus dotXSI gegen ein vorhandenes Skelett.
+// g2/xsi_anim.h - Animations from dotXSI against an existing skeleton.
 //
-// Variante "Referenz-GLA": Das Skelett wird NICHT aus der dotXSI abgeleitet,
-// sondern aus einer vorhandenen GLA uebernommen. Grund: die Bone-Auswahl ist
-// aus den XSI-Dateien nicht ableitbar.
+// "Reference GLA" variant: the skeleton is NOT derived from the dotXSI but
+// taken from an existing GLA. Reason: the bone selection cannot be derived
+// from the XSI files.
 //
-// In den vorliegenden Raven-Assets sieht die Kaskade so aus:
+// In the available Raven assets, the cascade looks like this:
 //
-//     191 Bones im Rig der root.xsi
-//     102 davon in den Animationsdateien animiert
-//      66 davon mit SI_Envelope, verformen also Geometrie
-//      53 in der fertigen GLA
+//     191 bones in the root.xsi rig
+//     102 of them animated in the animation files
+//      66 of them with SI_Envelope, i.e. they deform geometry
+//      53 in the finished GLA
 //
-// Weggefallen sind zwischen 66 und 53 unter anderem die IK-Effektoren
-// (eff, eff1, larm_eff, lhand_tag_eff), das jeweils dritte Fingerglied
-// (l_d1_j3, l_d2_j3, l_d4_j3), ltarsal und ltlip1 — Raven musste die
-// Bone-Zahl von Jedi Outcast zu Jedi Academy wegen der Xbox senken.
-// Diese Auswahl steckt in keiner der Quelldateien; sie kommt aus einer
-// .bonecap-Datei ($bonehiercap) oder eben aus der Referenz-GLA.
+// Dropped between 66 and 53 were, among others, the IK effectors
+// (eff, eff1, larm_eff, lhand_tag_eff), the third finger joint in each case
+// (l_d1_j3, l_d2_j3, l_d4_j3), ltarsal and ltlip1 - Raven had to lower the
+// bone count from Jedi Outcast to Jedi Academy because of the Xbox.
+// This selection is not in any of the source files; it comes from a
+// .bonecap file ($bonehiercap) or else from the reference GLA.
 //
-// Fuer den haeufigsten Fall — Animationen zu einem bestehenden _humanoid
-// hinzufuegen — ist das ohnehin richtig, weil das Skelett dabei unveraendert
-// bleiben MUSS. Jede Abweichung wuerde alle vorhandenen Modelle brechen.
+// For the most common case - adding animations to an existing _humanoid -
+// this is correct anyway, because the skeleton MUST stay unchanged. Any
+// deviation would break all existing models.
 
 #pragma once
 
@@ -36,23 +36,23 @@
 
 namespace g2::xsi {
 
-// Ein animierbarer Knoten aus der dotXSI-Hierarchie.
+// An animatable node from the dotXSI hierarchy.
 struct AnimNode {
-    std::string name;        // Bonename, also der Teil nach dem letzten Punkt
-    int         parent = -1; // Index in AnimFile::nodes, -1 = Wurzel
+    std::string name;        // bone name, i.e. the part after the last dot
+    int         parent = -1; // index into AnimFile::nodes, -1 = root
 
-    // Keyframes je Kanal. Kanalnamen wie in der Datei:
+    // Keyframes per channel. Channel names as in the file:
     // ROTATION-X/Y/Z, TRANSLATION-X/Y/Z, SCALING-X/Y/Z
     std::map<std::string, std::map<int, float>> channels;
 
-    // Statische lokale Transformation aus SI_Transform SRT-<name>:
-    // Skalierung XYZ, Rotation XYZ in Grad, Translation XYZ.
+    // Static local transform from SI_Transform SRT-<name>:
+    // scaling XYZ, rotation XYZ in degrees, translation XYZ.
     //
-    // Das ist der Ruhewert eines Bones. FCurves ueberschreiben ihn kanalweise;
-    // wo keine FCurve existiert, gilt er weiter. In Ravens Animationsdateien
-    // hat jeder Bone FCurves fuer alle benutzten Kanaele, sodass der Block
-    // dort nie gebraucht wird. In root.xsi dagegen haben nur 126 von 276
-    // Modellen FCurves — die uebrigen 150 haengen allein an SRT.
+    // This is a bone's rest value. FCurves override it per channel; where no
+    // FCurve exists, it still applies. In Raven's animation files every bone
+    // has FCurves for all channels it uses, so the block is never needed
+    // there. In root.xsi, on the other hand, only 126 of 276 models have
+    // FCurves - the remaining 150 depend on SRT alone.
     std::array<float, 9> srt{{1, 1, 1, 0, 0, 0, 0, 0, 0}};
     bool                 hasSrt = false;
 
@@ -65,20 +65,20 @@ struct AnimFile {
     int                   firstFrame = 0;
     int                   lastFrame = 0;
 
-    // Aus SI_Scene: { "FRAMES", start, end, framerate }
+    // From SI_Scene: { "FRAMES", start, end, framerate }
     //
-    // Das ist die maszgebliche Quelle fuer Framebereich UND Abspielrate.
-    // Gibt eine .car-Zeile kein -framespeed an, schreibt Carcass genau diese
-    // Rate in die animation.cfg. An drei echten Dateien geprueft:
-    // torso_handsignal2 hat 0..72 bei Rate 20 und steht in Ravens
-    // animation.cfg mit frameCount 73 und frameSpeed 20.
+    // This is the authoritative source for the frame range AND playback rate.
+    // If a .car line gives no -framespeed, Carcass writes exactly this rate
+    // into animation.cfg. Checked against three real files:
+    // torso_handsignal2 has 0..72 at rate 20 and appears in Raven's
+    // animation.cfg with frameCount 73 and frameSpeed 20.
     float frameRate = 0.0f;
     bool  hasScene = false;
 
-    // Framebereich laut SI_Scene. Gebaut wird mit dem Bereich der Keys
-    // (firstFrame..lastFrame); weichen beide voneinander ab, ist die Datei
-    // fehlerhaft exportiert. Carcass bricht dann mit "Header # frames = N,
-    // but I read in M!!" ab, g2c baut mit den Keys und warnt.
+    // Frame range according to SI_Scene. The build uses the key range
+    // (firstFrame..lastFrame); if the two differ, the file was exported
+    // incorrectly. Carcass then aborts with "Header # frames = N, but I read
+    // in M!!", g2c builds with the keys and warns.
     int sceneFirst = 0;
     int sceneLast = 0;
     bool sceneRangeDiffers() const {
@@ -90,59 +90,60 @@ struct AnimFile {
     const AnimNode* find(const std::string& bone) const;
     int             indexOf(const std::string& bone) const;
 
-    // Lokale Matrix eines Knotens in einem Frame.
+    // Local matrix of a node in a frame.
     //
-    // Wichtig: SI_FCurve-Werte sind LOKAL, also relativ zum Elternmodell —
-    // anders als SI_Transform BASEPOSE-*, das absolut ist. Mit der Annahme
-    // "absolut" passt nichts.
+    // Important: SI_FCurve values are LOCAL, i.e. relative to the parent
+    // model - unlike SI_Transform BASEPOSE-*, which is absolute. Assuming
+    // "absolute", nothing fits.
     Mat3x4 localMatrix(int node, int frame) const;
 
-    // Weltposen aller Knoten in einem Frame, ueber die XSI-Hierarchie.
+    // World poses of all nodes in a frame, via the XSI hierarchy.
     std::vector<Mat3x4> worldMatrices(int frame) const;
 };
 
-// Liest Hierarchie und FCurves aus einem geparsten dotXSI-Dokument.
+// Reads the hierarchy and FCurves from a parsed dotXSI document.
 AnimFile loadAnimation(const Document& doc, const std::string& sourcePath = {});
 AnimFile loadAnimationFile(const std::string& path);
 
-// --- Auswertung gegen ein Referenzskelett ---------------------------------
+// --- Evaluation against a reference skeleton -------------------------------
 
 struct EvalOptions {
-    // $scale aus der .car. Muss mit dem Wert uebereinstimmen, mit dem die
-    // Referenz-GLA gebaut wurde, sonst passen die Basisposen nicht.
+    // $scale from the .car. Must match the value the reference GLA was built
+    // with, otherwise the base poses don't fit.
     float scale = 1.0f;
 
-    // -origin aus der .car. Wird als negative Translation auf den Wurzelbone
-    // gelegt; in der echten _humanoid.gla steht bei model_root (0,0,-24)
-    // passend zu "-origin 0 0 24".
+    // -origin from the .car. Applied as a negative translation on the root
+    // bone; the real _humanoid.gla has (0,0,-24) at model_root, matching
+    // "-origin 0 0 24".
     std::optional<std::array<float, 3>> origin;
 
-    // Bones des Referenzskeletts, die in der Animationsdatei fehlen, bleiben
-    // in ihrer Ruhepose. Bei true wird jeder fehlende Bone einmal gemeldet.
+    // Bones of the reference skeleton that are missing from the animation
+    // file stay in their rest pose. If true, each missing bone is reported
+    // once.
     bool warnMissingBones = true;
 
-    // Umbenennungen: Schluessel ist der Bonename in der Referenz-GLA, Wert der
-    // in der dotXSI. Wird gebraucht, weil Raven zwischen Builds umbenannt hat —
-    // in der vorliegenden _humanoid.gla heisst der Bone "face", in root.xsi und
-    // in den Animationsdateien dagegen "face_always_". Ohne die Zuordnung
-    // bleiben der Bone und alle acht Gesichtsknochen darunter in der Ruhepose.
+    // Renames: the key is the bone name in the reference GLA, the value the
+    // one in the dotXSI. Needed because Raven renamed bones between builds -
+    // in the available _humanoid.gla the bone is called "face", but in
+    // root.xsi and the animation files it is "face_always_". Without the
+    // mapping, the bone and all eight face bones below it stay in rest pose.
     std::map<std::string, std::string> aliases;
 
-    // Wurzelbewegung.
+    // Root motion.
     //
-    // Carcass legt auf den Wurzelbone eine LINEARE RAMPE, die ueber die
-    // Sequenz genau die Gesamtverschiebung des Motion-Bones abbaut — als
-    // Gegenbewegung, also mit umgekehrtem Vorzeichen zur normalen
-    // Positionsumrechnung. Die Engine addiert die Verschiebung dann selbst.
+    // Carcass puts a LINEAR RAMP on the root bone that, over the sequence,
+    // cancels out exactly the total displacement of the Motion bone - as a
+    // counter-movement, i.e. with the opposite sign of the normal position
+    // conversion. The engine then adds the displacement itself.
     //
-    // Wichtig: es ist eine Rampe, NICHT die tatsaechliche Kurve des
-    // Motion-Bones. An BOTH_DEATH17 und BOTH_SIT2TOSTAND5 geprueft — dort
-    // schwankt Motion stark, der Wurzelbone laeuft trotzdem schnurgerade.
+    // Important: it is a ramp, NOT the actual curve of the Motion bone.
+    // Checked on BOTH_DEATH17 and BOTH_SIT2TOSTAND5 - Motion fluctuates
+    // strongly there, yet the root bone moves in a dead-straight line.
     //
     //     ramp(f) = -scale * C * (W_motion(last) - W_motion(first)) * f/(n-1)
     //
-    // Ohne das bleibt die Figur bei Sterbe- und Aufstehanimationen auf der
-    // Stelle stehen, statt sich zu verschieben.
+    // Without this, the figure stays on the spot in death and get-up
+    // animations instead of moving.
     bool        extractRootMotion = true;
     std::string motionBone = "Motion";
 };
@@ -150,35 +151,35 @@ struct EvalOptions {
 struct EvalResult {
     AnimationFrames          frames;
 
-    // Gesamte Wurzelverschiebung im GLA-Raum ueber die Sequenz. Geteilt durch
-    // die Zahl der Schritte ergibt das den Wert, den Carcass als
-    // "averagevec" in die .frames schreibt — dort allerdings mit umgekehrtem
-    // Vorzeichen, weil die Rampe eine Gegenbewegung ist.
+    // Total root displacement in GLA space over the sequence. Divided by the
+    // number of steps, this gives the value Carcass writes as "averagevec"
+    // into the .frames file - there with the opposite sign, though, because
+    // the ramp is a counter-movement.
     float rootMotion[3] = {0.0f, 0.0f, 0.0f};
-    std::vector<std::string> missingBones;   // im Skelett, nicht in der XSI
-    std::vector<std::string> extraBones;     // in der XSI, nicht im Skelett
+    std::vector<std::string> missingBones;   // in the skeleton, not in the XSI
+    std::vector<std::string> extraBones;     // in the XSI, not in the skeleton
     int                      frameCount = 0;
 };
 
-// Rechnet eine Animationsdatei in Frames fuer das Referenzskelett um.
+// Converts an animation file into frames for the reference skeleton.
 //
-// Die Formel folgt der Engine. tr_ghoul2.cpp wertet
+// The formula follows the engine. tr_ghoul2.cpp evaluates
 //     W(bone) = W(parent) * A(bone)
-// aus, und die Skinning-Matrix ist X * B^-1. Umgestellt:
+// and the skinning matrix is X * B^-1. Rearranged:
 //     A(b) = B(parent) * X(parent)^-1 * X(b) * B(b)^-1
 //
-// B ist die basePoseMat aus der Referenz-GLA, X die konvertierte Weltpose
-// aus den FCurves. Gegen BOTH_attack10.xsi und die echte _humanoid.gla
-// geprueft: 840 Vergleiche, max. Rotationsabweichung 1,77e-4 bei einer
-// Quantisierungsschrittweite von 6,10e-5.
+// B is the basePoseMat from the reference GLA, X the converted world pose
+// from the FCurves. Checked against BOTH_attack10.xsi and the real
+// _humanoid.gla: 840 comparisons, max. rotation deviation 1.77e-4 with a
+// quantization step size of 6.10e-5.
 EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalOptions& opt = {});
 
-// Haengt mehrere Animationen hintereinander, wie es $aseanimgrab tut.
+// Concatenates multiple animations, as $aseanimgrab does.
 struct ConcatResult {
     AnimationFrames frames;
     struct Entry {
-        std::string name;         // Sequenzname
-        int         targetFrame;  // Startframe in der Gesamtanimation
+        std::string name;         // sequence name
+        int         targetFrame;  // start frame in the combined animation
         int         frameCount;
         std::string sourceFile;
     };

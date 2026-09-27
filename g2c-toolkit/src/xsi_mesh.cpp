@@ -35,7 +35,7 @@ Mat3x4 eulerXYZ(float rx, float ry, float rz) {
     return m;
 }
 
-// Y-hoch nach Z-hoch, dieselbe Konvention wie bei den Bones.
+// Y-up to Z-up, the same convention as for the bones.
 void toGlmSpace(const float in[3], float scale, float out[3]) {
     out[0] = scale * in[0];
     out[1] = scale * -in[2];
@@ -52,7 +52,7 @@ std::string stripPrefix(const std::string& s, const char* prefix) {
     return s.rfind(prefix, 0) == 0 ? s.substr(n) : s;
 }
 
-// Ein Attributblock aus SI_Shape: Anzahl, Bezeichner, dann die Werte.
+// One attribute block from SI_Shape: count, identifier, then the values.
 struct ShapeArray {
     std::string        kind;   // POSITION, NORMAL, TEX_COORD_UV0, ...
     std::vector<float> values;
@@ -62,13 +62,13 @@ struct ShapeArray {
 };
 
 std::vector<ShapeArray> parseShape(const Template& shape) {
-    // Aufbau: <anzahlArrays>, "ORDERED", dann je Array:
-    //         <n>, "<kind>", <n*stride Werte>
+    // Layout: <arrayCount>, "ORDERED", then per array:
+    //         <n>, "<kind>", <n*stride values>
     std::vector<ShapeArray> out;
     std::size_t i = 0;
     const auto& v = shape.values;
 
-    // Ueber die fuehrende Anzahl und "ORDERED" hinweggehen.
+    // Skip over the leading count and "ORDERED".
     while (i < v.size() && !v[i].asNumber()) ++i;
     if (i < v.size()) ++i;
     while (i < v.size() && v[i].text() == "ORDERED") ++i;
@@ -85,22 +85,22 @@ std::vector<ShapeArray> parseShape(const Template& shape) {
         const std::size_t need = static_cast<std::size_t>(*n) * static_cast<std::size_t>(a.stride);
         i += 2;
 
-        // Nach Anzahl und Bezeichner koennen weitere Zeichenketten folgen.
-        // TEX_COORD_UV0 traegt zusaetzlich den Projektionsnamen:
+        // More strings may follow the count and identifier.
+        // TEX_COORD_UV0 additionally carries the projection name:
         //
         //     609,
         //     "TEX_COORD_UV0",
-        //     "Texture_Projection",     <-- zusaetzlich
+        //     "Texture_Projection",     <-- additional
         //     0.127449,0.841402,
         //
-        // Wer den nicht ueberliest, liest ab hier um eine Stelle versetzt.
-        // Jede Ecke bekommt dann eine falsche UV, und weil die
-        // Vertexzusammenfassung UV-Gleichheit verlangt, faellt anschliessend
-        // gar nichts mehr zusammen. Der Fehler tarnt sich weit hinten als
-        // scheinbares Toleranzproblem: keine noch so grosse Normaltoleranz
-        // aendert etwas, weil die UV-Bedingung davor schon alles blockiert.
+        // If you don't skip it, everything from here on is read off by one.
+        // Every corner then gets a wrong UV, and because vertex merging
+        // requires equal UVs, nothing merges at all afterwards. The bug
+        // disguises itself far downstream as an apparent tolerance problem:
+        // no normal tolerance, however large, changes anything, because the
+        // UV condition before it already blocks everything.
         //
-        // Deshalb allgemein: ueberspringen, was keine Zahl ist.
+        // Hence, in general: skip whatever is not a number.
         while (i < v.size() && !v[i].asNumber()) ++i;
 
         a.values.reserve(need);
@@ -119,12 +119,12 @@ const ShapeArray* findArray(const std::vector<ShapeArray>& arrays, const char* p
     return nullptr;
 }
 
-// Ein Eintrag der Envelope-Liste: welches Mesh, welcher Bone, welche
-// Vertices mit welchem Gewicht.
+// One entry of the envelope list: which mesh, which bone, which
+// vertices with which weight.
 struct EnvelopeEntry {
     std::string      mesh;
     std::string      bone;
-    std::vector<std::pair<int, float>> weights;   // Positionsindex, Prozent
+    std::vector<std::pair<int, float>> weights;   // position index, percent
 };
 
 std::vector<EnvelopeEntry> parseEnvelopes(const Document& doc) {
@@ -145,8 +145,8 @@ std::vector<EnvelopeEntry> parseEnvelopes(const Document& doc) {
             const auto idx = e->values[i].asInt();
             const auto w = e->values[i + 1].asNumber();
             if (!idx || !w) continue;
-            // Gewichte stehen in Prozent. Nullgewichte sind ausdruecklich
-            // aufgefuehrt und gehoeren verworfen.
+            // Weights are given in percent. Zero weights are listed
+            // explicitly and must be discarded.
             if (*w <= 0.0) continue;
             en.weights.emplace_back(static_cast<int>(*idx), static_cast<float>(*w * 0.01));
         }
@@ -155,7 +155,7 @@ std::vector<EnvelopeEntry> parseEnvelopes(const Document& doc) {
     return out;
 }
 
-// Shader aus XSI_CustomPSet <mesh>.Game { "NODE", 1, "Shader","Text","<pfad>" }
+// Shader from XSI_CustomPSet <mesh>.Game { "NODE", 1, "Shader","Text","<path>" }
 std::map<std::string, std::string> parseShaders(const Template& t,
                                                 std::map<std::string, std::string>& out) {
     if (t.type == "XSI_CustomPSet" && t.name.size() > 5) {
@@ -165,10 +165,10 @@ std::map<std::string, std::string> parseShaders(const Template& t,
             nm = nm.substr(0, nm.size() - suffix.size());
             for (std::size_t i = 0; i + 2 < t.values.size(); ++i) {
                 if (t.values[i].text() == "Shader" && t.values[i + 1].text() == "Text") {
-                    // Manche XSI_CustomPSet-Eintraege schreiben Windows-Pfade
-                    // mit Backslashes. In der GLM stehen durchgehend
-                    // Schraegstriche — sonst findet die Engine die Textur
-                    // nicht, und ModView meldet sie als fehlend.
+                    // Some XSI_CustomPSet entries write Windows paths with
+                    // backslashes. The GLM uses forward slashes throughout -
+                    // otherwise the engine can't find the texture and ModView
+                    // reports it as missing.
                     std::string path = t.values[i + 2].text();
                     std::replace(path.begin(), path.end(), '\\', '/');
                     out[shortName(nm)] = path;
@@ -180,16 +180,16 @@ std::map<std::string, std::string> parseShaders(const Template& t,
     return out;
 }
 
-// Schluessel fuer die Vertexzusammenfassung.
+// Key for vertex merging.
 //
-// NICHT die Attributindizes: in Ravens Dateien ist der Normalenindex je Ecke
-// fortlaufend (0,1,2 / 3,4,5 / ...), sodass ueber Indizes nie etwas
-// zusammenfaellt — bei "hips" kaemen 609 statt 132 Vertices heraus, also
-// genau drei je Dreieck.
+// NOT the attribute indices: in Raven's files the normal index runs
+// sequentially per corner (0,1,2 / 3,4,5 / ...), so merging by index never
+// merges anything - "hips" would come out with 609 instead of 132 vertices,
+// i.e. exactly three per triangle.
 //
-// Zusammengefasst wird nach WERT: gleiche Position, gleiche Normale, gleiche
-// UV ergeben denselben Vertex. Die Werte werden dafuer auf ein feines Gitter
-// gerundet, sonst verhindert Rechenrauschen im letzten Bit jede Uebereinstimmung.
+// Merging is by VALUE: same position, same normal, same UV yield the same
+// vertex. The values are rounded to a fine grid for this, otherwise numerical
+// noise in the last bit prevents any match.
 struct VertexKey {
     int pos = 0;
     int nx = 0, ny = 0, nz = 0;
@@ -211,8 +211,8 @@ struct VertexKeyHash {
     }
 };
 
-// Normalen auf rund 1/16384, UVs auf rund 1/65536 quantisieren. Fein genug,
-// dass echte Kanten getrennt bleiben, grob genug gegen Rundungsrauschen.
+// Quantize normals to about 1/16384 and UVs to about 1/65536. Fine enough
+// that real edges stay separate, coarse enough to absorb rounding noise.
 inline int quantN(float f) { return static_cast<int>(std::lround(f * 16384.0f)); }
 inline int quantUV(float f) { return static_cast<int>(std::lround(f * 65536.0f)); }
 
@@ -242,8 +242,8 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
     res.mesh.animName = opt.animName;
     res.mesh.numBones = static_cast<int>(opt.boneNames.size());
 
-    // Bonename -> Index. Aliase zeigen von der Referenz in die dotXSI, hier
-    // wird umgekehrt nachgeschlagen.
+    // Bone name -> index. Aliases point from the reference into the dotXSI;
+    // here the lookup goes the other way round.
     std::map<std::string, int> boneIndex;
     for (std::size_t i = 0; i < opt.boneNames.size(); ++i) {
         boneIndex[opt.boneNames[i]] = static_cast<int>(i);
@@ -255,15 +255,15 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
     std::map<std::string, std::string> shaders;
     for (const auto& r : doc.roots) parseShaders(r, shaders);
 
-    // Envelope nach Mesh gruppieren.
+    // Group envelopes by mesh.
     std::map<std::string, std::vector<const EnvelopeEntry*>> envByMesh;
     for (const auto& e : envelopes) envByMesh[e.mesh].push_back(&e);
 
-    // --- Modellbaum durchlaufen -------------------------------------------
+    // --- Walk the model tree ----------------------------------------------
     struct Found {
         std::string     xsiName;
         const Template* model = nullptr;
-        int             parent = -1;   // Index in dieser Liste
+        int             parent = -1;   // index into this list
     };
     std::vector<Found> found;
 
@@ -289,11 +289,11 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
     LOD lod;
     lod.surfaces.reserve(found.size());
 
-    // Welche Surface aus welchem Fund wurde. Ein uebersprungenes Mesh — ohne
-    // Shape, ohne Dreiecke — hat keine; f.parent zeigt aber in die Fundliste.
-    // Ohne Umrechnung verrutschten danach alle Elternbezuege um eins, und die
-    // Shadervererbung unten, die nach gleichem Elternteil sucht, griffe
-    // daneben.
+    // Which surface came from which found entry. A skipped mesh - no shape,
+    // no triangles - has none; f.parent, however, points into the found list.
+    // Without remapping, all parent references after it would shift by one,
+    // and the shader inheritance below, which looks for the same parent,
+    // would miss.
     std::vector<int> surfaceOf(found.size(), -1);
 
     for (std::size_t fi = 0; fi < found.size(); ++fi) {
@@ -333,17 +333,16 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
             continue;
         }
 
-        // Objekttransformation des Mesh-Modells.
+        // Object transform of the mesh model.
         //
-        // BASEPOSE, nicht SRT: BASEPOSE ist die ABSOLUTE Pose, SRT die lokale
-        // relativ zum Elternmodell. Die Mesh-Modelle sind ineinander
-        // verschachtelt (torso unter hips unter mesh_root), sodass der lokale
-        // Wert ohne Akkumulation ueber die ganze Kette falsch ist.
+        // BASEPOSE, not SRT: BASEPOSE is the ABSOLUTE pose, SRT the local one
+        // relative to the parent model. The mesh models are nested inside each
+        // other (torso under hips under mesh_root), so the local value is wrong
+        // unless accumulated over the whole chain.
         //
-        // Mit SRT lagen 83 von 84 Surfaces um exakt denselben Betrag daneben —
-        // ein konstanter Versatz, der genau auf eine fehlende Elternkette
-        // hindeutet. Dieselbe Unterscheidung war schon bei den Bones
-        // entscheidend.
+        // With SRT, 83 of 84 surfaces were off by exactly the same amount - a
+        // constant offset that points precisely to a missing parent chain. The
+        // same distinction was already decisive for the bones.
         Mat3x4 xf = Mat3x4::identity();
         for (const Template* x : f.model->findAll("SI_Transform")) {
             if (x->name.rfind("BASEPOSE-", 0) != 0 || x->values.size() < 9) continue;
@@ -363,9 +362,9 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
             break;
         }
 
-        // --- TriangleList lesen -------------------------------------------
-        // Aufbau: <anzahl>, "<attribute>", "<material>", dann je ein
-        // Indexblock mit anzahl*3 Werten — Positionen, Normalen, UVs.
+        // --- Read the TriangleList ----------------------------------------
+        // Layout: <count>, "<attributes>", "<material>", then one index
+        // block each with count*3 values - positions, normals, UVs.
         if (tris->values.size() < 3) {
             res.stats.warnings.push_back("TriangleList von \"" + f.xsiName + "\" ist leer");
             continue;
@@ -397,28 +396,28 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
             continue;
         }
 
-        // Gewichte dieses Meshes: Positionsindex -> Liste (Bone, Gewicht).
+        // Weights of this mesh: position index -> list of (bone, weight).
         std::map<int, std::vector<VertexWeight>> weightsByPos;
         const auto ev = envByMesh.find(f.xsiName);
         if (ev != envByMesh.end()) {
             for (const EnvelopeEntry* e : ev->second) {
                 const auto bi = boneIndex.find(e->bone);
-                if (bi == boneIndex.end()) continue;   // Bone nicht im Skelett
+                if (bi == boneIndex.end()) continue;   // bone not in the skeleton
                 for (const auto& [vi, w] : e->weights)
                     weightsByPos[vi].push_back(VertexWeight{bi->second, w});
             }
         }
 
-        // --- Attributaufloesung -------------------------------------------
+        // --- Attribute resolution -----------------------------------------
         //
-        // dotXSI hat je Attribut ein eigenes Indexarray; GLM kennt nur einen
-        // Index pro Vertex. Also jedes vorkommende Tripel einmal anlegen und
-        // wiederverwenden. Bei "hips" stehen 132 Positionen 609 Normalen
-        // gegenueber und es entstehen wieder genau 132 Vertices — dort faellt
-        // jede Normale mit derselben Position zusammen.
-        // Kandidaten nach Positionsindex gruppiert. Die Suche laeuft nur
-        // innerhalb einer Position — mehr verlangt die Regel nicht, und aus
-        // der linearen Suche ueber alle Vertices wird eine ueber wenige.
+        // dotXSI has a separate index array per attribute; GLM knows only one
+        // index per vertex. So create each occurring triple once and reuse
+        // it. For "hips", 132 positions face 609 normals, and again exactly
+        // 132 vertices result - there every normal merges with the same
+        // position.
+        // Candidates are grouped by position index. The search only runs
+        // within one position - the rule requires no more than that, and the
+        // linear search over all vertices becomes one over just a few.
         struct Proto {
             float uv[2];
             float normal[3];
@@ -450,8 +449,8 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                 }
                 if (nrm && ni >= 0 && static_cast<std::size_t>(ni) < nrm->count()) {
                     const float* n = &nrm->values[static_cast<std::size_t>(ni) * 3];
-                    // Normalen werden nur gedreht, nicht verschoben, und die
-                    // Skalierung faellt bei der anschliessenden Normierung weg.
+                    // Normals are only rotated, not translated, and the scale
+                    // drops out in the subsequent normalization.
                     const float world[3] = {xf.m[0][0] * n[0] + xf.m[0][1] * n[1] + xf.m[0][2] * n[2],
                                             xf.m[1][0] * n[0] + xf.m[1][1] * n[1] + xf.m[1][2] * n[2],
                                             xf.m[2][0] * n[0] + xf.m[2][1] * n[1] + xf.m[2][2] * n[2]};
@@ -466,23 +465,21 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                 if (uv && ui >= 0 && static_cast<std::size_t>(ui) < uv->count()) {
                     const float* u = &uv->values[static_cast<std::size_t>(ui) * 2];
                     v.uv[0] = u[0];
-                    // dotXSI zaehlt V von unten, GLM von oben.
+                    // dotXSI counts V from the bottom, GLM from the top.
                     v.uv[1] = 1.0f - u[1];
                 }
 
-                // Zusammengefasst wird nach Position UND UV, nicht nach der
-                // Normalen.
+                // Merging is by position AND UV, not by the normal.
                 //
-                // Position allein reicht nicht: an UV-Naehten muss derselbe
-                // Punkt zweimal vorkommen, sonst faellt die Texturierung in
-                // sich zusammen. Bei "torso" sind es 143 Positionen, aber 159
-                // Vertices in der Originaldatei.
+                // Position alone is not enough: at UV seams the same point
+                // must occur twice, otherwise the texturing collapses. For
+                // "torso" there are 143 positions but 159 vertices in the
+                // original file.
                 //
-                // Die Normale gehoert dagegen NICHT in den Schluessel: in
-                // Ravens Dateien hat jede Dreiecksecke ihren eigenen
-                // Normalenindex mit leicht abweichendem Wert. Nimmt man sie
-                // dazu, faellt gar nichts mehr zusammen und aus 132 Vertices
-                // werden 583.
+                // The normal, on the other hand, does NOT belong in the key:
+                // in Raven's files every triangle corner has its own normal
+                // index with a slightly different value. Include it and
+                // nothing merges at all, and 132 vertices turn into 583.
                 auto& bucket = byPos[pi];
                 int hit = -1;
                 for (const Proto& p : bucket) {
@@ -494,7 +491,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                         std::fabs(p.normal[2] - v.normal[2]) >= opt.normalTolerance)
                         continue;
                     hit = p.index;
-                    break;   // erster Treffer gewinnt, nicht der beste
+                    break;   // first hit wins, not the best one
                 }
                 if (hit >= 0) {
                     tri.indexes[c] = hit;
@@ -511,17 +508,17 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                 surf.vertices.push_back(std::move(v));
                 tri.indexes[c] = newIndex;
             }
-            // Wickelrichtung umkehren.
+            // Reverse the winding order.
             //
-            // dotXSI und GLM zaehlen die Ecken gegenlaeufig. An Ravens
-            // _humanoid.glm gemessen: dort zeigt die aus den Positionen
-            // berechnete Flaechennormale bei ALLEN 2846 Dreiecken
-            // entgegengesetzt zur gemittelten Vertexnormale — ohne
-            // Umkehrung kommt bei allen 2846 das Gegenteil heraus.
+            // dotXSI and GLM order the corners in opposite directions.
+            // Measured on Raven's _humanoid.glm: there the face normal
+            // computed from the positions points opposite to the averaged
+            // vertex normal for ALL 2846 triangles - without reversal, all
+            // 2846 come out the other way round.
             //
-            // Sichtbar wird das als scheinbar umgedrehte Normalen: die
-            // Flaechen werden von innen gerendert. Die Normalen selbst sind
-            // dabei voellig in Ordnung.
+            // It shows up as seemingly flipped normals: the faces are
+            // rendered from the inside. The normals themselves are perfectly
+            // fine.
             std::swap(tri.indexes[1], tri.indexes[2]);
             surf.triangles.push_back(tri);
         }
@@ -538,8 +535,8 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         lod.surfaces.push_back(std::move(surf));
     }
 
-    // Elternbezuege von Fund- auf Surfaceindizes umrechnen. Fehlt der
-    // unmittelbare Elternteil, gilt der naechste vorhandene darueber.
+    // Remap parent references from found indices to surface indices. If the
+    // immediate parent is missing, the next existing one above it applies.
     for (std::size_t fi = 0; fi < found.size(); ++fi) {
         if (surfaceOf[fi] < 0) continue;
         int p = found[fi].parent;
@@ -549,27 +546,27 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
             p < 0 ? -1 : surfaceOf[static_cast<std::size_t>(p)];
     }
 
-    // Shaderzuweisung vervollstaendigen.
+    // Complete the shader assignment.
     //
-    // Nur 37 der 84 Mesh-Modelle tragen ein XSI_CustomPSet mit Shadernamen.
-    // Die uebrigen — vor allem die Tags — erben ihn vom **unmittelbar
-    // vorangehenden Geschwister**: gleicher Elternteil, vorherige Position in
-    // der Surfacereihenfolge. Gibt es keines, steht "[nomaterial]".
+    // Only 37 of the 84 mesh models carry an XSI_CustomPSet with a shader
+    // name. The rest - above all the tags - inherit it from the **immediately
+    // preceding sibling**: same parent, previous position in the surface
+    // order. If there is none, "[nomaterial]" is used.
     //
-    // NICHT vom Elternteil selbst. Der Unterschied ist gut sichtbar:
-    // "*l_hand" haengt unter "l_hand" (hand.tga), traegt aber "torso.tga" —
-    // den Shader seines Vorgaengers "l_hand_sleeve". Und "*l_arm_cap_l_hand"
-    // haengt unter "l_arm" (torso.tga) und traegt "hand.tga" von seinem
-    // Vorgaenger "l_hand". Mit Elternvererbung kommt genau das Vertauschte
-    // heraus.
+    // NOT from the parent itself. The difference is clearly visible:
+    // "*l_hand" hangs under "l_hand" (hand.tga) but carries "torso.tga" -
+    // the shader of its predecessor "l_hand_sleeve". And "*l_arm_cap_l_hand"
+    // hangs under "l_arm" (torso.tga) and carries "hand.tga" from its
+    // predecessor "l_hand". Parent inheritance produces exactly the swapped
+    // result.
     //
-    // An allen 46 Tags von Ravens _humanoid.glm geprueft: 44 folgen der
-    // Regel, die beiden uebrigen ("*l_leg_calf", "*r_leg_calf") haben kein
-    // vorangehendes Geschwister und tragen "[nomaterial]".
+    // Checked against all 46 tags of Raven's _humanoid.glm: 44 follow the
+    // rule, the remaining two ("*l_leg_calf", "*r_leg_calf") have no
+    // preceding sibling and carry "[nomaterial]".
     //
-    // Ein LEERER Shadername kommt in der Originaldatei nirgends vor. ModView
-    // laedt Shader ueber genau diesen Namen und meldet sonst fehlende
-    // Texturen.
+    // An EMPTY shader name occurs nowhere in the original file. ModView
+    // loads shaders by exactly this name and otherwise reports missing
+    // textures.
     for (std::size_t i = 0; i < lod.surfaces.size(); ++i) {
         Surface& s = lod.surfaces[i];
         if (!s.shader.empty()) continue;

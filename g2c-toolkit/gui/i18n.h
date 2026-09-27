@@ -1,13 +1,13 @@
-// gui/i18n.h — Zeichenketten der Oberflaeche in vier Sprachen.
+// gui/i18n.h - UI strings in four languages.
 //
-// Ein Aufzaehlungstyp statt freier Schluessel: ein Tippfehler faellt dann
-// beim Uebersetzen auf und nicht erst als leerer Knopf im laufenden
-// Programm. Die Tabelle liegt als ein Feld je Eintrag vor, damit beim
-// Nachtragen einer Sprache sichtbar wird, wo etwas fehlt.
+// An enum instead of free-form keys: a typo is then caught at compile time
+// and not only as an empty button in the running program. The table has one
+// field per entry, so that when adding a language it is visible where
+// something is missing.
 //
-// Alle Zeichenketten sind UTF-8. Unter MSVC ist dafuer /utf-8 noetig, sonst
-// deutet der Compiler die Quelldatei als Codepage 1252 und macht aus jedem
-// Umlaut zwei Zeichen.
+// All strings are UTF-8. Under MSVC this requires /utf-8, otherwise the
+// compiler interprets the source file as code page 1252 and turns every
+// umlaut into two characters.
 
 #pragma once
 
@@ -20,20 +20,20 @@ enum class Lang { De = 0, En, Zh, Ja, Count };
 
 const char* langName(Lang l);
 
-// Reihenfolge egal, Vollstaendigkeit nicht: jeder Eintrag braucht vier Texte.
+// Order doesn't matter, completeness does: every entry needs four texts.
 enum class S {
-    // Menue
+    // Menu
     MenuFile, MenuBuild, MenuView,
     OpenScript, OpenFolder, Save, SaveAll, CloseTab, CloseAll,
     BuildCurrent, BuildAll, ValidateAll,
     Dark, Light, Settings, Language,
 
-    // Werkzeugleiste
+    // Toolbar
     BtnSave, BtnSaveAll, BtnBuild, BtnBuildAll, BtnValidate,
     BtnOpenFolder, BtnAddXsi, BtnAddXsiFolder, BtnAddXsiFolderAll, BtnAddXsiAll,
     BtnCancel,
 
-    // Einstellungen
+    // Settings
     SecPaths, SecOutput, SecProcessing,
     AssetRoot, ReferenceGla, EnumTable,
     OutputPerScript, AssignDefaultOutputs, AssignTooltip,
@@ -42,14 +42,14 @@ enum class S {
     ReadFrameCounts, ReadFrameCountsTooltip, CoresInUse,
     ReferenceGlaTooltip,
 
-    // Tabelle
+    // Table
     ColSequence, ColFrames, ColLoop, ColSpeed, ColExtra, ColSource, ColEnum,
     FilterHint, GrabCount, ReadingFrames,
     OutputTo, NotSet, ChooseFolder, DefaultFolder, ClearFolder,
     EnumOk, EnumMissing, EnumNoTable,
     EnumTooltipHeader, EnumTooltipMissing, EnumTooltipNoTable,
 
-    // Meldungen
+    // Messages
     TabIssues, TabLog, NotValidated, NoIssues,
     ColLevel, ColMessage,
     LevelError, LevelWarning, LevelInfo,
@@ -61,39 +61,39 @@ enum class S {
     DlgInAnims, DlgNotInAnims, DlgFrameCount,
     ChooserFilter, ChooserNoTable, ChooserNarrow,
 
-    // Statuszeile und Hinweise
+    // Status bar and hints
     NoScriptOpen, HintOpenFolder1, HintOpenFolder2,
     ScriptsOpen, Reference,
 
-    // Nachtrag: alles, was zuerst nur auf Deutsch dastand.
+    // Addendum: everything that was initially only in German.
     TipDefaultFolder, TipEnumColumn, ColLine, ChooserCount,
     DlgTitleCar, DlgTitleCarFolder, DlgTitleXsi, DlgTitleXsiFolder,
     DlgTitleOutput, DlgTitleGla, DlgTitleEnums,
 
-    // Umordnen, Loeschen, Neuanlage
+    // Reordering, deleting, creating
     New, NewCar, MoveUp, MoveDown, MoveTop, MoveBottom, DeleteSeq, DeleteSelected,
     CtxEdit, FilterBlocksMove, DragHint, Deleted, Moved, NewCarCreated, DlgTitleNewCar,
     ConfirmDelete, Yes, No,
     InsertHere, InsertHereCount, CutSelection, SelectionHint,
 
-    // Zweiter Modus: GLA zurueck nach dotXSI
+    // Second mode: GLA back to dotXSI
     ModeBuild, ModeExtract, ModeBuildHint, ModeExtractHint,
     OpenGla, OpenCfg, GlaInfo, NoGlaOpen, NoGlaHint,
     ColStart, ColCount, ColFps, ColLoopFrame,
     ExportSelected, ExportAll, ExportTarget, Exported, ExportFailed,
     SeqCount, NoCfgWarning, NoFramesHint,
 
-    // Fehlermeldungen mit Substanz
+    // Error messages with substance
     NotAFile, NotAnXsi, FileGone,
     MissingHead, MissingSearched, MissingList, MissingHintBase, MissingHintSkip,
     MissingMore, SeqLabel,
     ExportAllWithCar, ExportAllWithCarTip, Grouped, CarWritten, PartialWarn,
 
-    // Zwei Humanoids vergleichen
+    // Comparing two humanoids
     Compare, CompareTip, CompareLoaded, CompareCol, OnlyMissing, SelectMissing,
     CompareNone, CompareCount, MissingHere, PresentHere,
 
-    // Protokollmeldungen
+    // Log messages
     LogReady, LogRestored, LogAlreadyOpen, LogAssetRootFound, LogRefGlaFound,
     LogRefGlaSet, LogFound, LogNoCfgNearby, LogEnumsLoaded, LogXsiInFolder,
     LogNoXsiIn, LogAddedTo, LogOutputsSet, LogSaved, LogExists, LogCannotRead,
@@ -104,10 +104,10 @@ enum class S {
     LogOpened, LogGlaOpened, LogFramesLoaded, LogDeleted, LogMoved, LogSeqsRead,
     LogNoOutputAt, LogUnreadable, LogAddedFiles,
 
-    // Kopieren und Einfuegen
+    // Copy and paste
     Copy, Cut, PasteBefore, PasteAfter, PasteEnd, ClipEmpty, Copied, Pasted, ClipHint,
 
-    // Vorschau
+    // Preview
     About, AboutBuilt, AboutBits, AboutRuntimeOk, AboutRuntimeBad,
     SavedBeforeBuild, SameOutDir, CfgBelongsWithGla,
     CopyLog, CopyLogTip, LogCopied, ClearLog,
@@ -120,21 +120,28 @@ enum class S {
     OpenFrames, OriginLabel, OriginDetected, OriginNone, FramesMissing, FramesLoaded,
     NotValidatedHint, EnumsAvailable, DlgStart, SpeedAuto, BuildProgress,
 
-    // Rueckfragen, Sicherungen, bisher fest deutsche Texte
+    // Confirmations, backups, formerly hard-coded German texts
     UnsavedHead, Discard, OverwriteHead, Overwrite, LogBackedUp, DragOtherTab,
     NErrors, NWarnings, Validated, DlgSeqTitle, LogCarsUnder, DupInCfg, DupIssue,
     LogWriteFailed, LogSeqsSkipped,
+
+    // Updates
+    SecUpdates, UpdAuto, UpdAutoTip, UpdStable, UpdSnapshot, UpdChannelTip, AboutVersion,
+    UpdCheckNow, UpdChecking, UpdUpToDate, UpdAvailable, UpdInstall, UpdNotes, UpdLater,
+    UpdSkip, UpdDownloading, UpdInstalled, UpdRestart, UpdDone, UpdOpenPage, UpdCancelled,
+    UpdErrNetwork, UpdErrNoRelease, UpdErrBadAnswer, UpdErrNoAsset, UpdErrUntrusted,
+    UpdErrChecksum, UpdErrWrite,
 
     Count
 };
 
 const char* tr(S id);
 
-// Uebersetzten Text formatieren.
+// Formats a translated text.
 //
-// Spart an dreissig Stellen dasselbe snprintf mit eigenem Puffer. Der Puffer
-// ist statisch und wird reihum benutzt: das Ergebnis wandert sofort ins
-// Protokoll, ein laengeres Leben braucht es nicht.
+// Saves the same snprintf with its own buffer in thirty places. The buffer
+// is static and used in rotation: the result goes straight into the log, it
+// doesn't need to live any longer.
 template <typename... Args>
 std::string trf(S id, Args... args) {
     char buf[1024];

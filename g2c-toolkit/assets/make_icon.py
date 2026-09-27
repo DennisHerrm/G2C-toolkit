@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Erzeugt g2c.ico aus den beiden SVG-Vorlagen.
+"""Generates g2c.ico from the two SVG templates.
 
-Warum zwei Vorlagen und nicht eine?
+Why two templates and not one?
 
-Eine .ico enthaelt fuer jede Groesse ein EIGENES Bild, und Windows waehlt
-die passende aus. Das ist kein Umweg, sondern der Zweck des Formats: was bei
-256 Bildpunkten fein und lesbar ist, wird bei 16 zu einem Fleck.
+An .ico contains a SEPARATE image for each size, and Windows picks the
+matching one. That is not a workaround but the purpose of the format: what is
+fine and legible at 256 pixels becomes a blob at 16.
 
-  g2c-large.svg  -> 256, 48   mit Gelenkkette, duennere Striche
-  g2c-small.svg  -> 32, 16    ohne Kette, kraeftigere Striche, groessere Zeichen
+  g2c-large.svg  -> 256, 48   with joint chain, thinner strokes
+  g2c-small.svg  -> 32, 16    without chain, bolder strokes, larger glyphs
 
-Aufruf:  python3 make_icon.py
-Ergebnis: g2c.ico neben dem Skript.
+Usage:   python3 make_icon.py
+Result:  g2c.ico next to the script.
 
-Braucht cairosvg und Pillow:
+Requires cairosvg and Pillow:
     pip install cairosvg pillow
 """
 
@@ -24,8 +24,8 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 
-# Groesse -> Vorlage. Die Grenze liegt bei 48: darunter traegt die Kette
-# nichts mehr bei und kostet nur Platz.
+# Size -> template. The cutoff is 48: below that, the chain no longer adds
+# anything and only takes up space.
 PLAN = [
     (256, "g2c-large.svg"),
     (128, "g2c-large.svg"),
@@ -59,9 +59,9 @@ def main() -> int:
 
     out = HERE / "g2c.ico"
 
-    # Pillow schreibt beim ersten Bild alle Groessen aus sizes= — es
-    # skaliert dabei aber selbst. Deshalb die Bilder EINZELN uebergeben:
-    # so landet jede gerenderte Fassung unveraendert in der Datei.
+    # With the first image, Pillow writes all sizes from sizes= - but it
+    # scales them itself. That is why the images are passed INDIVIDUALLY:
+    # this way each rendered version ends up in the file unchanged.
     frames[0].save(
         out,
         format="ICO",

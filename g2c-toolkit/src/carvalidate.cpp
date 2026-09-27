@@ -43,19 +43,19 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     if (script.grabs.empty())
         add(r, Issue::Level::Error, "Das Skript enthaelt keine $aseanimgrab-Anweisungen");
 
-    // --- 0a. Groesse der animation.cfg ------------------------------------
+    // --- 0a. Size of animation.cfg ----------------------------------------
     //
-    // Die Engine hat einen FESTEN Puffer und bricht ab:
+    // The engine has a FIXED buffer and aborts:
     //
     //     UI_ParseAnimationFile: File ... too long (172308 > 159999)
     //
-    // Das faellt erst beim Starten des Spiels auf, und die Meldung nennt
-    // keine Sequenz — man sucht dann in einer 2463 Zeilen langen Datei nach
-    // etwas, das gar kein einzelner Eintrag ist.
+    // This only shows up when the game starts, and the message names no
+    // sequence - you then search a 2463-line file for something that isn't
+    // a single entry at all.
     //
-    // Geschaetzt wird grosszuegig: der Name plus vier Zahlen plus Trenner.
+    // The estimate is generous: the name plus four numbers plus separators.
     {
-        std::size_t bytes = 200;   // Kopfzeilen
+        std::size_t bytes = 200;   // header lines
         std::size_t n = 0;
         for (const auto& g : script.grabs) {
             const std::string nm = g.enumName ? *g.enumName : g.derivedName();
@@ -77,16 +77,15 @@ ValidateResult validate(const Script& script, const std::string& carPath,
                     ".");
     }
 
-    // --- 0. Doppelte Sequenznamen -----------------------------------------
+    // --- 0. Duplicate sequence names --------------------------------------
     //
-    // Die Engine schlaegt in animation.cfg nach dem NAMEN nach. Steht einer
-    // zweimal drin, gewinnt der letzte Eintrag — die erste Animation ist
-    // dann unerreichbar, obwohl ihre Frames in der GLA liegen und Platz
-    // belegen.
+    // The engine looks entries up in animation.cfg by NAME. If one appears
+    // twice, the last entry wins - the first animation then becomes
+    // unreachable, even though its frames are in the GLA and take up space.
     //
-    // Das faellt im Spiel als "die Animation tut nichts" auf, und niemand
-    // sucht die Ursache in der cfg. Beim Zusammenfuehren mehrerer Quellen
-    // passiert es leicht.
+    // In the game this shows up as "the animation does nothing", and nobody
+    // looks for the cause in the cfg. It happens easily when merging several
+    // sources.
     {
         std::map<std::string, std::vector<std::size_t>> gesehen;
         for (std::size_t i = 0; i < script.grabs.size(); ++i) {
@@ -116,11 +115,11 @@ ValidateResult validate(const Script& script, const std::string& carPath,
         }
     }
 
-    // --- 1. Quelldateien vorhanden ----------------------------------------
-    // Fehlende Dateien werden zusammengefasst gemeldet. Bei einem falschen
-    // -basedir fehlen alle 1289 auf einmal, und 1289 gleichlautende Zeilen
-    // verdraengen jede andere Meldung — dabei ist die eigentliche Aussage
-    // dann "der Pfad stimmt nicht", nicht "diese Datei fehlt".
+    // --- 1. Source files present ------------------------------------------
+    // Missing files are reported in summary. With a wrong -basedir all 1289
+    // are missing at once, and 1289 identical lines crowd out every other
+    // message - even though the real message then is "the path is wrong",
+    // not "this file is missing".
     std::vector<std::string> resolved(script.grabs.size());
     for (std::size_t i = 0; i < script.grabs.size(); ++i) {
         resolved[i] = resolveAssetPath(script.grabs[i].file, baseDir, carDir);
@@ -141,11 +140,11 @@ ValidateResult validate(const Script& script, const std::string& carPath,
                                    : (" (aktuell: " + baseDir + ")")));
     }
 
-    // --- 2. Sequenznamen ---------------------------------------------------
+    // --- 2. Sequence names -------------------------------------------------
     //
-    // Ein Name darf nur einmal vorkommen. Assimilate meldet das als
-    // "animation enum %s is used %d times"; im Ergebnis ueberschreibt die
-    // spaetere Sequenz die fruehere in der animation.cfg.
+    // A name may occur only once. Assimilate reports this as
+    // "animation enum %s is used %d times"; as a result the later sequence
+    // overwrites the earlier one in animation.cfg.
     std::map<std::string, int> nameCount;
     std::vector<std::string> allNames;
     for (const auto& g : script.grabs) {
@@ -159,11 +158,11 @@ ValidateResult validate(const Script& script, const std::string& carPath,
             add(r, Issue::Level::Error,
                 "Sequenzname " + std::to_string(c) + "-mal vergeben", n);
 
-    // --- 3. Namen gegen die Enumtabelle -----------------------------------
+    // --- 3. Names against the enum table ----------------------------------
     //
-    // Unbekannte Namen sind eine WARNUNG, kein Fehler. Ein Mod erweitert die
-    // Tabelle laufend; Assimilates harte Ablehnung wuerde die Arbeit daran
-    // blockieren. Bei Movie Duels betrifft das 165 Sequenzen.
+    // Unknown names are a WARNING, not an error. A mod extends the table
+    // continuously; Assimilate's hard rejection would block that work. For
+    // Movie Duels this affects 165 sequences.
     if (opt.enums && !opt.enums->empty()) {
         std::size_t unknown = 0;
         for (const auto& n : allNames) {
@@ -176,13 +175,13 @@ ValidateResult validate(const Script& script, const std::string& carPath,
             add(r, Issue::Level::Warning,
                 std::to_string(unknown - opt.maxEnumWarnings) + " weitere Sequenzen ohne Enum");
 
-        // Gegenrichtung: Enums, fuer die keine Sequenz gebaut wird. Assimilate
-        // prueft das nicht. Im Spiel aeussert sich so ein Fall als Figur, die
-        // eine Animation nicht abspielt, ohne jede Fehlermeldung.
+        // Reverse direction: enums for which no sequence is built. Assimilate
+        // doesn't check this. In the game such a case shows up as a character
+        // that doesn't play an animation, without any error message.
         const std::set<std::string> used(allNames.begin(), allNames.end());
         std::size_t noSeq = 0;
         for (const auto& e : opt.enums->names) {
-            if (e.rfind("MAX_", 0) == 0) continue;   // Zaehlmarken
+            if (e.rfind("MAX_", 0) == 0) continue;   // count markers
             if (!used.count(e)) ++noSeq;
         }
         if (noSeq)
@@ -190,7 +189,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
                 std::to_string(noSeq) + " Enums der Tabelle haben keine Sequenz");
     }
 
-    // --- 4. Loopframe innerhalb der Sequenz -------------------------------
+    // --- 4. Loop frame within the sequence -------------------------------
     for (const auto& g : script.grabs) {
         const std::string name = g.enumName ? *g.enumName : g.derivedName();
         for (const auto& a : g.additional) {
@@ -210,11 +209,11 @@ ValidateResult validate(const Script& script, const std::string& carPath,
         }
     }
 
-    // --- 5. -makeskel zusammen mit einer GLA-Sequenz -----------------------
+    // --- 5. -makeskel together with a GLA sequence ------------------------
     //
     // Assimilate: "Model has both a GLA sequence and a '-makeskel' path, this
-    // is meaningless". Entweder das Skelett kommt aus einer vorhandenen GLA
-    // oder es wird erzeugt — beides zugleich ergibt keinen Sinn.
+    // is meaningless". Either the skeleton comes from an existing GLA or it is
+    // generated - both at once makes no sense.
     {
         bool hasGlaSeq = false;
         for (const auto& st : script.statements)
@@ -224,10 +223,10 @@ ValidateResult validate(const Script& script, const std::string& carPath,
                 "-makeskel zusammen mit einer GLA-Sequenz ist widerspruechlich");
     }
 
-    // --- 6. Framezahlen gegen die Quelldateien ----------------------------
+    // --- 6. Frame counts against the source files -------------------------
     //
-    // Nur auf Wunsch: dafuer muss jede .xsi gelesen werden. Geprueft wird, ob
-    // die -additional-Bereiche in die tatsaechliche Laenge passen.
+    // Only on request: this requires reading every .xsi. It checks whether
+    // the -additional ranges fit within the actual length.
     if (opt.readFrameCounts) {
         std::mutex m;
         parallelFor(
@@ -295,9 +294,9 @@ void writeComments(std::ostringstream& os, const std::vector<std::string>& cs) {
     }
 }
 
-// Argumente mit Leerzeichen in Anfuehrungszeichen. Der Leser haelt sie
-// damit zusammen; ohne wuerde "models/my anims/walk.xsi" beim naechsten
-// Einlesen zu "models/my" und einem unbekannten Flag.
+// Arguments containing spaces go in quotes. That way the reader keeps them
+// together; without quotes, "models/my anims/walk.xsi" would become
+// "models/my" plus an unknown flag on the next read.
 std::string quoted(const std::string& a) {
     if (a.empty() || a.find_first_of(" \t") != std::string::npos) return "\"" + a + "\"";
     return a;
@@ -326,7 +325,7 @@ bool sameGrab(const GrabDirective& a, const GrabDirective& b) {
 }
 
 std::string grabText(const GrabDirective& g) {
-    // Unveraendert? Dann die Zeile genau so, wie sie in der Datei stand.
+    // Unchanged? Then return the line exactly as it was in the file.
     if (!g.sourceLine.empty() && sameGrab(parseGrabLine(g.sourceLine), g)) return g.sourceLine;
 
     std::ostringstream os;
@@ -335,9 +334,9 @@ std::string grabText(const GrabDirective& g) {
     if (g.frameSpeed) os << " -framespeed " << *g.frameSpeed;
     if (g.enumName) os << " -enum " << quoted(*g.enumName);
 
-    // Die qdskip-Klammer genau um die Eintraege legen, die in ihr standen.
-    // Frueher wurde sie erst hinter dem letzten -additional geschlossen; ein
-    // Eintrag, der ausserhalb stand, rutschte beim naechsten Einlesen hinein.
+    // Put the qdskip bracket exactly around the entries that were inside it.
+    // Previously it was only closed after the last -additional; an entry that
+    // was outside slipped into it on the next read.
     bool qd = false;
     bool anyInside = false;
     for (const auto& a : g.additional) {
@@ -388,9 +387,9 @@ std::string statementText(const Statement& st) {
 std::string writeScript(const Script& s) {
     std::ostringstream os;
 
-    // $include-Dateien bleiben $include-Zeilen. Ihre Grabs stehen zum Bauen
-    // mit in s.grabs, gehoeren aber der anderen Datei — ins Hauptskript
-    // kopiert, stuenden sie beim naechsten Bau doppelt da.
+    // $include files stay $include lines. Their grabs are in s.grabs for the
+    // build, but belong to the other file - copied into the main script, they
+    // would appear twice on the next build.
     std::set<int> includeWritten;
     const auto writeInclude = [&](int id) {
         if (!includeWritten.insert(id).second) return;
@@ -406,9 +405,9 @@ std::string writeScript(const Script& s) {
         return false;
     };
 
-    // $include-Zeilen ohne eingebundene Grabs (nicht verfolgt, oder die Datei
-    // enthaelt keine), die in der Datei zwischen zwei Grabs standen: sie
-    // gehoeren wieder an dieselbe Stelle der Grab-Liste, nicht hinter sie.
+    // $include lines without included grabs (not followed, or the file
+    // contains none) that stood between two grabs in the file: they belong
+    // back at the same position in the grab list, not after it.
     std::size_t firstGrabStmt = s.statements.size(), lastGrabStmt = 0;
     for (std::size_t i = 0; i < s.statements.size(); ++i)
         if (s.statements[i].cmd == Cmd::AseAnimGrab && s.statements[i].fromInclude < 0) {
@@ -434,8 +433,8 @@ std::string writeScript(const Script& s) {
         };
         for (const auto& g : s.grabs) {
             if (g.fromInclude >= 0) {
-                // An der Stelle des ersten eingebundenen Grabs steht das
-                // $include — so bleibt die Reihenfolge der Sequenzen gleich.
+                // The $include goes where the first included grab is - that
+                // way the order of the sequences stays the same.
                 writeInclude(g.fromInclude);
                 continue;
             }
@@ -445,15 +444,15 @@ std::string writeScript(const Script& s) {
             ++own;
         }
         flushAnchored(true);
-        // Kommentare NACH dem letzten Grab.
+        // Comments AFTER the last grab.
         writeComments(os, s.trailingComments);
     };
 
-    // Die Grabs stehen als Block dort, wo in der Datei der erste stand.
+    // The grabs are written as a block where the first one was in the file.
     //
-    // In Ravens Skripten folgen auf $aseanimgrabinit erst $scale und
-    // $keepmotion, dann die Grabs, danach die $pcj-Zeilen. Direkt hinter
-    // $aseanimgrabinit geschrieben, waeren all diese Zeilen umgezogen.
+    // In Raven's scripts $aseanimgrabinit is followed first by $scale and
+    // $keepmotion, then the grabs, then the $pcj lines. Written directly after
+    // $aseanimgrabinit, all of these lines would have moved.
     bool hasGrabStatement = false;
     for (const auto& st : s.statements)
         if (st.cmd == Cmd::AseAnimGrab && st.fromInclude < 0) hasGrabStatement = true;
@@ -461,8 +460,8 @@ std::string writeScript(const Script& s) {
     bool grabsWritten = false;
     bool convertWritten = false;
     for (const auto& st : s.statements) {
-        if (st.fromInclude >= 0) continue;          // steht in der anderen Datei
-        if (st.cmd == Cmd::AseAnimGrab) {           // kommt aus s.grabs
+        if (st.fromInclude >= 0) continue;          // lives in the other file
+        if (st.cmd == Cmd::AseAnimGrab) {           // comes from s.grabs
             if (!grabsWritten) {
                 writeGrabs();
                 grabsWritten = true;
@@ -470,35 +469,35 @@ std::string writeScript(const Script& s) {
             continue;
         }
         if (st.cmd == Cmd::Include && (includeHasGrabs(st.includeId) || isAnchored(st))) {
-            // Wird zwischen den Grabs geschrieben, wo es in der Datei stand.
+            // Written between the grabs, where it was in the file.
             if (grabsWritten) writeInclude(st.includeId);
             continue;
         }
 
         writeComments(os, st.commentsBefore);
         if (st.cmd == Cmd::AseAnimConvertMdx || st.cmd == Cmd::AseAnimConvertMdxNoAsk) {
-            // An ihrer alten Stelle, aber aus den aktuellen Daten.
+            // At its old position, but from the current data.
             if (s.convert && !convertWritten) os << convertText(*s.convert) << kNl;
             convertWritten = true;
             continue;
         }
         os << statementText(st) << kNl;
-        // Ohne Grab in der Datei (neues Skript): direkt hinter den Anfang.
+        // No grab in the file (new script): right after the start.
         if (st.cmd == Cmd::AseAnimGrabInit && !grabsWritten && !hasGrabStatement) {
             writeGrabs();
             grabsWritten = true;
         }
     }
 
-    // Kein $aseanimgrabinit im Skript: den Rahmen selbst setzen, statt die
-    // Grabs stillschweigend zu verlieren. Frueher war die Datei danach leer.
+    // No $aseanimgrabinit in the script: add the frame ourselves instead of
+    // silently losing the grabs. Previously the file was empty afterwards.
     if (!grabsWritten && !s.grabs.empty()) {
         os << "$aseanimgrabinit" << kNl;
         writeGrabs();
         os << "$aseanimgrabfinalize" << kNl;
     }
-    // Noch keine Stelle dafuer, etwa bei einem neu angelegten Skript: ans Ende.
-    // Stammt sie aus einer $include-Datei, steht sie dort schon.
+    // No position for it yet, e.g. in a newly created script: at the end.
+    // If it comes from an $include file, it is already there.
     if (s.convert && !convertWritten && s.convert->fromInclude < 0)
         os << convertText(*s.convert) << kNl;
 
@@ -511,23 +510,20 @@ std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDept
     std::error_code ec;
     if (!fs::is_directory(root, ec)) return out;
 
-    // Eigener Stapel statt recursive_directory_iterator.
+    // Our own stack instead of recursive_directory_iterator.
     //
-    // Dessen increment(ec) rueckt bei einem Fehler NICHT zuverlaessig vor —
-    // die Norm laesst das offen, und sowohl Boost als auch die
-    // Microsoft-Implementierung bleiben in dem Fall stehen. Eine Schleife
-    // ueber den Iterator laeuft dann endlos, ohne Fehlermeldung, ohne
-    // Absturz: sie haengt einfach.
+    // Its increment(ec) does NOT reliably advance on an error - the standard
+    // leaves this open, and both Boost and the Microsoft implementation stay
+    // put in that case. A loop over the iterator then runs forever, with no
+    // error message and no crash: it simply hangs.
     //
-    // Dazu kommen Verzeichnisverknuepfungen, die auf einen Vorfahren zeigen.
-    // Unter Windows sind Junctions in Benutzerprofilen ueblich, und der
-    // Iterator folgt ihnen standardmaessig — auch das ergibt eine
-    // Endlosschleife.
+    // On top of that there are directory links pointing to an ancestor. On
+    // Windows, junctions in user profiles are common, and the iterator
+    // follows them by default - which also results in an endless loop.
     //
-    // Mit eigenem Stapel ist beides ausgeschlossen: jedes Verzeichnis wird
-    // einmal geoeffnet, die Tiefe ist begrenzt, bereits besuchte Pfade werden
-    // an ihrer kanonischen Form erkannt, und Verknuepfungen werden gar nicht
-    // erst verfolgt.
+    // With our own stack both are ruled out: every directory is opened once,
+    // the depth is limited, already visited paths are recognized by their
+    // canonical form, and links are not followed at all.
     struct Pending {
         fs::path    dir;
         std::size_t depth;
@@ -535,8 +531,8 @@ std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDept
     std::vector<Pending> stack{{fs::path(root), 0}};
     std::set<std::string> visited;
 
-    // Letzte Sicherung. Wenn trotz allem etwas im Kreis laeuft, bricht die
-    // Suche ab und meldet es, statt das Programm haengen zu lassen.
+    // Last safeguard. If something still runs in circles despite all this,
+    // the search aborts and reports it instead of letting the program hang.
     constexpr std::size_t kMaxEntries = 2'000'000;
     std::size_t seen = 0;
 
@@ -544,15 +540,15 @@ std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDept
         const Pending cur = stack.back();
         stack.pop_back();
 
-        // Kanonisch aufloesen, damit derselbe Ordner ueber verschiedene Wege
-        // nur einmal betrachtet wird.
+        // Resolve canonically so the same folder reached via different paths
+        // is only considered once.
         std::error_code cec;
         const fs::path canon = fs::weakly_canonical(cur.dir, cec);
         const std::string key = (cec ? cur.dir : canon).lexically_normal().string();
         if (!visited.insert(key).second) continue;
 
         fs::directory_iterator it(cur.dir, fs::directory_options::skip_permission_denied, ec);
-        if (ec) continue;   // unlesbares Verzeichnis ueberspringen, nicht abbrechen
+        if (ec) continue;   // skip unreadable directory, don't abort
 
         for (const auto& entry : it) {
             if (++seen > kMaxEntries) {
@@ -561,7 +557,7 @@ std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDept
             }
 
             std::error_code eec;
-            if (entry.is_symlink(eec)) continue;   // Verknuepfungen nicht verfolgen
+            if (entry.is_symlink(eec)) continue;   // don't follow links
 
             if (entry.is_directory(eec) && !eec) {
                 if (cur.depth < maxDepth) stack.push_back({entry.path(), cur.depth + 1});
@@ -584,8 +580,8 @@ std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDept
                 f.grabs = sc.grabs.size();
                 if (sc.convert) f.modelName = sc.convert->makeSkel;
             } catch (const std::exception&) {
-                // Unlesbare Dateien trotzdem auflisten — der Nutzer soll
-                // sehen, dass sie da sind.
+                // List unreadable files anyway - the user should see that
+                // they exist.
             }
             out.push_back(std::move(f));
         }

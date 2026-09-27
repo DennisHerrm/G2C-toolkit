@@ -1,10 +1,10 @@
 @echo off
 REM ---------------------------------------------------------------
-REM  Test: bleibt ein Fenster ueberhaupt offen?
+REM  Test: does a window stay open at all?
 REM
-REM  Diese Datei tut nichts ausser anzuhalten. Geht sie beim
-REM  Doppelklick trotzdem sofort zu, liegt es NICHT an build.bat,
-REM  sondern an der Dateizuordnung fuer .bat in Windows.
+REM  This file does nothing but pause. If it still closes right away
+REM  on double-click, the cause is NOT build.bat but the file
+REM  association for .bat in Windows.
 REM ---------------------------------------------------------------
 echo.
 echo Wenn du das hier lesen kannst, ist alles in Ordnung.

@@ -1,7 +1,7 @@
-// g2/xsi_mesh.h — Mesh aus dotXSI lesen.
+// g2/xsi_mesh.h - Reading a mesh from dotXSI.
 //
-// Gegenstueck zu xsi_anim.h: dort die Animation, hier die Geometrie.
-// Verifiziert gegen Ravens _humanoid.glm (84 Surfaces, 2647 Verts, 2846 Tris).
+// Counterpart to xsi_anim.h: there the animation, here the geometry.
+// Verified against Raven's _humanoid.glm (84 surfaces, 2647 verts, 2846 tris).
 
 #pragma once
 
@@ -15,37 +15,37 @@
 namespace g2::xsi {
 
 struct MeshImportOptions {
-    // $scale aus der .car. Muss mit der Referenz-GLA uebereinstimmen.
+    // $scale from the .car. Must match the reference GLA.
     float scale = 1.0f;
 
-    // Name der GLM, wie er in den Header geschrieben wird.
+    // Name of the GLM as written into the header.
     std::string modelName;
 
-    // GLA-Referenz ohne Endung, z.B. "models/players/_humanoid/_humanoid".
+    // GLA reference without extension, e.g. "models/players/_humanoid/_humanoid".
     std::string animName;
 
-    // Bonenamen des Referenzskeletts. Die Envelope-Eintraege nennen Bones
-    // beim Namen; ohne diese Liste liesse sich kein Index bilden.
+    // Bone names of the reference skeleton. The envelope entries refer to
+    // bones by name; without this list no index could be formed.
     std::vector<std::string> boneNames;
 
-    // Umbenennungen Referenz -> dotXSI, wie bei der Animation.
+    // Renames reference -> dotXSI, as with the animation.
     std::map<std::string, std::string> aliases;
 
-    // Toleranzen fuer die Vertexzusammenfassung.
+    // Tolerances for vertex merging.
     //
-    // dotXSI hat je Attribut ein eigenes Indexarray, GLM nur einen Index pro
-    // Vertex. Zusammengefasst wird nach Positionsindex, UV und Normale — aber
-    // NICHT ueber einen Hashschluessel, sondern durch gierige Suche mit
-    // Toleranz: der erste passende Kandidat gewinnt.
+    // dotXSI has a separate index array per attribute, GLM only one index
+    // per vertex. Merging is done by position index, UV and normal - but NOT
+    // via a hash key, rather by a greedy search with tolerance: the first
+    // matching candidate wins.
     //
-    // Der Unterschied ist wesentlich. Mit exakter Gleichheit entstehen zu
-    // viele Vertices, und kein Rundungsgitter kann das ausgleichen — die
-    // Zusammenfassung ist reihenfolgeabhaengig, nicht wertdiskret. Dieselbe
-    // Regel benutzt auch mrwonkos Blender-Exporter.
+    // The difference is significant. With exact equality too many vertices
+    // are created, and no rounding grid can compensate for that - the merge
+    // is order-dependent, not value-discrete. mrwonko's Blender exporter uses
+    // the same rule.
     float normalTolerance = 0.05f;
-    // 0,002 statt exakter Gleichheit: an allen 84 Surfaces gemessen der
-    // beste Wert (81 exakt gegen 77 bei exakter Gleichheit). Groessere Werte
-    // treffen zwar die Gesamtsumme, aber durch sich aufhebende Fehler.
+    // 0.002 instead of exact equality: measured across all 84 surfaces, the
+    // best value (81 exact vs. 77 with exact equality). Larger values do hit
+    // the overall total, but only through errors that cancel out.
     float uvTolerance = 0.002f;
 };
 
@@ -53,9 +53,9 @@ struct MeshImportStats {
     std::size_t   surfaces = 0;
     std::size_t   vertices = 0;
     std::size_t   triangles = 0;
-    std::size_t   tags = 0;          // Surfaces mit *-Praefix
-    std::size_t   offSurfaces = 0;   // Surfaces mit _off
-    std::uint64_t splitVertices = 0; // durch Attributaufloesung entstandene
+    std::size_t   tags = 0;          // surfaces with a * prefix
+    std::size_t   offSurfaces = 0;   // surfaces with _off
+    std::uint64_t splitVertices = 0; // created by attribute splitting
     std::vector<std::string> warnings;
 };
 
@@ -64,21 +64,21 @@ struct MeshImportResult {
     MeshImportStats stats;
 };
 
-// Wandelt einen Surfacenamen aus der dotXSI in den GLM-Namen um.
+// Converts a surface name from the dotXSI into the GLM name.
 //
-// Zwei Regeln, an Ravens _humanoid.glm abgelesen:
-//   - alles klein: "Stupidtriangle_off" -> "stupidtriangle_off"
-//   - Praefix "bolt_" wird zu "*":  "bolt_back" -> "*back"
+// Two rules, derived from Raven's _humanoid.glm:
+//   - all lowercase: "Stupidtriangle_off" -> "stupidtriangle_off"
+//   - prefix "bolt_" becomes "*":  "bolt_back" -> "*back"
 //
-// Die zweite Regel betrifft 46 der 84 Surfaces, und genau 46 nennt Ravens
-// Info-Datei "tags only".
+// The second rule affects 46 of the 84 surfaces, and Raven's info file
+// lists exactly 46 as "tags only".
 std::string surfaceNameToGlm(const std::string& xsiName);
 
-// Flags aus dem Namen ableiten:
-//   *-Praefix   -> kSurfFlagIsBolt (1)
-//   Endung _off -> kSurfFlagOff (2)
-// In der Originaldatei tragen 46 Surfaces Flag 1 und 17 Flag 2 — beide Zahlen
-// stehen so in Ravens Info-Datei.
+// Derives flags from the name:
+//   * prefix     -> kSurfFlagIsBolt (1)
+//   suffix _off  -> kSurfFlagOff (2)
+// In the original file, 46 surfaces carry flag 1 and 17 carry flag 2 - both
+// numbers appear exactly like that in Raven's info file.
 std::uint32_t surfaceFlagsFromName(const std::string& glmName);
 
 MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt);

@@ -1,23 +1,23 @@
-// g2/compress.h — Quantisierung der Bone-Matrizen in das 14-Byte-Format.
+// g2/compress.h - Quantization of the bone matrices into the 14-byte format.
 //
-// Das ist die Stelle, an der Carcass v2.2 zwei echte Fehler hat. Details in
-// docs/BUGS.md; die Kurzfassung:
+// This is where Carcass v2.2 has two real bugs. Details in docs/BUGS.md;
+// the short version:
 //
-//   B2  Carcass konvertiert mit _ftol, das Richtung Null abschneidet. Da vorher
-//       konstant +2.0 bzw. +512.0 addiert wird, ist der Rundungsfehler immer
-//       einseitig -> gerichtete Drift statt symmetrischem Rauschen.
-//       Korrektes Runden halbiert den Fehler und ist voll formatkompatibel.
+//   B2  Carcass converts with _ftol, which truncates toward zero. Since a
+//       constant +2.0 or +512.0 is added beforehand, the rounding error is
+//       always one-sided -> directional drift instead of symmetric noise.
+//       Correct rounding halves the error and is fully format-compatible.
 //
-//   B3  Werte ausserhalb des Bereichs geben bei Carcass 0 zurueck, was beim
-//       Dekodieren zu -2.0 (Quaternion) bzw. -512 Einheiten (Translation) wird.
-//       Ein einzelner Ausreisser schleudert den Bone also ans absolute Extrem,
-//       statt ihn zu klemmen. Zusaetzlich wird nur EINMAL pro Programmlauf
-//       gewarnt, danach laeuft alles stumm durch.
+//   B3  Out-of-range values return 0 in Carcass, which decodes to -2.0
+//       (quaternion) or -512 units (translation). A single outlier thus
+//       flings the bone to the absolute extreme instead of clamping it. On
+//       top of that, it warns only ONCE per program run; after that
+//       everything passes through silently.
 //
-// Nicht behebbar ohne Engine-Aenderung: der Quaternion-Wertebereich ist im
-// Format auf -2..+2 festgelegt, obwohl Einheits-Quaternionen nur -1..+1
-// brauchen. Ein Bit liegt also dauerhaft brach. Wer das aendert, muss auch
-// MC_UnCompressQuat in der Engine anfassen und braucht eine neue GLA-Version.
+// Not fixable without changing the engine: the format fixes the quaternion
+// value range at -2..+2, although unit quaternions only need -1..+1. So one
+// bit is permanently wasted. Changing that also means touching
+// MC_UnCompressQuat in the engine and requires a new GLA version.
 
 #pragma once
 
@@ -30,16 +30,15 @@
 
 namespace g2 {
 
-// Ist die C++-Laufzeit fest eingebaut?
+// Is the C++ runtime statically linked in?
 //
-// Das ist die Frage, ob das Programm auf einem fremden Rechner ueberhaupt
-// startet. Ohne fest eingebaute Laufzeit meldet Windows dort
-// "VCRUNTIME140.dll wurde nicht gefunden", und der Empfaenger kann daran
-// nichts aendern.
+// This decides whether the program starts on someone else's machine at all.
+// Without a built-in runtime, Windows reports "VCRUNTIME140.dll was not
+// found" there, and the recipient can do nothing about it.
 //
-// MSVC setzt bei /MD (dynamisch) sowohl _MT als auch _DLL, bei /MT
-// (statisch) nur _MT. Die Auskunft kostet nichts und muss nicht mit
-// externen Werkzeugen erfragt werden.
+// With /MD (dynamic), MSVC defines both _MT and _DLL; with /MT (static),
+// only _MT. The answer costs nothing and doesn't have to be queried with
+// external tools.
 constexpr bool staticRuntime() {
 #if defined(_MSC_VER)
 #if defined(_DLL)
@@ -48,30 +47,28 @@ constexpr bool staticRuntime() {
     return true;
 #endif
 #else
-    // Auf anderen Systemen stellt sich die Frage nicht so.
+    // On other systems the question doesn't arise in this form.
     return true;
 #endif
 }
 
-// Datei schreiben und das Ergebnis wirklich pruefen.
+// Write a file and really check the result.
 //
-// Ein blosses "if (!f)" nach dem Oeffnen genuegt nicht. Es faengt nur den
-// Fall ab, dass die Datei gar nicht angelegt werden kann. Geht beim
-// SCHREIBEN etwas schief — Platte voll, Netzlaufwerk weg, Kontingent
-// erreicht —, meldet der Stream das erst beim naechsten Zugriff, und ein
-// Teil der Daten steht schon auf der Platte. Das Ergebnis ist eine halbe
-// GLA, die aussieht wie eine ganze und im Spiel als kaputtes Modell
-// auffaellt.
+// A bare "if (!f)" after opening is not enough. It only catches the case
+// where the file cannot be created at all. If something goes wrong while
+// WRITING - disk full, network drive gone, quota reached - the stream only
+// reports it on the next access, and part of the data is already on disk.
+// The result is half a GLA that looks like a whole one and shows up in the
+// game as a broken model.
 //
-// Deshalb: nach dem Schreiben schliessen und DANACH den Zustand pruefen.
-// Erst close() leert den Puffer, also treten Schreibfehler oft genau dort
-// zutage.
+// Therefore: close after writing and check the state AFTERWARDS. Only
+// close() flushes the buffer, so write errors often surface exactly there.
 //
-// Wirft std::runtime_error mit dem Pfad im Text.
+// Throws std::runtime_error with the path in the message.
 void writeFileChecked(const std::string& path, const void* data, std::size_t size);
 void writeFileChecked(const std::string& path, const std::string& text);
 
-// 3x4-Matrix: Rotation in den Spalten 0..2, Translation in Spalte 3.
+// 3x4 matrix: rotation in columns 0..2, translation in column 3.
 struct Mat3x4 {
     float m[3][4]{};
 
@@ -87,28 +84,28 @@ struct Quat {
 };
 
 enum class Rounding {
-    Nearest,  // korrekt: rundet zur naechsten darstellbaren Stufe
-    Legacy,   // reproduziert Carcass' _ftol-Truncation samt Null-Rueckgabe
+    Nearest,  // correct: rounds to the nearest representable step
+    Legacy,   // reproduces Carcass's _ftol truncation including the zero return
 };
 
-// Zaehlt, was beim Komprimieren schiefging. Anders als bei Carcass geht keine
-// einzige Verletzung verloren.
+// Counts what went wrong during compression. Unlike Carcass, not a single
+// violation gets lost.
 struct CompressStats {
-    std::uint64_t quatClamped = 0;   // Quaternionkomponente ausserhalb -2..2
-    std::uint64_t xlatClamped = 0;   // Translation ausserhalb -511..511
-    std::uint64_t nonUnitQuat = 0;   // Quaternion war nicht normiert
+    std::uint64_t quatClamped = 0;   // quaternion component outside -2..2
+    std::uint64_t xlatClamped = 0;   // translation outside -511..511
+    std::uint64_t nonUnitQuat = 0;   // quaternion was not normalized
     float         maxXlatSeen = 0.0f;
 
     bool clean() const { return quatClamped == 0 && xlatClamped == 0; }
     std::string summary() const;
 };
 
-// --- Skalare Quantisierung -------------------------------------------------
+// --- Scalar quantization ---------------------------------------------------
 
-// Quaternionkomponente -> uint16.  raw = (f + 2.0) * 16383.0
+// Quaternion component -> uint16.  raw = (f + 2.0) * 16383.0
 std::uint16_t squashQuatComponent(float f, Rounding r, CompressStats& stats);
 
-// Translationskomponente -> uint16.  raw = (f + 512.0) * 64.0
+// Translation component -> uint16.  raw = (f + 512.0) * 64.0
 std::uint16_t squashXlatComponent(float f, Rounding r, CompressStats& stats);
 
 float unsquashQuatComponent(std::uint16_t raw);
@@ -116,61 +113,60 @@ float unsquashXlatComponent(std::uint16_t raw);
 
 // --- Matrix <-> Quaternion -------------------------------------------------
 
-// Konvertiert den Rotationsteil in ein Quaternion. Verwendet Shepperds Methode,
-// also den betragsmaessig groessten Term als Pivot, was bei Rotationen nahe 180
-// Grad numerisch deutlich stabiler ist als die naive Trace-Formel.
+// Converts the rotation part into a quaternion. Uses Shepperd's method, i.e.
+// the term with the largest magnitude as the pivot, which is numerically much
+// more stable for rotations near 180 degrees than the naive trace formula.
 Quat matrixToQuat(const Mat3x4& mat);
 
-// Baut den Rotationsteil aus dem Quaternion. Entspricht exakt der Konvention,
-// die die Engine in MC_UnCompressQuat verwendet.
+// Builds the rotation part from the quaternion. Matches exactly the
+// convention the engine uses in MC_UnCompressQuat.
 void quatToMatrix(const Quat& q, Mat3x4& out);
 
 Quat normalize(const Quat& q);
 float dot(const Quat& a, const Quat& b);
 
-// Winkel zwischen zwei Rotationen in Grad.
+// Angle between two rotations in degrees.
 //
-// Bewusst NICHT ueber 2*acos(dot): acos hat bei Argumenten nahe 1 eine
-// unendliche Ableitung, sodass der Rundungsfehler von float bereits eine
-// Messuntergrenze von rund 0.03 Grad erzeugt — deutlich mehr als der Fehler,
-// den man eigentlich messen will. Stattdessen die stabile Form
-// 2*atan2(|qa-qb|, |qa+qb|) in doppelter Genauigkeit.
+// Deliberately NOT via 2*acos(dot): acos has an infinite derivative for
+// arguments near 1, so float rounding error alone produces a measurement
+// floor of about 0.03 degrees - considerably more than the error you
+// actually want to measure. Instead, the stable form
+// 2*atan2(|qa-qb|, |qa+qb|) in double precision.
 double angleBetweenDeg(const Quat& a, const Quat& b);
 
-// --- Bone-Kompression ------------------------------------------------------
+// --- Bone compression ------------------------------------------------------
 
 struct CompressOptions {
     Rounding rounding = Rounding::Nearest;
 
-    // Bei true wird das Vorzeichen des Quaternions so gewaehlt, dass w >= 0.
-    // q und -q beschreiben dieselbe Rotation und dekodieren zur selben Matrix,
-    // erzeugen aber unterschiedliche 14-Byte-Eintraege. Kanonisieren verbessert
-    // damit die Trefferquote der Pool-Deduplizierung, ohne das Ergebnis zu
-    // veraendern. Fuer byte-exakten Vergleich mit Carcass abschalten.
+    // If true, the quaternion's sign is chosen so that w >= 0. q and -q
+    // describe the same rotation and decode to the same matrix, but produce
+    // different 14-byte entries. Canonicalizing therefore improves the hit
+    // rate of the pool deduplication without changing the result. Turn off
+    // for a byte-exact comparison with Carcass.
     bool canonicalizeSign = true;
 
-    // Fehlerminimierende Quantisierung.
+    // Error-minimizing quantization.
     //
-    // MC_UnCompressQuat normalisiert das dekodierte Quaternion NICHT. Ein
-    // Quantisierungsfehler aendert damit nicht nur die Rotation, sondern macht
-    // die resultierende Matrix auch leicht nicht-orthonormal — die Bones werden
-    // minimal geschert und skaliert. Das ist der Grund, warum der gemessene
-    // Rotationsfehler rund achtmal groesser ausfaellt, als die Schrittweite
-    // allein erwarten laesst.
+    // MC_UnCompressQuat does NOT normalize the decoded quaternion. A
+    // quantization error therefore not only changes the rotation but also
+    // makes the resulting matrix slightly non-orthonormal - the bones get
+    // minimally sheared and scaled. That is why the measured rotation error
+    // is about eight times larger than the step size alone would suggest.
     //
-    // Komponentenweises Runden ist deshalb nicht optimal. Bei aktivierter
-    // Option werden die 81 Kandidaten im Umkreis von +/-1 Stufe je Komponente
-    // durchprobiert und derjenige gewaehlt, dessen dekodierte Matrix am
-    // wenigsten von der Zielrotation abweicht. Kostet ca. 2500 Flops pro Bone
-    // und veraendert das Dateiformat nicht.
+    // Component-wise rounding is therefore not optimal. With this option
+    // enabled, the 81 candidates within +/-1 step per component are tried,
+    // and the one whose decoded matrix deviates least from the target
+    // rotation is chosen. Costs about 2500 flops per bone and does not change
+    // the file format.
     bool optimizeQuat = true;
 };
 
 fmt::CompQuatBone compressBone(const Mat3x4& mat, const CompressOptions& opt, CompressStats& stats);
 Mat3x4            uncompressBone(const fmt::CompQuatBone& c);
 
-// Maximaler absoluter Positionsfehler, den eine Kompression erzeugt hat.
-// Nuetzlich fuer Regressionstests gegen Referenzmodelle.
+// Maximum absolute position error produced by a compression.
+// Useful for regression tests against reference models.
 float boneRoundTripError(const Mat3x4& original, const CompressOptions& opt);
 
 }  // namespace g2

@@ -1,11 +1,11 @@
-// g2/carbuild.h — Ein .car-Skript abarbeiten.
+// g2/carbuild.h - Executing a .car script.
 //
-// Setzt den Parser aus carscript.h und die Auswertung aus xsi_anim.h zu dem
-// zusammen, was Carcass beim Aufruf tut: alle $aseanimgrab einsammeln,
-// hintereinanderhaengen, komprimieren, GLA und animation.cfg schreiben.
+// Combines the parser from carscript.h and the evaluation from xsi_anim.h
+// into what Carcass does when invoked: collect all $aseanimgrab entries,
+// concatenate them, compress, write the GLA and animation.cfg.
 //
-// Variante 2: Das Skelett kommt aus einer Referenz-GLA, nicht aus den
-// Quelldateien. Warum, steht in xsi_anim.h.
+// Variant 2: the skeleton comes from a reference GLA, not from the source
+// files. The reason is explained in xsi_anim.h.
 
 #pragma once
 
@@ -22,55 +22,55 @@
 namespace g2::car {
 
 struct BuildOptions {
-    // Wurzel, unter der die Pfade aus $aseanimgrab liegen. Die Pfade in der
-    // .car sehen aus wie "models/players/__new_anim/...", sind also relativ
-    // zum Assets-Stamm. Bleibt das Feld leer, wird $basedir aus dem Skript
-    // benutzt, und falls auch das fehlt, das Verzeichnis der .car.
+    // Root under which the $aseanimgrab paths live. The paths in the .car
+    // look like "models/players/__new_anim/...", so they are relative to the
+    // assets root. If this field is empty, $basedir from the script is used,
+    // and if that is missing too, the .car's directory.
     std::string baseDir;
 
-    // Ueberschreibt das -origin aus $aseanimconvertmdx. Ohne Angabe wird der
-    // Wert aus dem Skript genommen.
+    // Overrides the -origin from $aseanimconvertmdx. If not given, the value
+    // from the script is used.
     std::optional<std::array<float, 3>> originOverride;
 
-    // Fehlende .xsi-Dateien ueberspringen statt abzubrechen. Standardmaessig
-    // aus: eine fehlende Datei verschiebt alle nachfolgenden Zielframes und
-    // macht damit die gesamte animation.cfg falsch.
+    // Skip missing .xsi files instead of aborting. Off by default: a missing
+    // file shifts all following target frames and thereby makes the whole
+    // animation.cfg wrong.
     bool skipMissing = false;
 
-    // Letzter Rueckfall fuer framespeed: greift nur, wenn eine Grab-Zeile
-    // kein -framespeed hat UND die .xsi kein SI_Scene mit Framerate.
+    // Last fallback for framespeed: only applies if a grab line has no
+    // -framespeed AND the .xsi has no SI_Scene with a frame rate.
     int defaultFrameSpeed = 30;
 
-    // Bitkompatibel zu Carcass quantisieren: Abschneiden statt Runden, keine
-    // Kandidatensuche, kein Vorzeichen-Kanonisieren.
+    // Quantize bit-compatibly with Carcass: truncate instead of rounding, no
+    // candidate search, no sign canonicalization.
     //
-    // Kostet Genauigkeit (Rotationsfehler etwa Faktor 3), macht den Bone-Pool
-    // aber wieder so dicht wie bei Carcass. Nur sinnvoll, wenn die Dateigroesse
-    // wirklich zaehlt oder man Ausgaben byteweise vergleichen will.
+    // Costs accuracy (rotation error roughly a factor of 3), but makes the
+    // bone pool as dense as with Carcass again. Only useful if file size
+    // really matters or you want to compare outputs byte by byte.
     bool carcassCompatible = false;
 
-    // 0 = alle verfuegbaren Kerne. Die Dateien werden unabhaengig voneinander
-    // gelesen, geparst und ausgewertet; das laesst sich vollstaendig
-    // parallelisieren. Zusammengehaengt wird danach wieder in Skriptreihenfolge,
-    // damit die Zielframes stimmen.
+    // 0 = all available cores. The files are read, parsed and evaluated
+    // independently of each other; that parallelizes completely. Afterwards
+    // they are concatenated in script order again so the target frames are
+    // correct.
     unsigned threads = 0;
 
-    // Ordner fuer den Zwischenspeicher der geparsten .xsi. Leer = aus.
-    // Gemessen entfallen 96 % der Bauzeit auf Lesen und Parsen; genau das
-    // faellt beim zweiten Lauf weg.
+    // Directory for the cache of parsed .xsi files. Empty = off.
+    // Measured, 96 % of build time goes to reading and parsing; exactly that
+    // is skipped on the second run.
     std::string cacheDir;
 
-    // Wird nach jeder geladenen Datei aufgerufen (Fortschritt, Gesamtzahl,
-    // Name). Wird aus mehreren Threads gerufen und ist bereits serialisiert.
+    // Called after every loaded file (progress, total count, name). Called
+    // from multiple threads and already serialized.
     std::function<void(std::size_t, std::size_t, const std::string&)> progress;
 };
 
-// Ein Block der .frames-Datei, ein Eintrag je eingesammelter Quelldatei.
+// One block of the .frames file, one entry per collected source file.
 struct FrameBlock {
-    std::string sourcePath;      // aufgeloester, absoluter Pfad
+    std::string sourcePath;      // resolved, absolute path
     int         startFrame = 0;
     int         duration = 0;
-    int         fps = 0;         // Rate aus SI_Scene, NICHT der framespeed
+    int         fps = 0;         // rate from SI_Scene, NOT the framespeed
     float       averageVec[3] = {0.0f, 0.0f, 0.0f};
 };
 
@@ -78,20 +78,20 @@ struct BuildResult {
     AnimationFrames          frames;
     std::vector<FrameBlock>  frameBlocks;
     std::vector<Sequence>    sequences;
-    // Fehlende Dateien mit Zuordnung.
+    // Missing files with their context.
     //
-    // Nur der Pfad reicht nicht: bei 1393 Grabs sagt "eine Datei fehlt"
-    // nichts darueber, welche Animation betroffen ist. Der Sequenzname ist
-    // das, wonach der Nutzer in seiner .car sucht.
+    // The path alone is not enough: with 1393 grabs, "a file is missing"
+    // says nothing about which animation is affected. The sequence name is
+    // what the user searches for in their .car.
     struct MissingFile {
-        std::string file;       // wie in der .car
-        std::string sequence;   // Enum bzw. abgeleiteter Name
+        std::string file;       // as in the .car
+        std::string sequence;   // enum or derived name
         std::size_t grabIndex = 0;
-        std::size_t line = 0;   // Zeile in der .car, 0 = unbekannt
+        std::size_t line = 0;   // line in the .car, 0 = unknown
     };
     std::vector<MissingFile> missing;
 
-    // Nur die Pfade, fuer bestehenden Code.
+    // Just the paths, for existing code.
     std::vector<std::string> missingFiles;
     std::vector<std::string> warnings;
     bool                     carcassCompatible = false;
@@ -100,39 +100,39 @@ struct BuildResult {
     int totalFrames() const { return frames.frameCount(); }
 };
 
-// Loest einen Pfad aus dem Skript gegen die Basis auf. Probiert der Reihe
-// nach: <basis>/<pfad>, <pfad> direkt, <verzeichnis der .car>/<pfad>.
-// Liefert einen leeren String, wenn nichts gefunden wird.
+// Resolves a path from the script against the base. Tries in order:
+// <base>/<path>, <path> directly, <directory of the .car>/<path>.
+// Returns an empty string if nothing is found.
 std::string resolveAssetPath(const std::string& relative, const std::string& baseDir,
                              const std::string& carDir);
 
-// Versucht, Assetwurzel und Referenz-GLA aus der Lage der .car abzuleiten.
+// Tries to derive the asset root and reference GLA from the .car's location.
 //
-// Die Pfade in einer .car sehen aus wie "models/players/...". Liegt die .car
-// selbst irgendwo unterhalb eines "models"-Ordners, ist dessen Elternordner
-// die gesuchte Wurzel. Das Referenzskelett steht in -makeskel, dort ohne
-// Endung.
+// The paths in a .car look like "models/players/...". If the .car itself
+// lies somewhere below a "models" directory, that directory's parent is the
+// root we are looking for. The reference skeleton is given in -makeskel,
+// without an extension.
 struct AutoPaths {
-    std::string baseDir;        // leer, wenn nicht gefunden
-    std::string referenceGla;   // leer, wenn nicht gefunden
-    std::string note;           // was gefunden wurde, fuer die Ausgabe
+    std::string baseDir;        // empty if not found
+    std::string referenceGla;   // empty if not found
+    std::string note;           // what was found, for the output
 };
 AutoPaths guessPaths(const Script& script, const std::string& carPath);
 
-// Sucht die Assetwurzel, indem vom Verzeichnis der .car aus nach oben
-// gegangen wird, bis der erste $aseanimgrab-Pfad aufgeht.
+// Finds the asset root by walking up from the .car's directory until the
+// first $aseanimgrab path resolves.
 //
-// Beispiel: liegt die .car unter
+// Example: if the .car lies under
 //   C:/jka_animations/md/base/models/players/__new_anim/_humanoid/
-// und zeigt der erste Grab auf
+// and the first grab points to
 //   models/players/__new_anim/__original_anim/both_a1.xsi
-// dann ist die Wurzel C:/jka_animations/md/base.
+// then the root is C:/jka_animations/md/base.
 //
-// Liefert einen leeren String, wenn nichts passt.
+// Returns an empty string if nothing matches.
 std::string guessBaseDir(const Script& script, const std::string& carPath, int maxLevels = 10);
 
-// Leitet die Referenz-GLA aus -makeskel ab: <basis>/<makeskel>.gla
-// Liefert einen leeren String, wenn die Datei nicht existiert.
+// Derives the reference GLA from -makeskel: <base>/<makeskel>.gla
+// Returns an empty string if the file does not exist.
 std::string guessReferenceGla(const Script& script, const std::string& baseDir);
 
 BuildResult build(const Script& script, const Skeleton& reference, const std::string& carPath,
