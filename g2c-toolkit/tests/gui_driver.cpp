@@ -659,11 +659,6 @@ int main(int argc, char** argv) {
     const auto guardedStep = [&](const char* what, const std::function<void()>& f) {
         D.where = what;
         const int code = guarded(f);
-        if (!app->documents().empty()) {
-            std::size_t nc = 0;
-            for (const auto& g : app->documents()[0].script.grabs) nc += g.commentsBefore.size();
-            out("    (Spur: nach \"%s\" hat Tab 0 %zu Kommentarzeilen)\n", what, nc);
-        }
         if (code != 0) {
             ++crashes;
             ++g_failures;
@@ -926,6 +921,68 @@ int main(int argc, char** argv) {
                                           std::to_string(px) + "," + std::to_string(py) + ")");
         check(g2::gui::App::isRootGrab(d.script.grabs.back()), "root weiterhin zuletzt");
 
+        // Obere oder untere Haelfte der Zielzeile: davor oder dahinter, und
+        // waehrend des Ziehens eine Linie genau an dieser Stelle.
+        {
+            const auto punkt = [](const Item& it, float anteil) {
+                return ImVec2(it.bb.Min.x + 6.0f, it.bb.Min.y + it.bb.GetHeight() * anteil);
+            };
+            // Halten, zur Stelle ziehen, Zustand pruefen, loslassen.
+            const auto ziehe = [&](const std::string& quelle, std::size_t zielZeile, float anteil,
+                                   int* linienVertices) {
+                D.clickRow(D.row(quelle));
+                const Item* s = D.row(quelle);
+                const Item* t = D.row(nameAt(zielZeile));
+                if (!s || !t) return;
+                const ImVec2 von = Driver::leftOf(*s), nach = punkt(*t, anteil);
+                D.moveTo(von);
+                D.frames(2);
+                ImGui::GetIO().AddMouseButtonEvent(0, true);
+                D.frame();
+                for (int k = 1; k <= 10; ++k)
+                    D.moveTo(ImVec2(von.x + (nach.x - von.x) * k / 10.0f,
+                                    von.y + (nach.y - von.y) * k / 10.0f));
+                D.frames(2);
+                if (linienVertices) *linienVertices = ImGui::GetForegroundDrawList()->VtxBuffer.Size;
+                ImGui::GetIO().AddMouseButtonEvent(0, false);
+                D.frames(3);
+            };
+
+            const std::string m = nameAt(0);
+            int vtx = 0;
+            ziehe(m, 6, 0.8f, &vtx);
+            check(vtx > 0, "beim Ziehen erscheint die Einfuegelinie");
+            check(nameAt(6) == m, "untere Haelfte von Zeile 6: dahinter eingefuegt (" + grabNames(d) + ")");
+
+            const std::string m2 = nameAt(0);
+            ziehe(m2, 3, 0.2f, nullptr);
+            check(nameAt(2) == m2, "obere Haelfte von Zeile 3: davor eingefuegt (" + grabNames(d) + ")");
+
+            // Unter eine Ueberschrift ziehen: die Ueberschrift bleibt oben,
+            // die Sequenz steht darunter.
+            std::size_t mitKomm = 0;
+            for (std::size_t k = 1; k + 1 < d.script.grabs.size(); ++k)
+                if (!d.script.grabs[k].commentsBefore.empty()) mitKomm = k;
+            if (mitKomm > 0) {
+                const std::string ueber = d.script.grabs[mitKomm].commentsBefore.front();
+                const std::string zielName = nameAt(mitKomm);
+                const std::string m3 = nameAt(mitKomm == 1 ? 0 : 0);
+                ziehe(m3, mitKomm, 0.2f, nullptr);
+                std::size_t posM = 0, posZ = 0;
+                for (std::size_t k = 0; k < d.script.grabs.size(); ++k) {
+                    if (nameAt(k) == m3) posM = k;
+                    if (nameAt(k) == zielName) posZ = k;
+                }
+                check(posM + 1 == posZ && !d.script.grabs[posM].commentsBefore.empty() &&
+                          d.script.grabs[posM].commentsBefore.front() == ueber &&
+                          d.script.grabs[posZ].commentsBefore.empty(),
+                      "unter eine Ueberschrift gezogen: Ueberschrift bleibt darueber");
+            } else {
+                check(false, "Testdaten ohne Ueberschrift");
+            }
+            check(g2::gui::App::isRootGrab(d.script.grabs.back()), "root bleibt zuletzt");
+        }
+
         // Ziehen auf den ANDEREN Tab: darf nicht im falschen Skript umordnen.
         if (app->documents().size() >= 2) {
             auto& other = app->documents()[1];
@@ -989,10 +1046,6 @@ int main(int argc, char** argv) {
             }
             D.click(e);
             D.frames(3);
-            std::string per;
-            for (const auto& g : d.script.grabs) per += std::to_string(g.commentsBefore.size());
-            out("    (Spur: nach %s an Zeile %zu: je Zeile %s, Ablage %zu)\n", tr(entry), k, per.c_str(),
-                app->clipboardSize());
             return true;
         };
         const std::size_t n0 = d.script.grabs.size();
@@ -1050,12 +1103,6 @@ int main(int argc, char** argv) {
         D.click(D.findEnds(tr(S::DeleteSeq), "confirmdel"));
         D.frames(2);
         check(d.script.grabs.size() == n0 - 1 && app->clipboardSize() == 1, "Ausschneiden");
-        {
-            std::string per;
-            for (const auto& g : d.script.grabs) per += std::to_string(g.commentsBefore.size());
-            out("    (Spur: nach Bestaetigen: je Zeile %s, Schluss %zu)\n", per.c_str(),
-                d.script.trailingComments.size());
-        }
         (void)first;
     });
 
@@ -1178,8 +1225,6 @@ int main(int argc, char** argv) {
             return i.window.find("seqs") != std::string::npos && i.label == "...";
         });
         D.doubleClick(tc, false);
-        out("    (nach Doppelklick: Eingabefeld da: %d, aktiv: %08X)\n",
-            D.findIf([](const Item& i) { return i.label == "##tc"; }) != nullptr, GImGui->ActiveId);
         const bool dlg = D.windowOpen("###seqdlg");
         check(!dlg, "Doppelklick auf den Zeilenkommentar oeffnet NICHT den Sequenzdialog");
         if (dlg) {
@@ -1251,16 +1296,7 @@ int main(int argc, char** argv) {
         check(logHas(*app, "t_gui.gla"), "Alle bauen: Protokoll meldet die GLA");
 
         // Protokoll: Ausgabeordner oeffnen.
-        {
-            const Item* tl = D.findTab(tr(S::TabLog));
-            if (tl) out("    (Protokoll-Tab bei %.0f,%.0f in %s)\n", Driver::center(*tl).x, Driver::center(*tl).y, tl->window.c_str());
-            else {
-                out("    (Protokoll-Tab nicht gefunden; Elemente unten:)\n");
-                for (const Item& i : g_last)
-                    if (i.window.find("bottom") != std::string::npos)
-                        out("    (   \"%s\" in %s y=%.0f)\n", i.label.c_str(), i.window.c_str(), i.bb.Min.y);
-            }
-        }
+        if (!D.findTab(tr(S::TabLog))) out("    (Reiter %s nicht gefunden)\n", tr(S::TabLog));
         D.click(D.findTab(tr(S::TabLog)));
         D.frames(2);
         if (!D.findEnds(tr(S::OpenOutputDir))) {
