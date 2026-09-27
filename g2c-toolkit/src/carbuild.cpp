@@ -118,13 +118,21 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
     eval.scale = reference.scale > 0.0f ? reference.scale : 1.0f;
     if (script.scale && *script.scale > 0.0) eval.scale = static_cast<float>(*script.scale);
 
-    // $keepmotion: die Wurzelbewegung bleibt in der Animation.
+    // $keepmotion behaelt den "Motion"-Bone im Skelett. Die Wurzelbewegung
+    // wird trotzdem herausgerechnet.
     //
-    // Wurde bisher gelesen, aber nie beachtet — bei einem Skript mit
-    // $keepmotion wurde die Bewegung trotzdem herausgerechnet. Im Spiel
-    // haette sich die Figur dann doppelt bewegt oder gar nicht, je nachdem
-    // wie die Engine damit umgeht. Ravens _humanoid_yoda.car benutzt es.
-    eval.extractRootMotion = !script.keepMotion;
+    // So verhaelt sich Ravens Carcass (Ausgabe: "Keeping motion bone", danach
+    // "Compensating for motion bone"), und so ist Ravens ausgelieferte
+    // _humanoid.gla gebaut: deren _humanoid.car enthaelt $keepmotion, und
+    // trotzdem traegt jede Sequenz mit Nettobewegung die Rampe auf
+    // model_root. Nachgemessen an 1400 Sequenzen gegen die GLA aus
+    // assets1.pk3: mit Rampe stimmt die Wurzel bei 1396 ueberein, ohne bei
+    // nur 1144 — bei BOTH_RUNSTRAFE_LEFT1/RIGHT1 lagen 96 Einheiten dazwischen.
+    //
+    // Eine fruehere Fassung schaltete die Rampe bei $keepmotion ab. Die Figur
+    // lief dann waehrend der Animation aus ihrer Mitte heraus und sprang beim
+    // naechsten Durchlauf zurueck.
+    eval.extractRootMotion = true;
 
     if (opt.originOverride) {
         eval.origin = *opt.originOverride;
@@ -192,6 +200,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         std::string     resolvedPath;
         bool            ok = false;
         std::string     warning;
+        std::string     rangeNote;
         std::vector<std::string> missingBones;
     };
     std::vector<Loaded> loaded(nGrabs);
@@ -231,6 +240,14 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
                                         ? static_cast<int>(anim.frameRate)
                                         : 0;
                     out.missingBones = std::move(ev.missingBones);
+                    if (anim.sceneRangeDiffers())
+                        out.rangeNote = g.file + ": SI_Scene nennt Frames " +
+                                        std::to_string(anim.sceneFirst) + ".." +
+                                        std::to_string(anim.sceneLast) + ", die Keys reichen von " +
+                                        std::to_string(anim.firstFrame) + " bis " +
+                                        std::to_string(anim.lastFrame) +
+                                        " - gebaut mit den Keys. Carcass lehnt so eine Datei "
+                                        "ab; neu exportieren.";
                     for (int k = 0; k < 3; ++k) out.rootMotion[k] = ev.rootMotion[k];
                     out.resolvedPath = resolved[i];
                     out.frames = std::move(ev.frames);
@@ -250,6 +267,30 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         },
         opt.threads);
 
+    // Vorhandene, aber unlesbare Dateien genauso behandeln wie fehlende.
+    //
+    // Frueher wurden sie als Warnung vermerkt und uebersprungen. Das Ergebnis
+    // sah wie ein gelungener Bau aus, aber ab der Luecke stand jede
+    // nachfolgende Sequenz an einem anderen Zielframe als in der
+    // animation.cfg des Spiels — genau das, was ohne -skipmissing
+    // ausgeschlossen sein soll.
+    if (!opt.skipMissing) {
+        std::vector<std::string> unreadable;
+        for (std::size_t i = 0; i < nGrabs; ++i)
+            if (!resolved[i].empty() && !loaded[i].ok) unreadable.push_back(loaded[i].warning);
+        if (!unreadable.empty()) {
+            std::ostringstream os;
+            os << unreadable.size() << " von " << nGrabs
+               << " Animationsdateien konnten nicht gelesen werden:";
+            for (std::size_t i = 0; i < unreadable.size() && i < 8; ++i)
+                os << "\n  " << unreadable[i];
+            if (unreadable.size() > 8) os << "\n  ... und " << (unreadable.size() - 8) << " weitere";
+            os << "\n\nMit -skipmissing trotzdem bauen — Achtung, dann verschieben sich alle\n"
+                  "nachfolgenden Zielframes und die animation.cfg passt nicht mehr zur GLA.";
+            throw std::runtime_error(os.str());
+        }
+    }
+
     // --- Zusammenhaengen (seriell, Reihenfolge zaehlt) --------------------
     std::set<std::string> reportedMissingBones;
     int cursor = 0;
@@ -260,6 +301,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
 
         if (!L.warning.empty()) res.warnings.push_back(L.warning);
         if (!L.ok) continue;
+        if (!L.rangeNote.empty()) res.warnings.push_back(L.rangeNote);
 
         for (const auto& b : L.missingBones) reportedMissingBones.insert(b);
         res.frames.matrices.insert(res.frames.matrices.end(), L.frames.matrices.begin(),
@@ -272,6 +314,13 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         else if (L.frameRate > 0) speed = L.frameRate;
 
         Sequence s;
+        // Kommentare aus dem Skript in die animation.cfg uebernehmen.
+        //
+        // Nur beim Hauptgrab, nicht bei den -additional-Unterbereichen:
+        // die stehen in derselben Zeile und haetten denselben Kommentar
+        // wiederholt.
+        s.commentsBefore = g.commentsBefore;
+        s.trailingComment = g.trailingComment;
         s.name = g.enumName ? *g.enumName : g.derivedName();
         s.targetFrame = cursor;
         s.frameCount = L.frameCount;

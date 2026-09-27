@@ -75,6 +75,16 @@ struct AnimFile {
     float frameRate = 0.0f;
     bool  hasScene = false;
 
+    // Framebereich laut SI_Scene. Gebaut wird mit dem Bereich der Keys
+    // (firstFrame..lastFrame); weichen beide voneinander ab, ist die Datei
+    // fehlerhaft exportiert. Carcass bricht dann mit "Header # frames = N,
+    // but I read in M!!" ab, g2c baut mit den Keys und warnt.
+    int sceneFirst = 0;
+    int sceneLast = 0;
+    bool sceneRangeDiffers() const {
+        return hasScene && (sceneFirst != firstFrame || sceneLast != lastFrame);
+    }
+
     int frameCount() const { return lastFrame - firstFrame + 1; }
 
     const AnimNode* find(const std::string& bone) const;

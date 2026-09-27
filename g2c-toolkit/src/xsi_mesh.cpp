@@ -289,7 +289,15 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
     LOD lod;
     lod.surfaces.reserve(found.size());
 
-    for (const Found& f : found) {
+    // Welche Surface aus welchem Fund wurde. Ein uebersprungenes Mesh — ohne
+    // Shape, ohne Dreiecke — hat keine; f.parent zeigt aber in die Fundliste.
+    // Ohne Umrechnung verrutschten danach alle Elternbezuege um eins, und die
+    // Shadervererbung unten, die nach gleichem Elternteil sucht, griffe
+    // daneben.
+    std::vector<int> surfaceOf(found.size(), -1);
+
+    for (std::size_t fi = 0; fi < found.size(); ++fi) {
+        const Found& f = found[fi];
         const Template* mesh = f.model->find("SI_Mesh");
         const Template* shape = mesh ? mesh->findDeep("SI_Shape") : nullptr;
         const Template* tris = mesh ? mesh->findDeep("SI_TriangleList") : nullptr;
@@ -307,7 +315,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         surf.shader = (sh == shaders.end()) ? "" : sh->second;
 
         const auto arrays = parseShape(*shape);
-        if (const char* dbg = std::getenv("G2C_DEBUG_SHAPE"))
+        if (const std::string dbg = envValue("G2C_DEBUG_SHAPE"); !dbg.empty())
             if (f.xsiName == dbg) {
                 std::fprintf(stderr, "SI_Shape %s: %zu Arrays\n", f.xsiName.c_str(), arrays.size());
                 for (const auto& a : arrays)
@@ -526,7 +534,19 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         if (surf.flags & fmt::kSurfFlagIsBolt) ++res.stats.tags;
         if (surf.flags & fmt::kSurfFlagOff) ++res.stats.offSurfaces;
 
+        surfaceOf[fi] = static_cast<int>(lod.surfaces.size());
         lod.surfaces.push_back(std::move(surf));
+    }
+
+    // Elternbezuege von Fund- auf Surfaceindizes umrechnen. Fehlt der
+    // unmittelbare Elternteil, gilt der naechste vorhandene darueber.
+    for (std::size_t fi = 0; fi < found.size(); ++fi) {
+        if (surfaceOf[fi] < 0) continue;
+        int p = found[fi].parent;
+        while (p >= 0 && surfaceOf[static_cast<std::size_t>(p)] < 0)
+            p = found[static_cast<std::size_t>(p)].parent;
+        lod.surfaces[static_cast<std::size_t>(surfaceOf[fi])].parentIndex =
+            p < 0 ? -1 : surfaceOf[static_cast<std::size_t>(p)];
     }
 
     // Shaderzuweisung vervollstaendigen.

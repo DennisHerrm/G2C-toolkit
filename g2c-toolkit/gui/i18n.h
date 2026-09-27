@@ -113,10 +113,17 @@ enum class S {
     CopyLog, CopyLogTip, LogCopied, ClearLog,
     BasePoseLabel, BasePoseTip, BasePoseWorld, BasePoseLocal, BasePoseNone,
     GlaNameFromMakeSkel, KeepBackup, KeepBackupTip, AboutLogPath, XsiVersionTip,
+    FoldersAdded, OpenOutputDir, RefIsTarget, RefMissing, BuildStoppedDup,
+    DlgComment, DlgCommentTip, AddDivider, AddComment, ColComment, CommentEditHint, TrailCommentTip,
     ModePreview, ModePreviewHint, PreviewNoGla, PreviewPlay, PreviewPause,
     PreviewFrame, PreviewReset, PreviewHint, PreviewBones, PreviewSeq,
     OpenFrames, OriginLabel, OriginDetected, OriginNone, FramesMissing, FramesLoaded,
     NotValidatedHint, EnumsAvailable, DlgStart, SpeedAuto, BuildProgress,
+
+    // Rueckfragen, Sicherungen, bisher fest deutsche Texte
+    UnsavedHead, Discard, OverwriteHead, Overwrite, LogBackedUp, DragOtherTab,
+    NErrors, NWarnings, Validated, DlgSeqTitle, LogCarsUnder, DupInCfg, DupIssue,
+    LogWriteFailed, LogSeqsSkipped,
 
     Count
 };

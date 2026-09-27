@@ -141,6 +141,51 @@ std::string toUtf8(const std::wstring& s) {
 
 // --- Dateidialoge ----------------------------------------------------------
 
+// Der Filter enthaelt eingebettete Nullbytes; toWide bricht daran ab.
+// Deshalb Stueck fuer Stueck umwandeln.
+std::wstring dialogFilter(const char* filter) {
+    std::wstring fw;
+    if (filter) {
+        const char* p = filter;
+        while (*p) {
+            const std::string part(p);
+            fw.append(toWide(part));
+            fw.push_back(L'\0');
+            p += part.size() + 1;
+        }
+    }
+    fw.push_back(L'\0');
+    return fw;
+}
+
+// Speichern-Dialog: der Name darf noch nicht existieren.
+//
+// Fuer "Neue .car" war bisher der Oeffnen-Dialog mit OFN_FILEMUSTEXIST im
+// Einsatz — ein neuer Name liess sich damit gar nicht eingeben.
+std::string saveFileDialog(HWND owner, const char* title, const char* filter,
+                           const std::string& startDir, const char* defaultExt) {
+    std::vector<wchar_t> buf(4096, L'\0');
+    const std::wstring wtitle = toWide(title ? title : "");
+    const std::wstring fw = dialogFilter(filter);
+    const std::wstring startW = toWide(startDir);
+    const std::wstring extW = toWide(defaultExt ? defaultExt : "");
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = fw.c_str();
+    ofn.lpstrFile = buf.data();
+    ofn.nMaxFile = static_cast<DWORD>(buf.size());
+    ofn.lpstrTitle = wtitle.empty() ? nullptr : wtitle.c_str();
+    if (!startW.empty()) ofn.lpstrInitialDir = startW.c_str();
+    if (!extW.empty()) ofn.lpstrDefExt = extW.c_str();
+    // Kein OFN_OVERWRITEPROMPT: newCar lehnt vorhandene Dateien ohnehin ab
+    // und sagt es im Protokoll — ueberschrieben wird nie.
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameW(&ofn)) return {};
+    return toUtf8(buf.data());
+}
+
 std::vector<std::string> openFilesDialog(HWND owner, const char* title, const char* filter,
                                          bool multi, const std::string& startDir) {
     // GetOpenFileNameW mit Mehrfachauswahl. Der Puffer muss grosszuegig sein:
@@ -148,23 +193,7 @@ std::vector<std::string> openFilesDialog(HWND owner, const char* title, const ch
     // nacheinander, durch Nullbytes getrennt.
     std::vector<wchar_t> buf(64 * 1024, L'\0');
     const std::wstring wtitle = toWide(title ? title : "");
-    const std::wstring wfilter =
-        filter ? toWide(std::string(filter, std::strlen(filter) + 1)) : L"";
-
-    // Der Filter enthaelt eingebettete Nullbytes; toWide bricht daran ab.
-    // Deshalb hier von Hand aufbauen.
-    std::wstring fw;
-    if (filter) {
-        const char* p = filter;
-        while (*p) {
-            const std::string part(p);
-            const std::wstring w = toWide(part);
-            fw.append(w);
-            fw.push_back(L'\0');
-            p += part.size() + 1;
-        }
-    }
-    fw.push_back(L'\0');
+    const std::wstring fw = dialogFilter(filter);
 
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
@@ -216,6 +245,88 @@ void setStartFolder(IFileDialog* dlg, const std::string& startDir) {
         dlg->SetFolder(item);
         item->Release();
     }
+}
+
+// Mehrere Ordner auf einmal auswaehlen.
+//
+// Derselbe Dialog wie fuer einen Ordner, nur mit FOS_ALLOWMULTISELECT.
+// IFileOpenDialog liefert die Auswahl dann ueber GetResults als
+// IShellItemArray — GetResult (Einzahl) schlaegt in dem Fall fehl, deshalb
+// braucht es eine eigene Funktion und nicht nur ein zusaetzliches Flag.
+//
+// Im Dialog werden Ordner mit Strg und Umschalt ausgewaehlt wie Dateien.
+// Kleiner Halter fuer COM-Zeiger.
+//
+// Die Dialoge geben ihre Objekte bisher von Hand frei. Das ist richtig,
+// solange nichts dazwischen wirft — aber toUtf8 und std::string koennen
+// bei Speichermangel werfen, und dann bleibt das Objekt liegen.
+//
+// Ein Leck in einem Dateidialog ist kein Drama. Es von Hand richtig zu
+// machen und dabei auf Ausnahmefreiheit zu hoffen, ist trotzdem die
+// schlechtere Loesung, wenn die gute drei Zeilen kostet.
+template <typename T>
+class ComPtr {
+public:
+    ComPtr() = default;
+    ~ComPtr() { if (p_) p_->Release(); }
+
+    ComPtr(const ComPtr&) = delete;
+    ComPtr& operator=(const ComPtr&) = delete;
+
+    T** put() { return &p_; }
+    T*  get() const { return p_; }
+    T*  operator->() const { return p_; }
+    explicit operator bool() const { return p_ != nullptr; }
+
+private:
+    T* p_ = nullptr;
+};
+
+std::vector<std::string> pickFoldersDialog(HWND owner, const char* title,
+                                           const std::string& startDir) {
+    std::vector<std::string> result;
+    ComPtr<IFileOpenDialog> dlg;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(dlg.put()))))
+        return result;
+
+    // .get(): ComPtr wandelt sich bewusst NICHT stillschweigend in einen
+    // Zeiger um. Bequem waere das, aber dann liesse sich der Halter auch
+    // versehentlich an Release() oder delete uebergeben — und genau davor
+    // soll er schuetzen.
+    setStartFolder(dlg.get(), startDir);
+    DWORD opts = 0;
+    dlg->GetOptions(&opts);
+    // FOS_FORCEFILESYSTEM bewusst NICHT setzen.
+    //
+    // Zusammen mit FOS_ALLOWMULTISELECT verhindert es die Mehrfachauswahl:
+    // der Dialog laesst dann nur einen Ordner markieren, ohne eine Meldung.
+    // Dass echte Pfade herauskommen, wird stattdessen beim Auslesen
+    // geprueft — GetDisplayName(SIGDN_FILESYSPATH) scheitert bei allem, was
+    // kein Ordner im Dateisystem ist, und der Eintrag wird uebersprungen.
+    dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_ALLOWMULTISELECT);
+    if (title) {
+        const std::wstring w = toWide(title);
+        dlg->SetTitle(w.c_str());
+    }
+
+    if (SUCCEEDED(dlg->Show(owner))) {
+        ComPtr<IShellItemArray> items;
+        if (SUCCEEDED(dlg->GetResults(items.put())) && items) {
+            DWORD count = 0;
+            items->GetCount(&count);
+            for (DWORD i = 0; i < count; ++i) {
+                ComPtr<IShellItem> item;
+                if (FAILED(items->GetItemAt(i, item.put())) || !item) continue;
+                PWSTR path = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                    result.push_back(toUtf8(path));
+                    CoTaskMemFree(path);
+                }
+            }
+        }
+    }
+    return result;
 }
 
 std::string pickFolderDialog(HWND owner, const char* title, const std::string& startDir) {
@@ -510,12 +621,15 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 std::string lower = p;
                 for (char& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
                 if (!g_app) continue;
-                if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".car") == 0)
-                    g_app->openCar(p);
-                else if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
+                // .xsi gesammelt anhaengen, alles andere ueber openPath — also
+                // genau so wie beim Ziehen auf die Exe. Frueher wurden .gla
+                // und anims.h hier stillschweigend ignoriert, und ein nicht
+                // (mehr) vorhandener Pfad galt als Ordner, weil
+                // INVALID_FILE_ATTRIBUTES das Verzeichnisbit gesetzt hat.
+                if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
                     xsi.push_back(p);
-                else if (GetFileAttributesW(path) & FILE_ATTRIBUTE_DIRECTORY)
-                    g_app->openFolder(p);
+                else
+                    g_app->openPath(p);
             }
             if (!xsi.empty() && g_app) g_app->addXsiFiles(xsi, false);
             DragFinish(drop);
@@ -525,6 +639,19 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SYSCOMMAND:
             if ((wp & 0xfff0) == SC_KEYMENU) return 0;   // Alt-Menue unterdruecken
             break;
+
+        case WM_CLOSE:
+            // Nicht gleich zerstoeren. Frueher ging das Fenster sofort zu:
+            // ungespeicherte Aenderungen waren ohne Rueckfrage weg, und
+            // saveWindowPlacement fand danach kein Fenster mehr vor, sodass
+            // die Fensterlage nie gespeichert wurde.
+            //
+            // Jetzt entscheidet die Oberflaeche. Ohne Aenderungen endet die
+            // Hauptschleife sofort; sonst fragt ein Dialog, und die Schleife
+            // endet, sobald er beantwortet ist. Zerstoert wird das Fenster
+            // erst danach, am Ende von wWinMain.
+            if (!g_app || g_app->requestQuit()) PostQuitMessage(0);
+            return 0;
 
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -622,9 +749,13 @@ namespace {
 // der Fall, wenn man eine .car auf die Exe zieht — dann will man das
 // Fenster sehen, kein Konsolenfenster.
 bool looksLikeCommand(const char* a) {
-    static const char* kCmds[] = {"build", "anim",     "mesh", "info", "check", "xsi",
-                                  "car",   "validate", "diff", "scan", "-h",    "--help",
-                                  "/?",    "help",     "-v",   "--version"};
+    // Dieselbe Liste wie in g2cMain. export, makecar und about fehlten: sie
+    // oeffneten die Oberflaeche, obwohl die Fehlermeldung beim Grafikstart
+    // genau "g2c about" empfiehlt.
+    static const char* kCmds[] = {"build", "anim",   "mesh",    "info",  "check", "xsi",
+                                  "car",   "validate", "diff",  "scan",  "export", "makecar",
+                                  "about", "version", "-h",     "--help", "/?",   "help",
+                                  "-v",    "--version"};
     for (const char* c : kCmds)
         if (std::strcmp(a, c) == 0) return true;
     return false;
@@ -642,9 +773,18 @@ void attachOrOpenConsole() {
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
         if (!AllocConsole()) return;
     }
+    // Umgeleitete Ausgabe ("g2c info a.gla > out.txt") nicht auf die
+    // Konsole umbiegen. Frueher wurde stdout immer neu auf CONOUT$ geoeffnet,
+    // und die Datei blieb leer.
+    const auto redirected = [](DWORD which) {
+        const HANDLE h = GetStdHandle(which);
+        if (!h || h == INVALID_HANDLE_VALUE) return false;
+        const DWORD t = GetFileType(h);
+        return t == FILE_TYPE_DISK || t == FILE_TYPE_PIPE;
+    };
     FILE* f = nullptr;
-    freopen_s(&f, "CONOUT$", "w", stdout);
-    freopen_s(&f, "CONOUT$", "w", stderr);
+    if (!redirected(STD_OUTPUT_HANDLE)) freopen_s(&f, "CONOUT$", "w", stdout);
+    if (!redirected(STD_ERROR_HANDLE)) freopen_s(&f, "CONOUT$", "w", stderr);
     freopen_s(&f, "CONIN$", "r", stdin);
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
@@ -874,8 +1014,15 @@ int wWinMainGuarded(HINSTANCE inst) {
                             const std::string& startDir) {
         return openFilesDialog(hwnd, title, filter, multi, startDir);
     };
+    plat.pickFolders = [hwnd](const char* title, const std::string& startDir) {
+        return pickFoldersDialog(hwnd, title, startDir);
+    };
     plat.pickFolder = [hwnd](const char* title, const std::string& startDir) {
         return pickFolderDialog(hwnd, title, startDir);
+    };
+    plat.saveFile = [hwnd](const char* title, const char* filter, const std::string& startDir,
+                           const char* defaultExt) {
+        return saveFileDialog(hwnd, title, filter, startDir, defaultExt);
     };
     plat.revealInExplorer = [](const std::string& path) {
         const std::wstring w = toWide(path);
@@ -894,11 +1041,14 @@ int wWinMainGuarded(HINSTANCE inst) {
     // Stelle ab, und der Ordner ist fuer den Nutzer nicht auffindbar.
     if (args.hasReset()) {
         startupLog("gespeicherten Zustand verwerfen (-reset)");
-        wchar_t appdata[MAX_PATH];
-        if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH)) {
-            const std::wstring dir = std::wstring(appdata) + L"\\g2c\\";
-            for (const wchar_t* f : {L"g2c_settings.txt", L"g2c_window.txt", L"imgui.ini"})
-                DeleteFileW((dir + f).c_str());
+        // Derselbe Ordner, aus dem auch gelesen wird — im mitnehmbaren
+        // Betrieb liegt er neben der Exe, nicht unter %APPDATA%. Und die
+        // Fensterdatei heisst g2c_gui.ini; geloescht wurde frueher eine
+        // imgui.ini, die es nie gab.
+        const std::filesystem::path dir(g2::gui::App::configDir());
+        for (const char* f : {"g2c_settings.txt", "g2c_window.txt", "g2c_gui.ini"}) {
+            std::error_code ec;
+            std::filesystem::remove(dir / f, ec);
         }
     }
 
@@ -948,6 +1098,10 @@ int wWinMainGuarded(HINSTANCE inst) {
 
         app.draw();
 
+        // Fensterkreuz bei ungespeicherten Aenderungen: die Oberflaeche hat
+        // gefragt, und die Antwort war "speichern" oder "verwerfen".
+        if (app.quitApproved()) running = false;
+
         ImGui::Render();
         const float clear[4] = {0.09f, 0.09f, 0.10f, 1.0f};
         // Ohne Renderziel nichts zeichnen.
@@ -979,15 +1133,15 @@ int wWinMainGuarded(HINSTANCE inst) {
             const HRESULT reason =
                 (pr == DXGI_ERROR_DEVICE_REMOVED && g_device) ? g_device->GetDeviceRemovedReason()
                                                               : pr;
-            wchar_t msg[512];
-            _snwprintf_s(msg, _TRUNCATE,
+            wchar_t text[512];
+            _snwprintf_s(text, _TRUNCATE,
                          L"Der Grafiktreiber wurde zurueckgesetzt und g2c muss beendet "
                          L"werden.\n\nCode: 0x%08X\n\n"
                          L"Ungespeicherte Aenderungen an den Skripten gehen verloren.\n"
                          L"Haeufigste Ursache ist ein Treiberupdate im laufenden Betrieb "
                          L"oder ein haengender Grafiktreiber.",
                          static_cast<unsigned>(reason));
-            MessageBoxW(hwnd, msg, L"g2c", MB_OK | MB_ICONERROR);
+            MessageBoxW(hwnd, text, L"g2c", MB_OK | MB_ICONERROR);
             break;
         }
     }

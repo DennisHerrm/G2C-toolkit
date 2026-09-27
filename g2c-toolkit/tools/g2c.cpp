@@ -18,8 +18,17 @@
 #include "g2/xsi_mesh.h"
 #include "g2/sidefiles.h"
 #include "g2/mdxm.h"
-#include "g2/mdxm.h"
 #include <cmath>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <chrono>
 #include <memory>
@@ -82,10 +91,71 @@ void printTree(const g2::Skeleton& s, const std::vector<std::vector<int>>& kids,
 //
 // Immer "animation.cfg" — so sucht die Engine sie. Eine Sicherung der
 // vorhandenen wird angelegt, bevor sie ersetzt wird.
+// Referenz-GLA laden - mit einer Meldung, die den GRUND nennt.
+//
+// Sie liefert das SKELETT: Bonenamen, Hierarchie, Bindeposen, Skalierung.
+// Die .xsi-Dateien enthalten nur Animationsdaten; ohne Skelett laesst sich
+// keine GLA schreiben.
+//
+// "Kann nicht oeffnen" allein laesst offen, warum eine Datei geoeffnet
+// wird, wo doch eine neue geschrieben werden soll — genau diese Frage kam
+// aus der Praxis.
+g2::MdxaFile loadReference(const std::string& refPath) {
+    std::error_code ec;
+    if (!std::filesystem::exists(refPath, ec))
+        throw std::runtime_error(
+            "Die Referenz-GLA \"" + refPath +
+            "\" gibt es nicht.\n"
+            "       Sie liefert das SKELETT - Bonenamen, Hierarchie, Bindeposen,\n"
+            "       Skalierung. Die .xsi-Dateien enthalten nur Animationsdaten;\n"
+            "       ohne Skelett laesst sich keine GLA schreiben.\n"
+            "       Eine vorhandene GLA mit demselben Skelett angeben.");
+    return g2::readMdxa(readFile(refPath));
+}
+
 std::string cfgNextTo(const std::string& outPath) {
     namespace fs = std::filesystem;
     const fs::path dir = fs::path(outPath).parent_path();
     return (dir.empty() ? fs::path("animation.cfg") : dir / "animation.cfg").string();
+}
+
+// Nebendatei mit anderer Endung: _humanoid.gla -> _humanoid.frames.
+//
+// Frueher per find_last_of('.') ueber den GANZEN Pfad. Bei "-o C:\jka.mods\out"
+// (ohne Endung) entstand daraus "C:\jka.frames", bei "..\neu\hum" "..frames".
+std::string sideFile(const std::string& outPath, const char* ext) {
+    return std::filesystem::path(outPath).replace_extension(ext).string();
+}
+
+// Sicherung, bevor die Referenz ersetzt wird.
+//
+// "g2c build _humanoid.car -ref _humanoid.gla" im Modellordner schreibt ohne
+// -o genau auf die Referenz, und "g2c anim ref.gla ref.gla walk.xsi" ersetzte
+// eine GLA mit 2000 Sequenzen durch eine mit einer — samt animation.cfg, ohne
+// Rueckfrage. Neu bauen ueber die Referenz ist erlaubt (sie ist dann schon
+// vollstaendig gelesen), aber nie mehr ohne Sicherung.
+void backupIfReference(const std::string& outPath, const std::string& refPath) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists(outPath, ec) || !fs::exists(refPath, ec)) return;
+
+    const bool sameFile = fs::equivalent(outPath, refPath, ec) && !ec;
+    const fs::path outDir = fs::absolute(outPath, ec).parent_path();
+    const fs::path refDir = fs::absolute(refPath, ec).parent_path();
+    const bool sameDir = fs::equivalent(outDir, refDir, ec) && !ec;
+
+    const auto keep = [](const fs::path& p) {
+        std::error_code e;
+        if (!fs::exists(p, e)) return;
+        fs::path bak = p;
+        bak += ".bak";
+        fs::copy_file(p, bak, fs::copy_options::overwrite_existing, e);
+        if (e) throw std::runtime_error("Kann keine Sicherung " + bak.string() + " anlegen: " +
+                                        e.message());
+        std::printf("Gesichert : %s\n", bak.string().c_str());
+    };
+    if (sameFile) keep(outPath);
+    if (sameDir) keep(cfgNextTo(outPath));
 }
 
 int cmdAbout() {
@@ -96,13 +166,24 @@ int cmdAbout() {
     // Wo das Startprotokoll liegt.
     //
     // Bei einer Fehlermeldung ist das die erste Frage, und sie laesst sich
-    // hier beantworten statt im Forum. Ueber argv[0] statt GetModuleFileName,
-    // damit die Datei ohne <windows.h> auskommt und sich auch hier
-    // uebersetzen laesst.
+    // hier beantworten statt im Forum. Unter Windows ueber
+    // GetModuleFileNameW: /proc/self/exe gibt es dort nicht, und die Angabe
+    // fiel auf das Arbeitsverzeichnis zurueck — aus einem anderen Ordner
+    // gestartet also auf einen falschen Pfad.
     {
         std::error_code ec;
+#ifdef _WIN32
+        std::filesystem::path exe;
+        {
+            wchar_t buf[MAX_PATH * 4];
+            const DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(std::size(buf)));
+            if (n > 0 && n < std::size(buf)) exe = std::filesystem::path(std::wstring(buf, n));
+        }
+        std::filesystem::path dir = exe.parent_path();
+#else
         const auto exe = std::filesystem::canonical("/proc/self/exe", ec);
         std::filesystem::path dir = ec ? std::filesystem::path() : exe.parent_path();
+#endif
         if (dir.empty()) dir = std::filesystem::current_path(ec);
         if (!dir.empty())
             std::printf("  Protokoll    : %s\n",
@@ -239,17 +320,21 @@ int cmdCar(const std::string& path, bool argc_verbose) {
     std::printf("Sequenzen    : %zu (davon %zu aus -additional, %zu in -qdskip-Regionen)\n",
                 seqs.size(), add, qd);
 
+    // Unbekannte Befehle immer zaehlen, nicht nur mit -v. Sonst erfuhr man
+    // ohne -v nie, dass Zeilen ignoriert werden.
     std::size_t unknown = 0;
+    for (const auto& st : s.statements)
+        if (st.cmd == g2::car::Cmd::Unknown) ++unknown;
     if (argc_verbose) {
         std::printf("\n%zu Anweisungen:\n", s.statements.size());
-    for (const auto& st : s.statements) {
-        std::printf("  %4zu  %-26s", st.line, st.raw.c_str());
-        for (const auto& a : st.args) std::printf(" %s", a.c_str());
-        if (st.cmd == g2::car::Cmd::Unknown) { std::printf("   <-- unbekannter Befehl"); ++unknown; }
-        std::printf("\n");
+        for (const auto& st : s.statements) {
+            std::printf("  %4zu  %-26s", st.line, st.raw.c_str());
+            for (const auto& a : st.args) std::printf(" %s", a.c_str());
+            if (st.cmd == g2::car::Cmd::Unknown) std::printf("   <-- unbekannter Befehl");
+            std::printf("\n");
+        }
     }
-    }
-    if (unknown) std::printf("\n%zu unbekannte Befehle — bitte melden.\n", unknown);
+    if (unknown) std::printf("\n%zu unbekannte Befehle - mit -v anzeigen, bitte melden.\n", unknown);
     return 0;
 }
 
@@ -260,7 +345,7 @@ int cmdAnim(int argc, char** argv) {
     const std::string refPath = argv[2];
     const std::string outPath = argv[3];
 
-    const g2::MdxaFile ref = g2::readMdxa(readFile(refPath));
+    const g2::MdxaFile ref = loadReference(refPath);
     std::printf("Referenz  : %s\n", refPath.c_str());
     std::printf("            %zu Bones, Scale %g, GLA-Name \"%s\"\n",
                 ref.skeleton.bones.size(), ref.skeleton.scale, ref.skeleton.name.c_str());
@@ -325,13 +410,25 @@ int cmdAnim(int argc, char** argv) {
         const auto dir = std::filesystem::path(outPath).parent_path();
         if (!dir.empty()) std::filesystem::create_directories(dir, ec);
     }
+    backupIfReference(outPath, refPath);
     g2::writeFileChecked(outPath, res.data.data(), res.data.size());
     std::printf("Geschrieben: %s (%zu Bytes)\n", outPath.c_str(), res.data.size());
 
     // Passende animation.cfg daneben legen.
     std::vector<g2::car::Sequence> seqs;
-    for (const auto& s : cat.sequences)
-        seqs.push_back({s.name, s.targetFrame, s.frameCount, -1, 20, s.sourceFile, false, false});
+    for (const auto& s : cat.sequences) {
+        // Feldweise statt Klammerinitialisierung: die Struktur hat
+        // inzwischen Kommentarfelder, und eine Liste in fester Reihenfolge
+        // bricht bei jeder Erweiterung.
+        g2::car::Sequence q;
+        q.name = s.name;
+        q.targetFrame = s.targetFrame;
+        q.frameCount = s.frameCount;
+        q.loopFrame = -1;
+        q.frameSpeed = 20;
+        q.sourceFile = s.sourceFile;
+        seqs.push_back(std::move(q));
+    }
     // Sie heisst "animation.cfg" und liegt neben der GLA.
     //
     // Frueher hiess sie "<name>_animation.cfg". Das ueberschreibt nichts und
@@ -368,6 +465,7 @@ int cmdBuild(int argc, char** argv) {
     std::string refPath, outPath, baseDir;
     g2::car::BuildOptions bo;
     bool noMesh = false;
+    bool noCache = false, clearCache = false;
 
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
@@ -378,9 +476,12 @@ int cmdBuild(int argc, char** argv) {
         else if (a == "-carcass") bo.carcassCompatible = true;
         else if (a == "-threads" && i + 1 < argc)
             bo.threads = static_cast<unsigned>(argInt(argv[++i], "-threads"));
+        // Drei getrennte Schalter. Frueher teilten sie sich ein Feld:
+        // "-cache D:\c -clearcache" leerte und benutzte dann den Ordner neben
+        // der .car, D:\c blieb unberuehrt.
         else if (a == "-cache" && i + 1 < argc) bo.cacheDir = argv[++i];
-        else if (a == "-nocache") bo.cacheDir = "(aus)";
-        else if (a == "-clearcache") bo.cacheDir = "(leeren)";
+        else if (a == "-nocache") noCache = true;
+        else if (a == "-clearcache") clearCache = true;
         else if (a == "-nomesh") noMesh = true;
         else if (a == "-framespeed" && i + 1 < argc)
             bo.defaultFrameSpeed = static_cast<int>(argInt(argv[++i], "-framespeed"));
@@ -390,7 +491,10 @@ int cmdBuild(int argc, char** argv) {
                 argFloat(argv[i + 3], "-origin Z")};
             i += 3;
         } else {
-            std::fprintf(stderr, "Unbekannte Option: %s\n", a.c_str());
+            std::fprintf(stderr, "%s: %s\n",
+                         a.empty() || a[0] != '-' ? "Unerwartetes Argument" : "Unbekannte Option "
+                                                                              "oder fehlender Wert",
+                         a.c_str());
             return 1;
         }
     }
@@ -407,16 +511,17 @@ int cmdBuild(int argc, char** argv) {
 
     // Vorgabe: ein Ordner neben der .car. Damit funktioniert der Cache ohne
     // Zutun und liegt dort, wo auch die Ausgabe entsteht.
-    if (bo.cacheDir == "(aus)") {
+    if (noCache) {
         bo.cacheDir.clear();
-    } else if (bo.cacheDir == "(leeren)") {
-        bo.cacheDir = (std::filesystem::path(carPath).parent_path() / "g2c_cache").string();
-        g2::AnimCache c(bo.cacheDir);
-        std::printf("Cache geleert: %zu Eintraege entfernt\n", c.clear());
-    } else if (bo.cacheDir.empty()) {
-        bo.cacheDir = (std::filesystem::path(carPath).parent_path() / "g2c_cache").string();
+    } else {
+        if (bo.cacheDir.empty())
+            bo.cacheDir = (std::filesystem::path(carPath).parent_path() / "g2c_cache").string();
+        if (clearCache) {
+            g2::AnimCache c(bo.cacheDir);
+            std::printf("Cache geleert: %zu Eintraege entfernt\n", c.clear());
+        }
     }
-    const g2::MdxaFile ref = g2::readMdxa(readFile(refPath));
+    const g2::MdxaFile ref = loadReference(refPath);
     return runBuild(carPath, refPath, outPath, bo, script, ref, noMesh);
 }
 
@@ -515,10 +620,10 @@ int runBuild(const std::string& carPath, const std::string& refPath, std::string
         const auto dir = std::filesystem::path(outPath).parent_path();
         if (!dir.empty()) std::filesystem::create_directories(dir, ec);
     }
+    backupIfReference(outPath, refPath);
     g2::writeFileChecked(outPath, res.data.data(), res.data.size());
     std::printf("Geschrieben: %s (%zu Bytes)\n", outPath.c_str(), res.data.size());
 
-    const std::size_t dot = outPath.find_last_of('.');
     const std::string cfgPath = cfgNextTo(outPath);
     std::ostringstream head;
     head << br.totalFrames() << " frames; " << br.sequences.size() << " sequences; erzeugt von g2c";
@@ -554,8 +659,7 @@ int runBuild(const std::string& carPath, const std::string& refPath, std::string
             for (int k = 0; k < 3; ++k) e.averageVec[k] = b.averageVec[k];
             fe.push_back(std::move(e));
         }
-        const std::string framesPath =
-            (dot == std::string::npos ? outPath : outPath.substr(0, dot)) + ".frames";
+        const std::string framesPath = sideFile(outPath, ".frames");
         const std::string txt = g2::writeFrames(fe);
         {
             g2::writeFileChecked(framesPath, txt);
@@ -565,7 +669,11 @@ int runBuild(const std::string& carPath, const std::string& refPath, std::string
 
     if (!noMesh) {
         const std::string outDir = std::filesystem::path(outPath).parent_path().string();
-        writeMeshFromScript(script, ref, bo.baseDir, carPath, outDir.empty() ? "." : outDir);
+        // Scheitert die GLM, ist der Lauf nicht gelungen — auch wenn die GLA
+        // steht. Frueher endete er trotzdem mit 0, und ein Skript, das den
+        // Rueckgabewert prueft, hielt alles fuer gebaut.
+        if (writeMeshFromScript(script, ref, bo.baseDir, carPath, outDir.empty() ? "." : outDir) != 0)
+            return 1;
     }
     return 0;
 }
@@ -669,7 +777,7 @@ int cmdMesh(int argc, char** argv) {
         return 1;
     }
 
-    const g2::MdxaFile ref = g2::readMdxa(readFile(refPath));
+    const g2::MdxaFile ref = loadReference(refPath);
     mo.scale = ref.skeleton.scale > 0.0f ? ref.skeleton.scale : 1.0f;
     mo.animName = ref.skeleton.name;
     for (const auto& b : ref.skeleton.bones) mo.boneNames.push_back(b.name);
@@ -698,18 +806,31 @@ int cmdMesh(int argc, char** argv) {
     if (!comparePath.empty()) {
         // Gegen eine vorhandene GLM stellen: Surfacenamen und Vertexzahlen.
         const auto d = readFile(comparePath);
-        const auto i32 = [&](std::size_t o) {
+        // Jeder Offset kommt aus der Datei. Ohne Pruefung las eine
+        // abgeschnittene GLM oder eine versehentlich angegebene Textdatei
+        // ausserhalb des Puffers.
+        const auto bad = [&] {
+            return std::runtime_error("\"" + comparePath + "\" ist keine gueltige GLM");
+        };
+        const auto i32 = [&](long long o) {
+            if (o < 0 || static_cast<std::size_t>(o) + 4 > d.size()) throw bad();
             std::int32_t v;
             std::memcpy(&v, d.data() + o, 4);
             return v;
         };
+        const auto str = [&](long long o) {
+            if (o < 0 || static_cast<std::size_t>(o) >= d.size()) throw bad();
+            const char* p = reinterpret_cast<const char*>(d.data() + o);
+            return std::string(p, strnlen(p, d.size() - static_cast<std::size_t>(o)));
+        };
+        if (d.size() < 164 || std::memcmp(d.data(), "2LGM", 4) != 0) throw bad();
         const int nS = i32(152), lod = i32(148);
+        if (nS < 0 || nS > 100000) throw bad();
         std::map<std::string, int> want;
         for (int i = 0; i < nS; ++i) {
-            const int so = i32(static_cast<std::size_t>(lod + 4 + i * 4));
-            const int ho = 164 + i32(static_cast<std::size_t>(164 + i * 4));
-            want[std::string(reinterpret_cast<const char*>(d.data() + ho))] =
-                i32(static_cast<std::size_t>(lod + 4 + so + 12));
+            const long long so = i32(static_cast<long long>(lod) + 4 + i * 4LL);
+            const long long ho = 164 + static_cast<long long>(i32(164 + i * 4LL));
+            want[str(ho)] = i32(static_cast<long long>(lod) + 4 + so + 12);
         }
         int ok = 0, refTot = 0, mine = 0;
         std::vector<std::string> diffs;
@@ -739,9 +860,7 @@ int cmdMesh(int argc, char** argv) {
     std::printf("\nGeschrieben: %s (%zu Bytes)\n", outPath.c_str(), w.data.size());
 
     if (writeSkinFile) {
-        const std::size_t dot = outPath.find_last_of('.');
-        const std::string skinPath =
-            (dot == std::string::npos ? outPath : outPath.substr(0, dot)) + ".skin";
+        const std::string skinPath = sideFile(outPath, ".skin");
         const std::string skin = g2::writeSkin(r.mesh);
         g2::writeFileChecked(skinPath, skin);
         {
@@ -772,8 +891,10 @@ int cmdValidate(int argc, char** argv, int firstOpt) {
         if (a == "-enums" && i + 1 < argc) enumPath = argv[++i];
         else if (a == "-basedir" && i + 1 < argc) vo.baseDir = argv[++i];
         else if (a == "-frames") vo.readFrameCounts = true;
-        else if (a == "-all") showAll = true;
-        else if (a == "-cache" && i + 1 < argc) vo.cacheDir = argv[++i];
+        else if (a == "-all") {
+            showAll = true;
+            vo.maxEnumWarnings = static_cast<std::size_t>(-1);
+        } else if (a == "-cache" && i + 1 < argc) vo.cacheDir = argv[++i];
         else if (a == "-threads" && i + 1 < argc)
             vo.threads = static_cast<unsigned>(argInt(argv[++i], "-threads"));
         else if (!a.empty() && a[0] == '-') {
@@ -827,6 +948,10 @@ int cmdScan(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "-enums" && i + 1 < argc) enumPath = argv[++i];
         else if (a == "-validate") doValidate = true;
+        else {
+            std::fprintf(stderr, "Unbekannte Option oder fehlender Wert: %s\n", a.c_str());
+            return 1;
+        }
     }
 
     const auto found = g2::car::scanDirectory(root);
@@ -1022,7 +1147,7 @@ int offerBuild(const std::string& carPath) {
     std::printf("\n");
 
     try {
-        const g2::MdxaFile ref = g2::readMdxa(readFile(refPath));
+        const g2::MdxaFile ref = loadReference(refPath);
         g2::car::BuildOptions bo;
         bo.baseDir = baseDir;
         std::printf("Threads     : %u\n\n", g2::defaultThreadCount());
@@ -1040,7 +1165,17 @@ int offerBuild(const std::string& carPath) {
         std::printf("\r                              \r");
         for (const auto& w : br.warnings) std::printf("  ! %s\n", w.c_str());
 
-        const auto res = g2::writeMdxa(ref.skeleton, br.frames);
+        // GLA-Name aus -makeskel, wie in runBuild und in der Oberflaeche.
+        // Hier stand frueher der Name der Referenz — ein eigener Humanoid
+        // meldete sich dann im Spiel als der Standard-Humanoid und bekam
+        // dessen animation.cfg.
+        g2::Skeleton outSkel = ref.skeleton;
+        if (script.convert && !script.convert->makeSkel.empty()) {
+            std::string ms = script.convert->makeSkel;
+            std::replace(ms.begin(), ms.end(), '\\', '/');
+            outSkel.name = ms;
+        }
+        const auto res = g2::writeMdxa(outSkel, br.frames);
 
         std::error_code ec;
         fs::create_directories(outDir, ec);
@@ -1192,9 +1327,27 @@ void usage() {
         "        -tol M            Toleranzen skalieren\n"
         "        -all              alle Treffer statt der ersten zwoelf\n"
         "\n"
+        "ZERLEGEN\n"
+        "  g2c export <datei.gla> [-cfg <animation.cfg>] [-o <ordner>]\n"
+        "        GLA zurueck nach dotXSI, eine Datei je Sequenz\n"
+        "        -frames <.frames>  Wurzelbewegung aus der .frames statt geschaetzt\n"
+        "        -only <name>       nur diese Sequenz\n"
+        "        -makecar <a.car>   dazu ein .car, mit dem sich die GLA neu bauen laesst\n"
+        "        -prefix <pfad>     Pfadvorsatz der .xsi in der .car\n"
+        "        -origin x y z / -noorigin / -scale S / -noscale\n"
+        "        -nomotion          Wurzelbewegung nicht aus der GLA schaetzen\n"
+        "        -keepmotion        $keepmotion ins erzeugte .car\n"
+        "        -makeskel <pfad>   -makeskel im erzeugten .car\n"
+        "        -xsi 3.0|3.5       dotXSI-Fassung, -basepose world|local|none\n"
+        "  g2c makecar <ordner> [-o <a.car>] [-root <root.xsi>] [-makeskel <pfad>]\n"
+        "        Aus einem Ordner voller .xsi ein .car erzeugen\n"
+        "        -basedir <pfad>  -enums <anims.h>  -origin x y z\n"
+        "\n"
         "ANSEHEN\n"
         "  g2c xsi   <datei.xsi>   dotXSI parsen, Templatetypen und Tempo\n"
         "  g2c car   <datei.car>   Carcass-Skript aufloesen (-v fuer alle Zeilen)\n"
+        "  g2c about               Fassung, Laufzeit, Ort des Startprotokolls\n"
+        "  g2c help                diese Hilfe\n"
         "\n"
         "Dateien koennen auch direkt auf g2c.exe gezogen werden; das Format\n"
         "wird am Inhalt erkannt. Bei einer .car werden Assetwurzel und\n"
@@ -1235,9 +1388,17 @@ int cmdMakeCar(int argc, char** argv) {
         else if (a == "-root" && i + 1 < argc) rootFile = argv[++i];
         else if (a == "-makeskel" && i + 1 < argc) makeSkel = argv[++i];
         else if (a == "-origin" && i + 3 < argc) {
-            origin = std::array<double, 3>{std::stod(argv[i + 1]), std::stod(argv[i + 2]),
-                                           std::stod(argv[i + 3])};
+            // argFloat statt stod: stod haengt am C-Locale, und ein Tippfehler
+            // warf eine nichtssagende Ausnahme.
+            origin = std::array<double, 3>{argFloat(argv[i + 1], "-origin X"),
+                                           argFloat(argv[i + 2], "-origin Y"),
+                                           argFloat(argv[i + 3], "-origin Z")};
             i += 3;
+        } else {
+            // Frueher still uebergangen: ein vertipptes "-orgin" hiess dann
+            // einfach "kein Versatz".
+            std::fprintf(stderr, "Unbekannte Option oder fehlender Wert: %s\n", a.c_str());
+            return 1;
         }
     }
 
@@ -1246,6 +1407,9 @@ int cmdMakeCar(int argc, char** argv) {
         std::fprintf(stderr, "%s ist kein Ordner\n", folder.c_str());
         return 1;
     }
+    // -root relativ zum Ordner, nicht zum Arbeitsverzeichnis.
+    if (!rootFile.empty() && fs::path(rootFile).is_relative() && !fs::exists(rootFile, ec))
+        rootFile = (fs::path(folder) / rootFile).string();
 
     // Assetwurzel: der Ordner oberhalb von "models", sonst der Ordner selbst.
     if (baseDir.empty()) {
@@ -1391,6 +1555,11 @@ int cmdExport(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "-noorigin") noOrigin = true;
+        // Diese drei hatten Variablen, aber keine Option — die Anleitung
+        // nennt "-keepmotion", erreichbar war es nie.
+        else if (a == "-keepmotion") keepMotion = true;
+        else if (a == "-nomotion") noDetectMotion = true;
+        else if (a == "-makeskel" && i + 1 < argc) makeSkel = argv[++i];
         else if (a == "-cfg" && i + 1 < argc) cfgPath = argv[++i];
         else if (a == "-o" && i + 1 < argc) outDir = argv[++i];
         else if (a == "-only" && i + 1 < argc) only = argv[++i];
@@ -1413,11 +1582,19 @@ int cmdExport(int argc, char** argv) {
             else basePose = g2::xsiexp::ExportOptions::BasePose::World;
         }
         else if (a == "-makecar" && i + 1 < argc) makeCarPath = argv[++i];
-        else if (a == "-scale" && i + 1 < argc) scale = std::stof(argv[++i]);
+        // argFloat statt stof: "-scale 0,64" ergab mit stof stillschweigend 0,
+        // und die Skalierung der GLA wurde ohne Hinweis benutzt.
+        else if (a == "-scale" && i + 1 < argc) scale = argFloat(argv[++i], "-scale");
         else if (a == "-origin" && i + 3 < argc) {
-            origin = std::array<float, 3>{std::stof(argv[i + 1]), std::stof(argv[i + 2]),
-                                          std::stof(argv[i + 3])};
+            origin = std::array<float, 3>{argFloat(argv[i + 1], "-origin X"),
+                                          argFloat(argv[i + 2], "-origin Y"),
+                                          argFloat(argv[i + 3], "-origin Z")};
             i += 3;
+        } else {
+            // Frueher still uebergangen: "-orgin 0 0 24" hiess dann
+            // "Versatz selbst schaetzen", "-cfg" ohne Wert "alles als ein Block".
+            std::fprintf(stderr, "Unbekannte Option oder fehlender Wert: %s\n", a.c_str());
+            return 1;
         }
     }
 
@@ -1477,7 +1654,11 @@ int cmdExport(int argc, char** argv) {
     // Ordnername fuer die Pfade in der .car: der letzte Teil des
     // Ausgabeordners. Damit passt das Skript zu dem, was tatsaechlich
     // geschrieben wurde.
-    const std::string modelDir = std::filesystem::path(outDir).filename().string();
+    // "-o out/" hat einen leeren Dateinamen; ohne lexically_normal und das
+    // Abschneiden des Trenners wurden daraus Pfade wie "models/players//x.xsi".
+    std::string outTrim = outDir;
+    while (outTrim.size() > 1 && (outTrim.back() == '/' || outTrim.back() == '\\')) outTrim.pop_back();
+    const std::string modelDir = std::filesystem::path(outTrim).filename().string();
 
     // --- Unterbereiche zusammenfassen -------------------------------------
     //
@@ -1670,15 +1851,41 @@ int cmdExport(int argc, char** argv) {
     return failed ? 2 : 0;
 }
 
+int g2cMainImpl(int argc, char** argv);
+
 int g2cMain(int argc, char** argv) {
     // Ausgabe ausdruecklich auf das klassische Locale festnageln. Sonst
     // koennte eine Umgebung mit deutschen Regionseinstellungen Zahlen mit
     // Dezimalkomma ausgeben, und die waeren nicht mehr einlesbar.
     std::locale::global(std::locale::classic());
+#ifdef _WIN32
+    // Die Texte sind UTF-8 (/utf-8). Ohne das zeigte die Konsole in der
+    // Codepage 850 statt "g2c — Ghoul2" ein "g2c ÔÇö Ghoul2".
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+    // Alles abgesichert — auch der Weg ueber eine gezogene Datei. Frueher
+    // lag er ausserhalb des try, und eine Ausnahme dort beendete das
+    // Programm ohne jede Meldung.
+    try {
+        return g2cMainImpl(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Fehler: %s\n", e.what());
+        return 1;
+    }
+}
 
+int g2cMainImpl(int argc, char** argv) {
     if (argc < 2) {
         usage();
         return 1;
+    }
+    {
+        const std::string a1 = argv[1];
+        if (a1 == "help" || a1 == "-h" || a1 == "--help" || a1 == "/?") {
+            usage();
+            return 0;
+        }
+        if (a1 == "-v" || a1 == "--version" || a1 == "version") return cmdAbout();
     }
     if (argc < 3) {
         // Einzelnes Argument: ein Unterbefehl ohne Datei, eine gezogene
@@ -1703,50 +1910,41 @@ int g2cMain(int argc, char** argv) {
         }
     }
 
-    try {
-        if (cmd == "info") return cmdInfo(argv[2]);
-        if (cmd == "check") return cmdCheck(argv[2]);
-        if (cmd == "xsi") return cmdXsi(argv[2]);
-        if (cmd == "car") return cmdCar(argv[2], argc > 3);
-        if (cmd == "validate") {
-            if (argc < 3) { usage(); return 1; }
-            return cmdValidate(argc, argv, 2);
+    if (cmd == "info") return cmdInfo(argv[2]);
+    if (cmd == "check") return cmdCheck(argv[2]);
+    if (cmd == "xsi") return cmdXsi(argv[2]);
+    // Ausfuehrlich nur mit -v. Frueher schaltete JEDES dritte Argument
+    // darauf um, und "g2c car a.car b.car" ignorierte b.car still.
+    if (cmd == "car") {
+        if (argc > 4 || (argc == 4 && std::string(argv[3]) != "-v")) {
+            std::fprintf(stderr, "car nimmt eine Datei und optional -v\n");
+            return 1;
         }
-        if (cmd == "about") return cmdAbout();
-        if (cmd == "makecar") {
-            if (argc < 3) { usage(); return 1; }
-            return cmdMakeCar(argc, argv);
-        }
-        if (cmd == "export") {
-            if (argc < 3) { usage(); return 1; }
-            return cmdExport(argc, argv);
-        }
-        if (cmd == "scan") {
-            if (argc < 3) { usage(); return 1; }
-            return cmdScan(argc, argv);
-        }
-        if (cmd == "mesh") {
-            if (argc < 4) { usage(); return 1; }
-            return cmdMesh(argc, argv);
-        }
-        if (cmd == "diff") {
-            if (argc < 4) { usage(); return 1; }
-            return cmdDiff(argc, argv);
-        }
-        if (cmd == "build") {
-            if (argc < 4) { usage(); return 1; }
-            return cmdBuild(argc, argv);
-        }
-        if (cmd == "anim") {
-            if (argc < 5) { usage(); return 1; }
-            return cmdAnim(argc, argv);
-        }
-        usage();
-        return 1;
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Fehler: %s\n", e.what());
-        return 1;
+        return cmdCar(argv[2], argc == 4);
     }
+    if (cmd == "validate") return cmdValidate(argc, argv, 2);
+    if (cmd == "about") return cmdAbout();
+    if (cmd == "makecar") return cmdMakeCar(argc, argv);
+    if (cmd == "export") return cmdExport(argc, argv);
+    if (cmd == "scan") return cmdScan(argc, argv);
+    if (cmd == "mesh") {
+        if (argc < 4) { usage(); return 1; }
+        return cmdMesh(argc, argv);
+    }
+    if (cmd == "diff") {
+        if (argc < 4) { usage(); return 1; }
+        return cmdDiff(argc, argv);
+    }
+    if (cmd == "build") {
+        if (argc < 4) { usage(); return 1; }
+        return cmdBuild(argc, argv);
+    }
+    if (cmd == "anim") {
+        if (argc < 5) { usage(); return 1; }
+        return cmdAnim(argc, argv);
+    }
+    usage();
+    return 1;
 }
 
 #ifndef G2C_NO_MAIN
