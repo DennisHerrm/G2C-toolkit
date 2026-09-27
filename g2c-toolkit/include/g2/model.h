@@ -1,10 +1,10 @@
-// g2/model.h — Zwischenrepraesentation.
+// g2/model.h - Intermediate representation.
 //
-// Bewusst unabhaengig von dotXSI. Wer aus 3ds Max, Blender, glTF oder FBX
-// exportiert, fuellt diese Strukturen und ruft die Writer auf. Das ist der
-// eigentliche Grund, warum ein Rewrite lohnt: Carcass haelt alles in ~65
-// festen Slots zu je 1,59 MB im statischen BSS (104 MB gesamt), unabhaengig
-// davon ob drei oder tausend Vertices drin liegen.
+// Deliberately independent of dotXSI. Anyone exporting from 3ds Max,
+// Blender, glTF or FBX fills these structures and calls the writers. That is
+// the real reason a rewrite is worthwhile: Carcass keeps everything in ~65
+// fixed slots of 1.59 MB each in static BSS (104 MB total), regardless of
+// whether they hold three or a thousand vertices.
 
 #pragma once
 
@@ -18,29 +18,29 @@ namespace g2 {
 
 struct Bone {
     std::string   name;
-    int           parent = -1;      // -1 = Wurzel
+    int           parent = -1;      // -1 = root
     Mat3x4        basePose = Mat3x4::identity();
     std::uint32_t flags = 0;
 };
 
 struct Skeleton {
-    std::string       name;         // GLA-Name ohne Endung
-    float             scale = 0.0f; // 0 = "unbekannt", wie bei alten Dateien
+    std::string       name;         // GLA name without extension
+    float             scale = 0.0f; // 0 = "unknown", as in old files
     std::vector<Bone> bones;
 
-    // Kinderlisten aus den parent-Feldern ableiten.
+    // Derive child lists from the parent fields.
     std::vector<std::vector<int>> buildChildLists() const;
 
-    // Prueft Namenskollisionen, Parent-Indizes und Zyklen.
-    // Carcass meldet das in 0x43a680 ("exists more than once in this file,
-    // bad skeleton!"), laesst aber teils trotzdem weiterlaufen.
+    // Checks name collisions, parent indices and cycles.
+    // Carcass reports this at 0x43a680 ("exists more than once in this file,
+    // bad skeleton!"), but in some cases keeps running anyway.
     std::vector<std::string> validate() const;
 };
 
-// Ein Frame haelt fuer jeden Bone eine 3x4-Matrix im Elternraum.
+// A frame holds a 3x4 matrix in parent space for every bone.
 struct AnimationFrames {
     int                 numBones = 0;
-    std::vector<Mat3x4> matrices;   // Groesse: numFrames * numBones
+    std::vector<Mat3x4> matrices;   // size: numFrames * numBones
 
     int  frameCount() const { return numBones ? static_cast<int>(matrices.size()) / numBones : 0; }
     Mat3x4&       at(int frame, int bone)       { return matrices[static_cast<std::size_t>(frame) * numBones + bone]; }
@@ -51,7 +51,7 @@ struct AnimationFrames {
 // --- Mesh ------------------------------------------------------------------
 
 struct VertexWeight {
-    int   boneIndex = 0;    // globaler Bone-Index, wird beim Schreiben gemappt
+    int   boneIndex = 0;    // global bone index, mapped when writing
     float weight = 0.0f;
 };
 
@@ -59,7 +59,7 @@ struct Vertex {
     float                     position[3]{};
     float                     normal[3]{};
     float                     uv[2]{};
-    std::vector<VertexWeight> weights;   // maximal 4 werden geschrieben
+    std::vector<VertexWeight> weights;   // at most 4 are written
 };
 
 struct Triangle {
@@ -76,12 +76,12 @@ struct Surface {
 };
 
 struct LOD {
-    std::vector<Surface> surfaces;   // muss in jeder LOD gleich lang sein
+    std::vector<Surface> surfaces;   // must be the same length in every LOD
 };
 
 struct Mesh {
-    std::string      name;       // mit Endung
-    std::string      animName;   // GLA-Referenz, ohne Endung
+    std::string      name;       // with extension
+    std::string      animName;   // GLA reference, without extension
     int              numBones = 0;
     std::vector<LOD> lods;
 

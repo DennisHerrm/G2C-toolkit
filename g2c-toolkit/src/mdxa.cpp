@@ -19,7 +19,7 @@ namespace {
 
 struct CompBoneHash {
     std::size_t operator()(const fmt::CompQuatBone& b) const noexcept {
-        // FNV-1a ueber 14 Bytes.
+        // FNV-1a over 14 bytes.
         std::size_t h = 1469598103934665603ull;
         for (unsigned char c : b.comp) {
             h ^= c;
@@ -57,15 +57,15 @@ std::string rdName(const std::uint8_t* p, std::size_t width) {
 
 void requireSize(const std::vector<std::uint8_t>& d, std::size_t off, std::size_t n,
                  const char* what) {
-    // Ohne Ueberlauf formuliert: off + n kann bei einem unsinnigen Offset
-    // ueber das Ende von size_t hinauslaufen und dann klein aussehen.
+    // Written to avoid overflow: with a nonsensical offset, off + n can wrap
+    // past the end of size_t and then look small.
     if (off > d.size() || n > d.size() - off)
         throw std::runtime_error(std::string("GLA abgeschnitten beim Lesen von ") + what);
 }
 
-// Offsets aus dem Dateikopf sind vorzeichenbehaftet. Ein negativer Wert,
-// nach size_t gewandelt, wird riesig — und zusammen mit einer Laenge
-// wieder klein. Deshalb vor jeder Verwendung einzeln pruefen.
+// Offsets from the file header are signed. A negative value converted to
+// size_t becomes huge - and small again once a length is added. So check
+// each one individually before use.
 std::size_t checkedOffset(std::int32_t v, const char* what) {
     if (v < 0)
         throw std::runtime_error(std::string("GLA beschaedigt: negativer Offset bei ") + what);
@@ -107,8 +107,8 @@ std::vector<std::string> Skeleton::validate() const {
             errs.push_back("Bone \"" + b.name + "\" ist sein eigener Parent");
     }
 
-    // Zyklen finden. Carcass prueft das nicht und laeuft dann in eine
-    // Endlosschleife oder liefert ein kaputtes Skelett.
+    // Find cycles. Carcass doesn't check for them and then runs into an
+    // endless loop or produces a broken skeleton.
     for (std::size_t i = 0; i < bones.size() && errs.size() < 64; ++i) {
         int cur = bones[i].parent;
         std::size_t steps = 0;
@@ -193,14 +193,14 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
 
     MdxaWriteResult result;
 
-    // --- Bone-Pool aufbauen ------------------------------------------------
+    // --- Build the bone pool -----------------------------------------------
     std::vector<fmt::CompQuatBone> pool;
     std::vector<std::uint32_t>     indices(static_cast<std::size_t>(numFrames) * numBones);
     std::unordered_map<fmt::CompQuatBone, std::uint32_t, CompBoneHash, CompBoneEq> lookup;
 
-    // Phase 1: komprimieren. Jede Bone-Instanz ist unabhaengig, das laesst
-    // sich sauber ueber die Kerne verteilen. Die Kandidatensuche kostet rund
-    // das Fuenffache einer einfachen Quantisierung und dominiert hier.
+    // Phase 1: compress. Each bone instance is independent, so this spreads
+    // cleanly across the cores. The candidate search costs about five times
+    // as much as a plain quantization and dominates here.
     const std::size_t total = static_cast<std::size_t>(numFrames) * numBones;
     std::vector<fmt::CompQuatBone> compressed(total);
 
@@ -208,13 +208,12 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
     std::vector<CompressStats> perThread(nThreads);
 
     {
-        // Jeder Thread bekommt einen eigenen Statistikzaehler; ohne das
-        // waeren die Zaehler ein Datenrennen.
+        // Each thread gets its own statistics counter; without that the
+        // counters would be a data race.
         //
-        // Die Nummer kommt von parallelForWorker. Frueher stand sie in einem
-        // thread_local — das ueberlebt den Aufruf, und bei einem zweiten Bau
-        // mit weniger Threads zeigte der gespeicherte Index hinter das Ende
-        // des Feldes.
+        // The number comes from parallelForWorker. It used to live in a
+        // thread_local - that outlives the call, and on a second build with
+        // fewer threads the stored index pointed past the end of the array.
         parallelForWorker(
             static_cast<std::size_t>(numFrames),
             [&](std::size_t f, unsigned worker) {
@@ -232,9 +231,9 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
         result.stats.maxXlatSeen = std::max(result.stats.maxXlatSeen, st.maxXlatSeen);
     }
 
-    // Phase 2: Pool aufbauen. Bleibt seriell — die Reihenfolge der Eintraege
-    // bestimmt die Datei, und eine parallele Variante waere nicht mehr
-    // reproduzierbar.
+    // Phase 2: build the pool. Stays serial - the order of the entries
+    // determines the file, and a parallel variant would no longer be
+    // reproducible.
     pool.reserve(total / 2);
     lookup.reserve(total / 2);
     for (std::size_t i = 0; i < total; ++i) {
@@ -254,13 +253,13 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
     result.poolEntriesBeforeDedupe = static_cast<std::size_t>(numFrames) * numBones;
     result.poolEntries = pool.size();
 
-    // Der Frame-Index ist nur 3 Byte breit. Carcass prueft das nicht.
+    // The frame index is only 3 bytes wide. Carcass doesn't check this.
     if (pool.size() > fmt::kMaxBonePoolEntries)
         throw std::runtime_error("Bone-Pool hat " + std::to_string(pool.size()) +
                                  " Eintraege, der 24-Bit-Index erlaubt maximal " +
                                  std::to_string(fmt::kMaxBonePoolEntries));
 
-    // --- Datei zusammensetzen ---------------------------------------------
+    // --- Assemble the file ------------------------------------------------
     ByteBuf buf;
     buf.i32(static_cast<std::int32_t>(fmt::kMdxaIdent));
     buf.i32(fmt::kMdxaVersion);
@@ -277,7 +276,7 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
     if (headerEnd != sizeof(fmt::MdxaHeader))
         throw std::logic_error("Header-Groesse stimmt nicht mit MdxaHeader ueberein");
 
-    // Skel-Offset-Tabelle. Werte sind relativ zum Ende des Headers.
+    // Skel offset table. Values are relative to the end of the header.
     std::vector<std::size_t> patchSkelOffsets(numBones);
     for (int i = 0; i < numBones; ++i) patchSkelOffsets[i] = buf.reserveI32();
 
@@ -292,19 +291,19 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
         buf.u32(b.flags);
         buf.i32(b.parent);
 
-        // Basispose und ihre Inverse. Die Engine erwartet beide, damit sie zur
-        // Laufzeit nicht invertieren muss.
+        // Base pose and its inverse. The engine expects both so it doesn't
+        // have to invert at runtime.
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c) buf.f32(b.basePose.m[r][c]);
 
-        // Echte affine Inverse, NICHT die Transponierte.
+        // A true affine inverse, NOT the transpose.
         //
-        // Die Transponierte waere nur bei orthonormalem Rotationsteil richtig.
-        // Carcass backt aber den $scale-Wert in die Basisposen ein — im
-        // echten _humanoid ist das 0.64, und die Engine findet dort
-        // entsprechend 1/0.64 = 1.5625 in der Inversen. Gegen die
-        // Originaldatei geprueft: M * MInv ergibt dort die Einheitsmatrix auf
-        // 5e-7 genau, waehrend die Transponierte um 0.92 danebenliegt.
+        // The transpose would only be correct for an orthonormal rotation part.
+        // But Carcass bakes the $scale value into the base poses - in the real
+        // _humanoid that is 0.64, and the engine accordingly finds
+        // 1/0.64 = 1.5625 in the inverse. Checked against the original file:
+        // there M * MInv gives the identity matrix to within 5e-7, while the
+        // transpose is off by 0.92.
         const Mat3x4 inv = affineInverse(b.basePose);
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c) buf.f32(inv.m[r][c]);
@@ -314,11 +313,11 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
         for (int k : kids) buf.i32(k);
     }
 
-    // Frame-Indizes, 3 Byte pro (Frame, Bone).
+    // Frame indices, 3 bytes per (frame, bone).
     buf.patchI32(patchOfsFrames, static_cast<std::int32_t>(buf.size()));
     for (std::uint32_t idx : indices) buf.u24(idx);
 
-    // Alignment vor dem Pool.
+    // Alignment before the pool.
     buf.alignTo(4);
 
     buf.patchI32(patchOfsCompBonePool, static_cast<std::int32_t>(buf.size()));
@@ -341,7 +340,7 @@ std::vector<Mat3x4> boneWorldMatrices(const MdxaFile& gla, int frame) {
         Bi[static_cast<std::size_t>(b)] = affineInverse(B[static_cast<std::size_t>(b)]);
     }
 
-    // Topologisch: Eltern vor Kindern.
+    // Topological order: parents before children.
     std::vector<char> done(static_cast<std::size_t>(n), 0);
     for (bool go = true; go;) {
         go = false;
@@ -382,7 +381,7 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
     const int ofsFrames = rdI32(p + 80);
     const int numBones = rdI32(p + 84);
     const int ofsCompBonePool = rdI32(p + 88);
-    // ofsSkel bei +92 wird nicht gebraucht, wir gehen ueber die Offsettabelle.
+    // ofsSkel at +92 is not needed, we go through the offset table.
     const int ofsEnd = rdI32(p + 96);
 
     if (numFrames < 0 || numBones < 0)
@@ -407,9 +406,9 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
         b.flags = static_cast<std::uint32_t>(rdI32(p + off + 64));
         b.parent = rdI32(p + off + 68);
 
-        // Jeder spaetere Zugriff indiziert mit dem Parent: Vorschau,
-        // Auswertung, Export. Ein Wert ausserhalb des Skeletts wuerde dort
-        // fremden Speicher lesen oder beschreiben.
+        // Every later access indexes with the parent: preview, evaluation,
+        // export. A value outside the skeleton would read or write foreign
+        // memory there.
         if (b.parent < -1 || b.parent >= numBones || b.parent == i)
             throw std::runtime_error("GLA beschaedigt: Bone \"" + b.name +
                                      "\" hat ungueltigen Parent-Index " + std::to_string(b.parent));
@@ -418,8 +417,8 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
                 b.basePose.m[r][c] = rdF32(p + off + 72 + static_cast<std::size_t>(r * 4 + c) * 4);
     }
 
-    // Indizes lesen und zugleich den groessten Pool-Index bestimmen, denn die
-    // Poolgroesse steht nirgends in der Datei.
+    // Read the indices and determine the largest pool index at the same time,
+    // because the pool size is not stored anywhere in the file.
     const std::size_t indexCount = static_cast<std::size_t>(numFrames) * static_cast<std::size_t>(numBones);
     const std::size_t framesAt = checkedOffset(ofsFrames, "Frame-Indizes");
     if (indexCount > d.size() / 3)

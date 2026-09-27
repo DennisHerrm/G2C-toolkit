@@ -12,9 +12,9 @@ namespace {
 
 constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
 
-// Achsenkonvention Y-hoch (SoftImage) nach Z-hoch (Quake/Ghoul2).
-// Empirisch bestimmt und an allen 53 Bones der echten _humanoid.gla
-// verifiziert.
+// Axis convention Y-up (SoftImage) to Z-up (Quake/Ghoul2).
+// Determined empirically and verified against all 53 bones of the real
+// _humanoid.gla.
 Mat3x4 axisChange() {
     Mat3x4 c{};
     c.m[0][0] = 1.0f;
@@ -39,8 +39,8 @@ Mat3x4 scaled(const Mat3x4& m, float s) {
     return o;
 }
 
-// Rotation aus Eulerwinkeln in Grad, Reihenfolge XYZ extrinsisch,
-// also Rz * Ry * Rx. Ebenfalls empirisch bestimmt.
+// Rotation from Euler angles in degrees, order XYZ extrinsic,
+// i.e. Rz * Ry * Rx. Also determined empirically.
 Mat3x4 eulerXYZ(float rxDeg, float ryDeg, float rzDeg) {
     const double rx = rxDeg * kDeg2Rad, ry = ryDeg * kDeg2Rad, rz = rzDeg * kDeg2Rad;
     const double cx = std::cos(rx), sx = std::sin(rx);
@@ -65,13 +65,13 @@ std::string shortName(const std::string& full) {
     return dot == std::string::npos ? full : full.substr(dot + 1);
 }
 
-// Rekursiv alle SI_Model einsammeln und dabei die Verschachtelung als
-// Elternbeziehung festhalten.
+// Recursively collect all SI_Model templates, recording the nesting as the
+// parent relationship.
 void collectModels(const Template& t, int parent, AnimFile& out) {
     int self = parent;
     if (t.type == "SI_Model") {
         AnimNode n;
-        // Der Instanzname sieht aus wie "MDL-<rig>.<bone>".
+        // The instance name looks like "MDL-<rig>.<bone>".
         std::string nm = t.name;
         if (nm.rfind("MDL-", 0) == 0) nm = nm.substr(4);
         n.name = shortName(nm);
@@ -79,9 +79,9 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
         self = static_cast<int>(out.nodes.size());
         out.nodes.push_back(std::move(n));
 
-        // SI_Transform SRT-<name>: statische lokale Transformation.
-        // BASEPOSE-<name> ist etwas anderes (absolute Bindpose) und wird hier
-        // ausdruecklich nicht verwendet.
+        // SI_Transform SRT-<name>: static local transform.
+        // BASEPOSE-<name> is something else (absolute bind pose) and is
+        // deliberately not used here.
         for (const Template* xf : t.findAll("SI_Transform")) {
             if (xf->name.rfind("SRT-", 0) != 0) continue;
             if (xf->values.size() < 9) continue;
@@ -97,8 +97,8 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
         }
 
         for (const Template* fc : t.findAll("SI_FCurve")) {
-            // Aufbau: "<ziel>", "<kanal>", "<interpolation>", a, b, keyCount,
-            //         frame, wert, frame, wert, ...
+            // Layout: "<target>", "<channel>", "<interpolation>", a, b, keyCount,
+            //         frame, value, frame, value, ...
             if (fc->values.size() < 6) continue;
             const std::string channel = fc->values[1].text();
             const auto keyCount = fc->values[5].asInt();
@@ -110,12 +110,12 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
             if (fc->values.size() < need) continue;
 
             for (std::size_t i = first; i + 1 < need; i += 2) {
-                // Die Framenummer NICHT mit asInt() lesen. 3ds Max schreibt
-                // sie als "1.000000", Raven als "1" — asInt() scheitert an der
-                // Nachkommastelle, und der Key ginge stillschweigend verloren.
-                // Genau daran sind alle aus Max exportierten Animationen
-                // gescheitert: Kanaele wurden erkannt, Keys nicht, und jeder
-                // Bone blieb in der Ruhepose.
+                // Do NOT read the frame number with asInt(). 3ds Max writes
+                // it as "1.000000", Raven as "1" - asInt() fails on the
+                // decimal places, and the key would be silently lost.
+                // This is exactly why every animation exported from Max
+                // failed: channels were recognized, keys were not, and every
+                // bone stayed in the rest pose.
                 const auto f = fc->values[i].asNumber();
                 const auto v = fc->values[i + 1].asNumber();
                 if (!f || !v) continue;
@@ -131,9 +131,9 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
     for (const auto& c : t.children) collectModels(c, self, out);
 }
 
-// Wert eines Kanals in einem Frame. Zwischen Keyframes wird linear
-// interpoliert; Carcass verlaesst sich darauf, dass fuer jeden Frame ein Key
-// existiert, aber Robustheit kostet hier nichts.
+// Value of a channel at a frame. Between keyframes it interpolates linearly;
+// Carcass relies on a key existing for every frame, but robustness costs
+// nothing here.
 float channelAt(const std::map<int, float>& keys, int frame, float fallback) {
     if (keys.empty()) return fallback;
     const auto exact = keys.find(frame);
@@ -158,16 +158,16 @@ const AnimNode* AnimFile::find(const std::string& bone) const {
 }
 
 int AnimFile::indexOf(const std::string& bone) const {
-    // Erst genau, dann ohne Ruecksicht auf Gross- und Kleinschreibung.
+    // Exact first, then case-insensitive.
     //
-    // Ravens eigene Modelle schreiben den Bewegungsbone "Motion", eigene
-    // Modelle oft "motion" — beim SBD-Humanoid ist genau das der Fall.
-    // Wird nur genau verglichen, findet die Rampenberechnung ihren Bone
-    // nicht, und die Wurzelbewegung wird beim Bauen NICHT entfernt. Das
-    // faellt erst im Spiel auf, wenn die Figur beim Laufen davonrutscht.
+    // Raven's own models spell the motion bone "Motion", custom models often
+    // "motion" - the SBD humanoid is exactly such a case. With an exact
+    // comparison only, the ramp computation doesn't find its bone, and the
+    // root motion is NOT removed during the build. That only shows up in
+    // game, when the character slides away while running.
     //
-    // Genau zuerst, damit bei zwei Bones, die sich nur in der Schreibweise
-    // unterscheiden, der exakte gewinnt.
+    // Exact first, so that with two bones differing only in case, the exact
+    // match wins.
     for (std::size_t i = 0; i < nodes.size(); ++i)
         if (nodes[i].name == bone) return static_cast<int>(i);
 
@@ -186,8 +186,8 @@ Mat3x4 AnimFile::localMatrix(int node, int frame) const {
     const AnimNode& n = nodes[static_cast<std::size_t>(node)];
     if (n.channels.empty() && !n.hasSrt) return Mat3x4::identity();
 
-    // Rueckfall ist der SRT-Wert des Bones, nicht neutral. Ein Bone ohne
-    // FCurve steht sonst in der Identitaet statt in seiner Ruhepose.
+    // The fallback is the bone's SRT value, not neutral. Otherwise a bone
+    // without an FCurve would sit at identity instead of its rest pose.
     const auto ch = [&](const char* name, std::size_t srtIndex) {
         const float fallback = n.srt[srtIndex];
         const auto it = n.channels.find(name);
@@ -215,7 +215,7 @@ Mat3x4 AnimFile::localMatrix(int node, int frame) const {
 
 std::vector<Mat3x4> AnimFile::worldMatrices(int frame) const {
     std::vector<Mat3x4> w(nodes.size());
-    // nodes entsteht per Vorbestellung, Eltern stehen also immer vorher.
+    // nodes is built in pre-order, so parents always come first.
     for (std::size_t i = 0; i < nodes.size(); ++i) {
         const Mat3x4 l = localMatrix(static_cast<int>(i), frame);
         const int p = nodes[i].parent;
@@ -231,9 +231,9 @@ AnimFile loadAnimation(const Document& doc, const std::string& sourcePath) {
     out.lastFrame = 0;
     bool any = false;
 
-    // SI_Scene zuerst: dort stehen Framebereich und Rate.
+    // SI_Scene first: it holds the frame range and rate.
     if (const Template* scene = doc.findDeep("SI_Scene")) {
-        // Aufbau: "FRAMES", start, end, framerate
+        // Layout: "FRAMES", start, end, framerate
         std::vector<double> nums;
         for (const auto& v : scene->values)
             if (const auto d = v.asNumber()) nums.push_back(*d);
@@ -247,11 +247,11 @@ AnimFile loadAnimation(const Document& doc, const std::string& sourcePath) {
         }
     }
 
-    // collectModels fuehrt den Framebereich beim Einsammeln der Keys nach:
-    // Anfang ist der kleinste Key, Ende der groessere von SI_Scene-Ende und
-    // groesstem Key. Bei jeder sauber exportierten Datei stimmt das mit
-    // SI_Scene ueberein (an allen 1854 Dateien einer _humanoid.car
-    // nachgeprueft); weicht es ab, meldet sceneRangeDiffers() das.
+    // collectModels updates the frame range while collecting the keys: the
+    // start is the smallest key, the end the larger of the SI_Scene end and
+    // the largest key. For every cleanly exported file this matches SI_Scene
+    // (verified on all 1854 files of a _humanoid.car); if it differs,
+    // sceneRangeDiffers() reports it.
     for (const auto& r : doc.roots) collectModels(r, -1, out);
 
     if (out.hasScene) {
@@ -302,7 +302,7 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
     const Mat3x4 C = axisChange();
     const Mat3x4 Cinv = axisChangeInv();
 
-    // Zuordnung Referenzbone -> Knoten in der Animationsdatei.
+    // Mapping reference bone -> node in the animation file.
     std::vector<int> nodeOf(static_cast<std::size_t>(numBones), -1);
     for (int b = 0; b < numBones; ++b) {
         const std::string& refName = reference.bones[static_cast<std::size_t>(b)].name;
@@ -321,7 +321,7 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
             if (n.animated() && !refNames.count(n.name)) res.extraBones.push_back(n.name);
     }
 
-    // Inverse Basisposen einmal vorab.
+    // Inverse base poses, computed once up front.
     std::vector<Mat3x4> B(static_cast<std::size_t>(numBones));
     std::vector<Mat3x4> Binv(static_cast<std::size_t>(numBones));
     for (int b = 0; b < numBones; ++b) {
@@ -329,9 +329,9 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
         Binv[static_cast<std::size_t>(b)] = affineInverse(B[static_cast<std::size_t>(b)]);
     }
 
-    // Topologische Reihenfolge ueber die GLA-Hierarchie. Die Bone-Reihenfolge
-    // in der Datei ist NICHT topologisch — in der echten _humanoid.gla hat
-    // Bone 16 (ceyebrow) den Parent 52 (face).
+    // Topological order over the GLA hierarchy. The bone order in the file
+    // is NOT topological - in the real _humanoid.gla, bone 16 (ceyebrow) has
+    // parent 52 (face).
     std::vector<int> topo;
     {
         std::vector<char> done(static_cast<std::size_t>(numBones), 0);
@@ -353,7 +353,7 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
             throw std::runtime_error("Referenzskelett enthaelt einen Zyklus");
     }
 
-    // Wurzelbewegung als Rampe vorab bestimmen.
+    // Determine the root motion as a ramp up front.
     float rootRamp[3] = {0.0f, 0.0f, 0.0f};
     bool  haveRamp = false;
     if (opt.extractRootMotion && numFrames > 1) {
@@ -367,7 +367,7 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
                              wFirst[static_cast<std::size_t>(mi)].m[1][3];
             const float dz = wLast[static_cast<std::size_t>(mi)].m[2][3] -
                              wFirst[static_cast<std::size_t>(mi)].m[2][3];
-            // Achsentausch wie sonst auch (x, -z, y), danach negiert.
+            // Axis swap as everywhere else (x, -z, y), then negated.
             rootRamp[0] = -opt.scale * dx;
             rootRamp[1] = -opt.scale * (-dz);
             rootRamp[2] = -opt.scale * dy;
@@ -380,17 +380,17 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
         const int srcFrame = anim.firstFrame + f;
         const std::vector<Mat3x4> wx = anim.worldMatrices(srcFrame);
 
-        // Weltposen im GLA-Raum.
+        // World poses in GLA space.
         //
-        // Fehlende Bones behalten ihre Bindpose-Beziehung zum Elternbone:
+        // Missing bones keep their bind-pose relationship to the parent bone:
         //     X(b) = X(parent) * B(parent)^-1 * B(b)
-        // Damit wird A(b) exakt die Einheitsmatrix, was genau dem entspricht,
-        // was Carcass schreibt — in der echten _humanoid.gla steht beim nicht
-        // animierten Bone "face" die Einheitsmatrix.
+        // This makes A(b) exactly the identity matrix, which is precisely
+        // what Carcass writes - in the real _humanoid.gla the non-animated
+        // bone "face" has the identity matrix.
         //
-        // Der naheliegende Fallback X(b) = B(b) ("Weltruhepose") ist falsch,
-        // sobald der Elternbone animiert ist: der Bone bliebe dann im Raum
-        // stehen, statt dem Kopf zu folgen.
+        // The obvious fallback X(b) = B(b) ("world rest pose") is wrong as
+        // soon as the parent bone is animated: the bone would then stay put
+        // in space instead of following the head.
         std::vector<Mat3x4> X(static_cast<std::size_t>(numBones));
         for (int b : topo) {
             const auto bu = static_cast<std::size_t>(b);
@@ -414,9 +414,8 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
             if (p < 0) {
                 A = mul(X[static_cast<std::size_t>(b)], Binv[static_cast<std::size_t>(b)]);
                 if (opt.origin) {
-                    // -origin verschiebt das Modell; in der echten
-                    // _humanoid.gla steht bei model_root (0,0,-24) zu
-                    // "-origin 0 0 24".
+                    // -origin shifts the model; in the real _humanoid.gla,
+                    // model_root has (0,0,-24) for "-origin 0 0 24".
                     A.m[0][3] -= (*opt.origin)[0];
                     A.m[1][3] -= (*opt.origin)[1];
                     A.m[2][3] -= (*opt.origin)[2];

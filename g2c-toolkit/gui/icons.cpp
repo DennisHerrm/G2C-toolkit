@@ -10,12 +10,11 @@ bool g_have = false;
 bool iconsAvailable() { return g_have; }
 void setIconsAvailable(bool v) { g_have = v; }
 
-// Symbol und Text zusammensetzen.
+// Combines icon and text.
 //
-// Der Puffer ist statisch und wird reihum benutzt: ImGui liest die
-// Zeichenkette sofort im selben Aufruf, ein laengeres Leben braucht sie
-// nicht. Mehrere Puffer, damit zwei Aufrufe in einer Zeile sich nicht
-// gegenseitig ueberschreiben.
+// The buffer is static and used in rotation: ImGui reads the string right
+// away within the same call, it doesn't need to live any longer. Several
+// buffers, so that two calls on one line don't overwrite each other.
 const char* withIcon(const char* icon, const char* text) {
     static std::string bufs[8];
     static int next = 0;

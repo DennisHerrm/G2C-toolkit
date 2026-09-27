@@ -1,14 +1,14 @@
-// g2/gladiff.h — Zwei GLA-Dateien vollstaendig vergleichen.
+// g2/gladiff.h - Fully comparing two GLA files.
 //
-// Stichproben finden nur, was haeufig ist. Bei 1,6 Millionen Bone-Instanzen
-// kann eine Abweichung, die genau eine Sequenz betrifft, in 800 zufaelligen
-// Frames komplett untergehen — und genau solche Faelle waren in diesem
-// Projekt die interessanten (die Wurzelbewegung betraf 7 % der Frames, der
-// SRT-Rueckfall dagegen fast alle).
+// Sampling only finds what is common. With 1.6 million bone instances, a
+// deviation affecting exactly one sequence can vanish completely among 800
+// random frames - and precisely such cases were the interesting ones in this
+// project (the root motion affected 7 % of the frames, the SRT fallback on
+// the other hand almost all of them).
 //
-// Dieser Vergleich geht ueber jede einzelne Instanz und ordnet die
-// Abweichungen anschliessend Bones und Sequenzen zu, damit man sieht, WO das
-// Problem sitzt statt nur DASS eines existiert.
+// This comparison goes over every single instance and then attributes the
+// deviations to bones and sequences, so you can see WHERE the problem is
+// rather than just THAT one exists.
 
 #pragma once
 
@@ -22,23 +22,23 @@
 namespace g2 {
 
 struct DiffOptions {
-    // Ab welcher Abweichung gilt eine Bone-Instanz als auffaellig.
+    // The deviation above which a bone instance counts as an outlier.
     //
-    // Die Rotation wird als echter Winkel in Grad gemessen, nicht als
-    // Differenz einzelner Matrixelemente. Letzteres ist kaum zu deuten: ein
-    // halber Quantisierungsschritt je Quaternionkomponente pflanzt sich ueber
-    // die Produkte in der Matrix zu einem Vielfachen fort, sodass praktisch
-    // jeder Bone auffaellig erscheint, obwohl der tatsaechliche Winkelfehler
-    // weit unter einem Hundertstelgrad liegt.
+    // Rotation is measured as a real angle in degrees, not as the difference
+    // of individual matrix elements. The latter is hard to interpret: half a
+    // quantization step per quaternion component propagates through the
+    // products in the matrix into a multiple of itself, so practically every
+    // bone looks like an outlier even though the actual angular error is far
+    // below a hundredth of a degree.
     //
-    // 0,1 Grad und zwei Quantisierungsstufen der Translation liegen jeweils
-    // klar ueber dem, was zwei unterschiedliche Rundungsverfahren erzeugen,
-    // und klar unter dem, was man sehen kann.
+    // 0.1 degrees and two translation quantization steps are each clearly
+    // above what two different rounding methods produce, and clearly below
+    // what you can see.
     double toleranceTranslation = 2.0 / 64.0;
     double toleranceRotationDeg = 0.1;
 
-    // Frameversatz der zweiten Datei gegenueber der ersten. Nuetzlich, wenn
-    // eine Teilsequenz gegen eine vollstaendige GLA geprueft wird.
+    // Frame offset of the second file relative to the first. Useful when a
+    // partial sequence is checked against a complete GLA.
     int frameOffsetB = 0;
 
     unsigned threads = 0;
@@ -62,7 +62,7 @@ struct SequenceDiff {
     int           targetFrame = 0;
     int           frameCount = 0;
     std::uint64_t outliers = 0;
-    double        maxDeviation = 0.0;      // Translation, Einheiten
+    double        maxDeviation = 0.0;      // translation, units
     double        maxRotationDeg = 0.0;
 };
 
@@ -81,7 +81,7 @@ struct DiffResult {
     double        meanRotationDeg = 0.0;
 
     std::vector<BoneDiff>     perBone;
-    std::vector<SequenceDiff> perSequence;   // nur wenn eine animation.cfg vorlag
+    std::vector<SequenceDiff> perSequence;   // only if an animation.cfg was given
 
     double outlierPercent() const {
         return instances ? 100.0 * static_cast<double>(outliers) / static_cast<double>(instances) : 0.0;
@@ -89,14 +89,14 @@ struct DiffResult {
     bool clean() const { return outliers == 0; }
 };
 
-// Vergleicht zwei GLA. Die Sequenzliste ist optional; ohne sie bleibt
-// perSequence leer.
+// Compares two GLAs. The sequence list is optional; without it, perSequence
+// stays empty.
 DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
                     const std::vector<car::Sequence>& sequences = {},
                     const DiffOptions& opt = {});
 
-// Liest eine animation.cfg zurueck. Nur Name, targetFrame, frameCount,
-// loopFrame und frameSpeed; Kommentarzeilen werden uebersprungen.
+// Reads an animation.cfg back in. Only name, targetFrame, frameCount,
+// loopFrame and frameSpeed; comment lines are skipped.
 std::vector<car::Sequence> readAnimationCfg(const std::string& text);
 
 }  // namespace g2

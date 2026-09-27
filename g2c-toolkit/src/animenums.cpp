@@ -7,7 +7,7 @@
 namespace g2::anim {
 namespace {
 
-// Kommentare entfernen, damit auskommentierte Enums nicht mitgelesen werden.
+// Strip comments so that commented-out enums are not picked up.
 std::string stripComments(const std::string& s) {
     std::string out;
     out.reserve(s.size());
@@ -42,7 +42,7 @@ EnumTable parseEnumHeader(const std::string& text, const std::string& sourcePath
     const std::size_t open = clean.find('{', start);
     if (open == std::string::npos) return t;
 
-    // Bis zur schliessenden Klammer der Enumliste.
+    // Up to the closing brace of the enum list.
     std::size_t depth = 0, end = open;
     for (std::size_t i = open; i < clean.size(); ++i) {
         if (clean[i] == '{') ++depth;
@@ -53,35 +53,34 @@ EnumTable parseEnumHeader(const std::string& text, const std::string& sourcePath
 
     std::size_t i = open + 1;
     while (i < end) {
-        // Bezeichner einsammeln.
+        // Collect the identifier.
         if (!isEnumChar(clean[i]) || (clean[i] >= '0' && clean[i] <= '9')) { ++i; continue; }
         const std::size_t b = i;
         while (i < end && isEnumChar(clean[i])) ++i;
         std::string name = clean.substr(b, i - b);
 
-        // Danach darf eine Zuweisung stehen.
+        // An assignment may follow.
         std::size_t j = i;
         while (j < end && (clean[j] == ' ' || clean[j] == '\t')) ++j;
         if (j < end && clean[j] == '=') {
             while (j < end && clean[j] != ',' && clean[j] != '\n' && clean[j] != '}') ++j;
         }
 
-        // Ein Komma ist NICHT zu verlangen.
+        // Do NOT require a comma.
         //
-        // Ravens anims.h fuehrt viele Eintraege ohne Trennzeichen:
+        // Raven's anims.h lists many entries without a separator:
         //
         //     BOTH_STAND1		//# Standing idle, no weapon, hands down
         //     BOTH_STAND1IDLE1	//# Random standing idle
         //
-        // Das ist als C ungueltig, steht aber so in der Datei — sie wird
-        // offenbar nur von den Werkzeugen gelesen, nicht uebersetzt. Ein
-        // Parser, der auf dem Komma besteht, uebersieht dadurch einen grossen
-        // Teil der Tabelle und meldet spaeter voellig gueltige Sequenzen als
-        // unbekannt.
+        // That is invalid C, but it is what the file contains - apparently it
+        // is only read by the tools, never compiled. A parser that insists on
+        // the comma therefore misses a large part of the table and later
+        // reports perfectly valid sequences as unknown.
         //
-        // Gueltig ist deshalb jeder Grossbuchstaben-Bezeichner am Zeilenanfang
-        // innerhalb des Blocks, gefolgt von Komma, Zeilenende, Kommentar oder
-        // schliessender Klammer.
+        // So any uppercase identifier at the start of a line inside the block
+        // is accepted, followed by a comma, end of line, comment or closing
+        // brace.
         bool accept = false;
         if (j >= end) accept = true;
         else if (clean[j] == ',' || clean[j] == '}') accept = true;

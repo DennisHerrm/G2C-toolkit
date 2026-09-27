@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Statische Pruefung von gui/main_win32.cpp.
+"""Static check of gui/main_win32.cpp.
 
-Diese Datei laesst sich in der Entwicklungsumgebung nicht uebersetzen — es
-gibt dort keine Windows-Header. Genau deshalb sind in ihr mehrfach Fehler
-durchgerutscht, die in jeder anderen Datei der Uebersetzer gefunden haette:
+This file can't be compiled in the development environment - there are no
+Windows headers there. That is exactly why bugs repeatedly slipped through
+in it that the compiler would have caught in any other file:
 
-  * eine Signatur, die nie geaendert wurde, weil die Ersetzung um ein
-    Leerzeichen danebenlag und still ins Leere lief
-  * Namen aus g2::gui, die im namenlosen Namensraum unqualifiziert standen
+  * a signature that was never changed, because the replacement was off by
+    one space and silently missed its target
+  * names from g2::gui that appeared unqualified in the anonymous namespace
 
-Dieses Skript faengt beide Klassen ab. Es ersetzt keinen Uebersetzer, aber es
-findet genau die Fehler, die hier entstanden sind.
+This script catches both classes. It doesn't replace a compiler, but it
+finds exactly the bugs that occurred here.
 """
 
 import re
@@ -30,10 +30,10 @@ def main():
     src = SRC.read_text(encoding="utf-8")
     errors = 0
 
-    # 1) Namen aus g2::gui muessen qualifiziert sein.
+    # 1) Names from g2::gui must be qualified.
     #
-    # Alles zwischen "namespace {" und dem passenden Ende liegt ausserhalb
-    # von g2::gui; die Namen der Oberflaeche gelten dort nicht ohne Praefix.
+    # Everything between "namespace {" and its matching end lies outside
+    # g2::gui; the UI's names are not valid there without a prefix.
     gui_names = set()
     for header in ("icons.h", "i18n.h"):
         text = (SRC.parent / header).read_text(encoding="utf-8")
@@ -54,7 +54,7 @@ def main():
             errors += fail(f"'{name}' ohne g2::gui:: im namenlosen Namensraum", line)
             break
 
-    # 2) Definition und Aufruf muessen in der Argumentzahl uebereinstimmen.
+    # 2) Definition and call must agree on the number of arguments.
     defs = {}
     for m in re.finditer(r"^[\w:<>,\s\*&]+?\s(\w+)\(([^)]*)\)\s*\{", src, re.M):
         name, params = m.group(1), m.group(2)
@@ -66,13 +66,12 @@ def main():
         for call in re.finditer(re.escape(name) + r"\(([^;{]*?)\)\s*[;,)]", src):
             args = call.group(1)
 
-            # Klammern muessen korrekt GESCHACHTELT sein, nicht nur gleich
-            # viele.
+            # Parentheses must be correctly NESTED, not just equal in number.
             #
-            # Bei "startupLogPath().c_str())" fing der Ausdruck ").c_str("
-            # als Argumentliste ein: ein "(" und ein ")", also ausgeglichen,
-            # aber in falscher Reihenfolge. Die Pruefung meldete daraufhin
-            # einen Aufruf mit einem Argument, den es nicht gab.
+            # With "startupLogPath().c_str())" the expression captured
+            # ").c_str(" as the argument list: one "(" and one ")", so
+            # balanced, but in the wrong order. The check then reported a
+            # call with one argument that didn't exist.
             tiefe = 0
             kaputt = False
             for c in args:
@@ -92,9 +91,9 @@ def main():
                 errors += fail(f"{name}() mit {got} Argumenten, definiert mit {want}", line)
                 break
 
-    # 3) Funktionen, die es erst ab Windows 10 gibt, duerfen nicht fest
-    #    eingebunden werden — das Programm startet sonst auf aelteren
-    #    Systemen gar nicht, mit "Einsprungpunkt nicht gefunden".
+    # 3) Functions that only exist from Windows 10 on must not be linked
+    #    statically - otherwise the program won't start at all on older
+    #    systems, failing with "entry point not found".
     win10_only = ["GetDpiForSystem", "GetSystemMetricsForDpi", "AdjustWindowRectExForDpi"]
     for fn in win10_only:
         for m in re.finditer(r"(?<![\w\"])" + fn + r"\s*\(", src):
@@ -105,13 +104,13 @@ def main():
             errors += fail(f"{fn} fest eingebunden — erst ab Windows 10 vorhanden", line)
             break
 
-    # 4) Extern deklarierte Funktionen muessen aus einer Datei kommen, die
-    #    im selben CMake-Ziel liegt.
+    # 4) Externally declared functions must come from a file that is in the
+    #    same CMake target.
     #
-    #    Genau das ging schief: main_win32.cpp rief g2cMain auf, aber
-    #    tools/g2c.cpp war nicht im Ziel — weil eine Ersetzung in
-    #    CMakeLists.txt nicht passte und STILL ins Leere lief. Der Fehler
-    #    zeigte sich erst beim Binden unter Windows.
+    #    That is exactly what went wrong: main_win32.cpp called g2cMain, but
+    #    tools/g2c.cpp was not in the target - because a replacement in
+    #    CMakeLists.txt didn't match and SILENTLY missed. The error only
+    #    showed up when linking on Windows.
     cml = (SRC.parent.parent / "CMakeLists.txt").read_text(encoding="utf-8")
     gui_target = ""
     m = re.search(r"add_executable\(g2c-gui[^)]*\)", cml, re.S)
@@ -121,8 +120,8 @@ def main():
     for decl in re.finditer(r"^(?:int|void|bool)\s+(\w+)\([^)]*\);\s*$", src, re.M):
         fn = decl.group(1)
         if re.search(r"^[\w:<>,\s\*&]+?\s" + fn + r"\([^)]*\)\s*\{", src, re.M):
-            continue   # in dieser Datei definiert
-        # In welcher Datei steht die Definition?
+            continue   # defined in this file
+        # Which file contains the definition?
         home = None
         for cand in (SRC.parent.parent).rglob("*.cpp"):
             if "third_party" in str(cand) or cand == SRC:
@@ -139,7 +138,7 @@ def main():
                 errors += fail(f"'{fn}' steht in {rel}, aber die Datei fehlt im "
                                f"CMake-Ziel g2c-gui")
 
-    # 5) Die Symbolkennung muss in Code und Ressourcendatei gleich sein.
+    # 5) The icon ID must be the same in the code and the resource file.
     rc = SRC.parent.parent / "assets" / "g2c.rc"
     if rc.exists():
         rid = re.search(r"#define\s+IDI_G2C\s+(\d+)", rc.read_text(encoding="utf-8"))
@@ -148,13 +147,12 @@ def main():
             errors += fail(f"Symbolkennung {rid.group(1)} in g2c.rc, im Code aber "
                            f"{', '.join(sorted(used))}")
 
-    # 5b) Vorlagen und Typen muessen VOR ihrer ersten Verwendung stehen.
+    # 5b) Templates and types must appear BEFORE their first use.
     #
-    #     main_win32.cpp laesst sich hier nicht uebersetzen, also faellt so
-    #     etwas erst auf dem Zielrechner auf. MSVC meldet dann
-    #     "C7568: Nach der angenommenen Funktionsvorlage X fehlt die
-    #     Argumentliste" — eine Meldung, die nicht nach dem eigentlichen
-    #     Problem klingt.
+    #     main_win32.cpp can't be compiled here, so something like this only
+    #     shows up on the target machine. MSVC then reports
+    #     "C7568: argument list missing after assumed function template X"
+    #     - a message that doesn't sound like the actual problem.
     for m in re.finditer(r"^(?:template\s*<[^>]*>\s*\n)?\s*(?:class|struct)\s+(\w+)\s*\{",
                          src, re.M):
         name = m.group(1)
@@ -167,23 +165,23 @@ def main():
             errors += fail(f"'{name}' wird in Zeile {zeile} benutzt, aber erst danach "
                            f"definiert", zeile)
 
-    # 5d) ComPtr darf nicht ohne .get() weitergereicht werden.
+    # 5d) A ComPtr must not be passed on without .get().
     #
-    #     Der Halter wandelt sich bewusst NICHT stillschweigend in einen
-    #     Zeiger um. Das ist richtig so — aber dann muss beim Weiterreichen
-    #     .get() stehen, und MSVC meldet das sonst als C2664, eine Meldung
-    #     ueber fehlende Konvertierungsoperatoren.
+    #     The holder deliberately does NOT silently convert to a pointer.
+    #     That is correct - but then .get() is required when passing it on,
+    #     and otherwise MSVC reports C2664, a message about missing
+    #     conversion operators.
     #
-    #     Diese Datei laesst sich hier nicht uebersetzen, also faellt es
-    #     sonst erst auf dem Zielrechner auf.
-    # Nur INNERHALB der Funktion pruefen, in der der Halter deklariert ist.
+    #     This file can't be compiled here, so otherwise it only shows up
+    #     on the target machine.
+    # Only check WITHIN the function in which the holder is declared.
     #
-    # Dateiweit zu suchen war falsch: dieselben Namen ("dlg", "item")
-    # bezeichnen in den aelteren Dialogen rohe Zeiger, und die Pruefung
-    # meldete dort Fehler, die es nicht gab.
+    # Searching file-wide was wrong: the same names ("dlg", "item") refer to
+    # raw pointers in the older dialogs, and the check reported errors there
+    # that didn't exist.
     #
-    # Funktionsgrenze: die naechste Zeile, die in Spalte 0 mit einem
-    # Bezeichner beginnt und eine oeffnende Klammer enthaelt.
+    # Function boundary: the next line that starts with an identifier in
+    # column 0 and contains an opening parenthesis.
     for m in re.finditer(r"\bComPtr<[^>]+>\s+(\w+)\s*;", src):
         name = m.group(1)
         rest = src[m.end():]
@@ -192,7 +190,7 @@ def main():
 
         for u in re.finditer(r"[(,]\s*" + re.escape(name) + r"\s*[,)]", bereich):
             davor = bereich[max(0, u.start() - 60):u.start()]
-            # In Bedingungen ist der Halter direkt erlaubt (operator bool).
+            # In conditions the holder is allowed directly (operator bool).
             if re.search(r"(if|while|&&|\|\||return|!)\s*\(?\s*$", davor):
                 continue
             zeile = src[: m.end() + u.start()].count("\n") + 1
@@ -200,11 +198,11 @@ def main():
                            f"weitergereicht", zeile)
             break
 
-    # 5c) Gleichnamige lokale Puffer in derselben Funktion.
+    # 5c) Local buffers with the same name in the same function.
     #
-    #     MSVC meldet C4456 ("Deklaration blendet vorherige lokale
-    #     Deklaration aus"). Harmlos, solange man es merkt — aber in einer
-    #     langen Fensterprozedur greift man leicht zum falschen.
+    #     MSVC reports C4456 ("declaration hides previous local
+    #     declaration"). Harmless as long as you notice - but in a long
+    #     window procedure it's easy to grab the wrong one.
     for m in re.finditer(r"\bwchar_t\s+(\w+)\s*\[", src):
         name = m.group(1)
         treffer = re.findall(r"\bwchar_t\s+" + re.escape(name) + r"\s*\[", src)
@@ -213,10 +211,10 @@ def main():
                            f"deklariert — leicht zu verwechseln")
             break
 
-    # 6a) Der angeforderte Symbolbereich muss alle benutzten Symbole
-    #     enthalten. Wer eines ausserhalb hinzufuegt, saehe sonst ein leeres
-    #     Kaestchen — und nur auf manchen Rechnern, weil es davon abhaengt,
-    #     welche Symbolschrift installiert ist.
+    # 6a) The requested icon range must contain all icons in use. Anyone
+    #     adding one outside it would otherwise see an empty box - and only
+    #     on some machines, because it depends on which icon font is
+    #     installed.
     icons = SRC.parent.parent / "gui" / "icons.h"
     if icons.exists():
         txt = icons.read_text(encoding="utf-8", errors="replace")
@@ -232,10 +230,10 @@ def main():
                     f"(0x{a:04X}..0x{b:04X}): " +
                     ", ".join(f"U+{c:04X}" for c in sorted(out)[:5]))
 
-    # 6c) Die Symbolfarben muessen im gueltigen Bereich liegen.
+    # 6c) The icon colors must be within the valid range.
     #
-    #     ImGui erwartet 0..1, nicht 0..255. Ein Wert daneben faellt nicht
-    #     auf — die Farbe wird nur geklemmt und sieht falsch aus.
+    #     ImGui expects 0..1, not 0..255. A value outside doesn't stand out -
+    #     the color just gets clamped and looks wrong.
     if icons.exists():
         txt2 = icons.read_text(encoding="utf-8", errors="replace")
         for m in re.finditer(r"kIcon(\w+)\{([^}]*)\}", txt2):
@@ -246,12 +244,12 @@ def main():
                 errors += fail(f"kIcon{m.group(1)}: Wert ausserhalb 0..1 "
                                f"(ImGui erwartet keine 0..255)")
 
-    # 6b) Versionsangaben muessen vorhanden und in sich stimmig sein.
+    # 6b) Version information must be present and self-consistent.
     #
-    #     Eine Exe ohne Herkunftsangaben ist fuer Defenders Heuristik die
-    #     unguenstigste Ausgangslage — sie sieht aus wie etwas, das seine
-    #     Herkunft verbergen will. Das ersetzt keine Signatur, kostet aber
-    #     nichts.
+    #     For Defender's heuristics, an exe without origin information is
+    #     the worst possible starting point - it looks like something that
+    #     wants to hide where it came from. This doesn't replace a signature,
+    #     but it costs nothing.
     rcfile = SRC.parent.parent / "assets" / "g2c.rc"
     if rcfile.exists():
         rc = rcfile.read_text(encoding="utf-8", errors="replace")
@@ -261,25 +259,25 @@ def main():
             for key in ("FileDescription", "ProductName", "FileVersion", "OriginalFilename"):
                 if key not in rc:
                     errors += fail(f"Versionsangabe '{key}' fehlt in assets/g2c.rc")
-            # BEGIN/END muessen sich ausgleichen, sonst uebersetzt rc.exe nicht.
+            # BEGIN/END must balance, otherwise rc.exe won't compile it.
             if rc.count("BEGIN") != rc.count("END"):
                 errors += fail(f"BEGIN/END in g2c.rc unausgeglichen: "
                                f"{rc.count('BEGIN')} zu {rc.count('END')}")
 
-    # 6) __argv und __argc duerfen bei wWinMain nicht benutzt werden.
+    # 6) __argv and __argc must not be used with wWinMain.
     #
-    #    Die Laufzeitbibliothek fuellt bei einem Unicode-Einstiegspunkt nur
-    #    __wargv; __argv bleibt LEER. Ein Zugriff darauf laeuft in einen
-    #    Nullzeiger, und das Programm stuerzt ab, BEVOR das Fenster
-    #    erscheint — von aussen sieht es aus, als passiere nichts.
+    #    With a Unicode entry point, the runtime library only fills
+    #    __wargv; __argv stays EMPTY. Accessing it hits a null pointer, and
+    #    the program crashes BEFORE the window appears - from the outside it
+    #    looks as if nothing happens.
     #
-    #    Genau so verschwand das Ziehen einer .car auf die Exe.
+    #    That is exactly how dragging a .car onto the exe stopped working.
     if "wWinMain" in src:
         for m in re.finditer(r"(?<![\w'\"])(__argv|__argc)\b", src):
             line_no = src[:m.start()].count("\n") + 1
             line_text = src.split("\n")[line_no - 1].lstrip()
             if line_text.startswith("//"):
-                continue   # Erwaehnung im Kommentar ist in Ordnung
+                continue   # a mention in a comment is fine
             errors += fail(f"{m.group(1)} bei wWinMain benutzt - ist dort leer, "
                            f"CommandLineToArgvW verwenden", line_no)
             break

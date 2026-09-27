@@ -18,9 +18,9 @@ namespace {
 
 constexpr char kMagic[4] = {'G', '2', 'A', 'C'};
 
-// FNV-1a. Reicht fuer Dateinamen; hier wird nichts abgesichert, sondern nur
-// verteilt. Der eigentliche Abgleich laeuft ueber Groesse und Zeitstempel im
-// Kopf des Eintrags, nicht ueber den Hash.
+// FNV-1a. Good enough for file names; nothing is being secured here, only
+// distributed. The actual validity check uses the size and timestamp in the
+// entry header, not the hash.
 std::uint64_t hash64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
     for (unsigned char c : s) {
@@ -59,7 +59,7 @@ SourceStamp stampOf(const std::string& path) {
     return s;
 }
 
-// --- Lesen ---------------------------------------------------------------
+// --- Reading -------------------------------------------------------------
 
 class Reader {
 public:
@@ -113,8 +113,8 @@ private:
 }  // namespace
 
 std::string AnimCache::entryPath(const std::string& sourcePath) const {
-    // Der Dateiname enthaelt den Hash des Quellpfads; das reicht zum
-    // Wiederfinden. Ob der Eintrag noch gilt, entscheidet der Kopf.
+    // The file name contains the hash of the source path; that is enough to
+    // find it again. Whether the entry is still valid is decided by the header.
     return (fs::path(dir_) / (hex16(hash64(sourcePath)) + ".g2ac")).string();
 }
 
@@ -156,9 +156,9 @@ std::optional<xsi::AnimFile> AnimCache::load(const std::string& sourcePath) {
         auto& n = a.nodes[idx];
         n.name = r.str();
         n.parent = r.i32();
-        // worldMatrices setzt voraus, dass Eltern vor ihren Kindern stehen.
-        // Ein beschaedigter Eintrag darf das nicht unterlaufen, sonst wird
-        // ausserhalb des Feldes gelesen. Dann lieber neu parsen.
+        // worldMatrices assumes that parents come before their children.
+        // A corrupted entry must not undermine that, otherwise we would read
+        // out of bounds. Better to re-parse in that case.
         if (n.parent < -1 || n.parent >= static_cast<std::int32_t>(idx)) return std::nullopt;
         n.hasSrt = r.u32() != 0;
         for (auto& v : n.srt) v = r.f32();
@@ -177,8 +177,8 @@ std::optional<xsi::AnimFile> AnimCache::load(const std::string& sourcePath) {
             }
         }
     }
-    // Ueberzaehlige Bytes heissen: der Eintrag ist nicht der, den store()
-    // geschrieben hat.
+    // Leftover bytes mean the entry is not the one that store()
+    // wrote.
     if (!r.ok() || !r.atEnd()) return std::nullopt;
 
     stats_.bytesRead += data.size();
@@ -230,14 +230,13 @@ void AnimCache::store(const std::string& sourcePath, const xsi::AnimFile& anim) 
         }
     }
 
-    // Erst in eine Nebendatei schreiben, dann umbenennen. Bricht der Lauf
-    // mittendrin ab, liegt kein halber Eintrag herum, den ein spaeterer Lauf
-    // fuer gueltig haelt.
+    // Write to a side file first, then rename. If the run aborts halfway,
+    // no half-written entry is left lying around for a later run to mistake
+    // for a valid one.
     //
-    // Die Nebendatei traegt die Kennung des Threads: steht dieselbe .xsi
-    // zweimal im Skript, schreiben zwei Threads gleichzeitig denselben
-    // Eintrag, und ein gemeinsamer Name liesse beide in dieselbe Datei
-    // schreiben.
+    // The side file carries the thread ID: if the same .xsi appears twice
+    // in the script, two threads write the same entry concurrently, and a
+    // shared name would make both write into the same file.
     const std::string finalPath = entryPath(sourcePath);
     const std::string tmpPath =
         finalPath + "." + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) +

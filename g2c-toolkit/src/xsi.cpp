@@ -16,11 +16,11 @@
 namespace g2::xsi {
 namespace {
 
-// Handgeschriebener Scanner statt regex oder istream. Der dotXSI-Parser ist
-// laut Analyse des Originalbinaries Baustelle Nummer zwei bei der Laufzeit
-// (0x448f90, 3385 Instruktionen, Schleifenverschachtelung 6). Ein Zeichen-
-// scanner ueber einen zusammenhaengenden Puffer ist hier um Groessenordnungen
-// schneller als jede Stream-basierte Loesung.
+// Hand-written scanner instead of regex or istream. According to the analysis
+// of the original binary, the dotXSI parser is the number two runtime hotspot
+// (0x448f90, 3385 instructions, loop nesting depth 6). A character scanner
+// over a contiguous buffer is orders of magnitude faster here than any
+// stream-based solution.
 class Scanner {
 public:
     explicit Scanner(std::string_view s) : s_(s) {}
@@ -69,7 +69,7 @@ public:
                 i_ += 2;
                 continue;
             }
-            // Semikolon und Komma sind reine Trennzeichen ohne Bedeutung.
+            // Semicolon and comma are pure separators with no meaning.
             if (i_ < s_.size() && (s_[i_] == ';' || s_[i_] == ',')) {
                 ++i_;
                 continue;
@@ -81,7 +81,7 @@ public:
     char peek() const { return i_ < s_.size() ? s_[i_] : '\0'; }
     void advance() { if (i_ < s_.size()) ++i_; }
 
-    // Ein Token: Bezeichner, Zahl oder Zeichenkette in Anfuehrungszeichen.
+    // One token: identifier, number, or quoted string.
     std::string token() {
         if (peek() == '"') {
             advance();
@@ -135,8 +135,8 @@ void parseBody(Scanner& sc, Template& out, int depth) {
         const bool quoted = sc.peek() == '"';
         std::string tok = sc.token();
 
-        // Nach dem Token entscheidet sich, ob es ein Template war: dann folgt
-        // entweder direkt '{' oder ein Instanzname und dann '{'.
+        // What follows the token decides whether it was a template: then either
+        // '{' follows directly, or an instance name and then '{'.
         if (!quoted && isIdentStart(tok.empty() ? '\0' : tok[0])) {
             const std::size_t save = 0;
             (void)save;
@@ -151,16 +151,16 @@ void parseBody(Scanner& sc, Template& out, int depth) {
                 continue;
             }
             if (!sc.eof() && sc.peek() != '}' && sc.peek() != '"') {
-                // Zweideutigkeit: bei "NAME SI_Foo {" koennte NAME ein Template
-                // mit Instanznamen SI_Foo sein, oder ein blosser Wert gefolgt
-                // vom Template SI_Foo. dotXSI 1.x hat nackte Bezeichner als
-                // Werte (POSITION, NORMAL, TEX_COORD_UV in SI_Shape), also
-                // kommt das real vor.
+                // Ambiguity: in "NAME SI_Foo {", NAME could be a template with
+                // instance name SI_Foo, or a bare value followed by the
+                // template SI_Foo. dotXSI 1.x has bare identifiers as values
+                // (POSITION, NORMAL, TEX_COORD_UV in SI_Shape), so this really
+                // happens.
                 //
-                // Regel: Templatetypen tragen in dotXSI durchgaengig das
-                // Praefix SI_ oder XSI_. Ein Token mit diesem Praefix ist
-                // deshalb nie ein Instanzname, sondern beginnt ein neues
-                // Template — und das vorige Token war ein Wert.
+                // Rule: template types in dotXSI consistently carry the prefix
+                // SI_ or XSI_. A token with this prefix is therefore never an
+                // instance name but starts a new template - and the previous
+                // token was a value.
                 Scanner probe = sc;
                 std::string maybeName;
                 bool ok = true;
@@ -197,7 +197,7 @@ Version parseHeader(Scanner& sc) {
         throw std::runtime_error("Keine dotXSI-Datei: erwartet \"xsi\" am Anfang, gefunden \"" +
                                  magic + "\"");
     sc.skipTrivia();
-    const std::string ver = sc.token();   // z.B. "0101txt"
+    const std::string ver = sc.token();   // e.g. "0101txt"
 
     Version v;
     v.raw = ver;
@@ -210,8 +210,8 @@ Version parseHeader(Scanner& sc) {
     else if (kind != "txt")
         throw std::runtime_error("Unbekannte dotXSI-Kodierung \"" + kind + "\"");
 
-    // Auch hier kein stoi: die Versionskennung ist zwar reine Ziffernfolge,
-    // aber einheitliche Konvertierung erspart spaetere Ueberraschungen.
+    // No stoi here either: the version tag is a pure digit sequence, but
+    // consistent conversion avoids surprises later.
     const auto twoDigits = [&](std::size_t at) {
         int out = 0;
         std::from_chars(digits.data() + at, digits.data() + at + 2, out);
@@ -226,9 +226,9 @@ Version parseHeader(Scanner& sc) {
             ") wird nicht unterstuetzt. Carcass kann es auch nicht — es akzeptiert nur "
             "0101txt, 0103txt, 0300txt und 0350txt.");
 
-    // Nach der Versionskennung folgt bei allen Varianten noch eine Zahl
-    // (Vorlagenzaehler bzw. Formatdetail). Sie wird nicht gebraucht, muss aber
-    // konsumiert werden — ein Templatetyp beginnt nie mit einer Ziffer.
+    // In all variants, the version tag is followed by one more number
+    // (template counter or format detail). It isn't needed but must be
+    // consumed - a template type never starts with a digit.
     sc.skipTrivia();
     if (std::isdigit(static_cast<unsigned char>(sc.peek()))) (void)sc.token();
     sc.skipTrivia();
@@ -251,8 +251,8 @@ std::string ParseError::what() const {
 
 std::optional<double> Value::asNumber() const {
     if (text_.empty()) return std::nullopt;
-    // from_chars ist deutlich schneller als strtod und laesst keine
-    // Locale-Ueberraschungen zu (Dezimalpunkt statt Komma).
+    // from_chars is much faster than strtod and allows no locale surprises
+    // (decimal point instead of comma).
     double out = 0;
     const char* begin = text_.data();
     const char* end = begin + text_.size();
@@ -346,17 +346,17 @@ Document parse(std::string_view text) {
         t.type = std::move(type);
         t.line = line;
 
-        // Alles bis zur Klammer als Namen nehmen, nicht nur ein Token.
+        // Take everything up to the brace as the name, not just one token.
         //
-        // Softimage schreibt Szenennamen mit Leerzeichen und Punkten hinein.
-        // Ein Parser, der genau ein Token erwartet, bricht dort ab — und
-        // meldete bei Ravens Zwischensequenzen "'{' erwartet nach Template
-        // SI_Scene" in Spalte 29, 37 oder 52, je nachdem wie lang der Name
-        // war. Fuenf von 1400 Dateien fielen so aus.
+        // Softimage writes scene names containing spaces and dots there. A
+        // parser that expects exactly one token aborts at that point - and
+        // for Raven's cutscenes it reported "'{' erwartet nach Template
+        // SI_Scene" at column 29, 37 or 52, depending on how long the name
+        // was. Five of 1400 files failed this way.
         //
-        // Der Name interessiert uns ohnehin nicht; er darf nur nicht den
-        // Abbruch verursachen. Eine Grenze verhindert, dass eine kaputte
-        // Datei ohne Klammer die ganze Datei verschluckt.
+        // We don't care about the name anyway; it just must not cause an
+        // abort. A limit prevents a broken file without a brace from
+        // swallowing the whole file.
         {
             int wache = 0;
             while (sc.peek() != '{' && !sc.eof() && wache++ < 64) {

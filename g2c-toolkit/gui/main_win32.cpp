@@ -1,16 +1,17 @@
-// gui/main_win32.cpp — Fenster, Renderer und Dateidialoge unter Windows.
+// gui/main_win32.cpp - window, renderer and file dialogs on Windows.
 //
-// Alles, was das Betriebssystem braucht, steckt hier. Die eigentliche
-// Oberflaeche in app.cpp kennt nur imgui.h und laesst sich deshalb auch ohne
-// Windows uebersetzen und pruefen.
+// Everything that needs the operating system lives here. The actual UI in
+// app.cpp only knows imgui.h and can therefore be compiled and tested without
+// Windows too.
 //
-// ACHTUNG: Diese Datei konnte nicht getestet werden. Sie entstand auf einem
-// Linux-Rechner ohne Windows-SDK; uebersetzt und ausgefuehrt wurde sie nie.
-// Die Oberflaeche selbst (app.cpp) ist geprueft, diese Anbindung nicht.
+// WARNING: This file could not be tested. It was written on a Linux machine
+// without the Windows SDK; it was never compiled or run.
+// The UI itself (app.cpp) is tested, this binding is not.
 
 #include "gui/app.h"
 #include "gui/i18n.h"
 #include "gui/icons.h"
+#include "gui/update.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_dx11.h"
@@ -20,6 +21,7 @@
 #include <shlobj.h>
 #include <tchar.h>
 #include <windows.h>
+#include <winhttp.h>
 
 #include <filesystem>
 #include <iterator>
@@ -34,6 +36,7 @@
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "winhttp.lib")
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -42,26 +45,25 @@ namespace {
 ID3D11Device*           g_device = nullptr;
 bool                    g_usingWarp = false;
 
-// Startprotokoll.
+// Startup log.
 //
-// Stuerzt das Programm beim Start ab, sieht der Nutzer nichts — kein
-// Fenster, keine Meldung, und auf einem fremden Rechner ist nicht
-// feststellbar, woran es lag. Jeder Schritt wird deshalb VOR seiner
-// Ausfuehrung vermerkt und die Datei sofort geschlossen. Was zuletzt
-// darin steht, ist der Schritt, der nicht mehr fertig wurde.
-// Wo das Startprotokoll hinkommt.
+// If the program crashes at startup, the user sees nothing - no window, no
+// message, and on someone else's machine there is no way to find out what
+// caused it. So every step is recorded BEFORE it runs and the file is closed
+// immediately. Whatever is last in it is the step that never finished.
+// Where the startup log goes.
 //
-// Neben die Exe — dort sucht man es, und dorthin kann man den Nutzer
-// verweisen, ohne ihm %APPDATA% erklaeren zu muessen.
+// Next to the exe - that's where people look for it, and you can point the
+// user there without having to explain %APPDATA%.
 //
-// Aber nicht immer: liegt das Programm unter "Programme", in einem
-// Netzwerkpfad oder auf einem schreibgeschuetzten Medium, schlaegt das
-// Schreiben fehl. Dann muss es einen Rueckfall geben, sonst ist gerade auf
-// den Rechnern kein Protokoll da, auf denen etwas schiefgeht.
+// But not always: if the program is under "Program Files", on a network path
+// or on read-only media, writing fails. Then there must be a fallback,
+// otherwise there is no log precisely on the machines where something goes
+// wrong.
 //
-// Der Test ist ein Schreibversuch, keine Rechtepruefung: unter Windows sagt
-// die Rechtelage allein nicht zuverlaessig, ob eine Datei entsteht
-// (Virtualisierung, Richtlinien, Virenschutz).
+// The test is a write attempt, not a permission check: on Windows the
+// permissions alone don't reliably tell whether a file will be created
+// (virtualization, policies, antivirus).
 std::wstring startupLogPath() {
     static std::wstring cached;
     if (!cached.empty()) return cached;
@@ -72,7 +74,7 @@ std::wstring startupLogPath() {
         const std::size_t slash = p.find_last_of(L"\\/");
         if (slash != std::wstring::npos) {
             const std::wstring cand = p.substr(0, slash + 1) + L"g2c-startup.log";
-            // Schreibversuch. Gelingt er, bleibt es dabei.
+            // Write attempt. If it succeeds, that's the one.
             FILE* probe = nullptr;
             if (_wfopen_s(&probe, cand.c_str(), L"a") == 0 && probe) {
                 std::fclose(probe);
@@ -82,7 +84,7 @@ std::wstring startupLogPath() {
         }
     }
 
-    // Rueckfall: %APPDATA%\g2c\startup.log
+    // Fallback: %APPDATA%\g2c\startup.log
     wchar_t appdata[MAX_PATH];
     if (!GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH)) return {};
     const std::wstring dir = std::wstring(appdata) + L"\\g2c";
@@ -110,7 +112,7 @@ bool                    g_resize = false;
 UINT                    g_resizeW = 0, g_resizeH = 0;
 g2::gui::App*           g_app = nullptr;
 
-// --- Zeichenkettenumwandlung ----------------------------------------------
+// --- String conversion ----------------------------------------------------
 
 std::string toUtf8(const wchar_t* s) {
     if (!s || !*s) return {};
@@ -139,10 +141,10 @@ std::string toUtf8(const std::wstring& s) {
     return out;
 }
 
-// --- Dateidialoge ----------------------------------------------------------
+// --- File dialogs ----------------------------------------------------------
 
-// Der Filter enthaelt eingebettete Nullbytes; toWide bricht daran ab.
-// Deshalb Stueck fuer Stueck umwandeln.
+// The filter contains embedded null bytes; toWide stops at them.
+// So convert it piece by piece.
 std::wstring dialogFilter(const char* filter) {
     std::wstring fw;
     if (filter) {
@@ -158,10 +160,10 @@ std::wstring dialogFilter(const char* filter) {
     return fw;
 }
 
-// Speichern-Dialog: der Name darf noch nicht existieren.
+// Save dialog: the name doesn't have to exist yet.
 //
-// Fuer "Neue .car" war bisher der Oeffnen-Dialog mit OFN_FILEMUSTEXIST im
-// Einsatz — ein neuer Name liess sich damit gar nicht eingeben.
+// "New .car" used to use the open dialog with OFN_FILEMUSTEXIST - a new name
+// couldn't be entered with it at all.
 std::string saveFileDialog(HWND owner, const char* title, const char* filter,
                            const std::string& startDir, const char* defaultExt) {
     std::vector<wchar_t> buf(4096, L'\0');
@@ -179,8 +181,8 @@ std::string saveFileDialog(HWND owner, const char* title, const char* filter,
     ofn.lpstrTitle = wtitle.empty() ? nullptr : wtitle.c_str();
     if (!startW.empty()) ofn.lpstrInitialDir = startW.c_str();
     if (!extW.empty()) ofn.lpstrDefExt = extW.c_str();
-    // Kein OFN_OVERWRITEPROMPT: newCar lehnt vorhandene Dateien ohnehin ab
-    // und sagt es im Protokoll — ueberschrieben wird nie.
+    // No OFN_OVERWRITEPROMPT: newCar rejects existing files anyway and says
+    // so in the log - nothing is ever overwritten.
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
     if (!GetSaveFileNameW(&ofn)) return {};
     return toUtf8(buf.data());
@@ -188,9 +190,9 @@ std::string saveFileDialog(HWND owner, const char* title, const char* filter,
 
 std::vector<std::string> openFilesDialog(HWND owner, const char* title, const char* filter,
                                          bool multi, const std::string& startDir) {
-    // GetOpenFileNameW mit Mehrfachauswahl. Der Puffer muss grosszuegig sein:
-    // bei vielen ausgewaehlten Dateien stehen dort Verzeichnis und alle Namen
-    // nacheinander, durch Nullbytes getrennt.
+    // GetOpenFileNameW with multiple selection. The buffer must be generous:
+    // with many selected files it holds the directory and all names one after
+    // another, separated by null bytes.
     std::vector<wchar_t> buf(64 * 1024, L'\0');
     const std::wstring wtitle = toWide(title ? title : "");
     const std::wstring fw = dialogFilter(filter);
@@ -202,8 +204,8 @@ std::vector<std::string> openFilesDialog(HWND owner, const char* title, const ch
     ofn.lpstrFile = buf.data();
     ofn.nMaxFile = static_cast<DWORD>(buf.size());
     ofn.lpstrTitle = wtitle.empty() ? nullptr : wtitle.c_str();
-    // Startordner. OFN_NOCHANGEDIR ist wichtig: ohne das aendert der Dialog
-    // das Arbeitsverzeichnis des Programms.
+    // Start folder. OFN_NOCHANGEDIR is important: without it the dialog
+    // changes the program's working directory.
     const std::wstring startW = toWide(startDir);
     if (!startW.empty()) ofn.lpstrInitialDir = startW.c_str();
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
@@ -212,9 +214,9 @@ std::vector<std::string> openFilesDialog(HWND owner, const char* title, const ch
     std::vector<std::string> out;
     if (!GetOpenFileNameW(&ofn)) return out;
 
-    // Bei Einfachauswahl steht ein vollstaendiger Pfad im Puffer. Bei
-    // Mehrfachauswahl das Verzeichnis, dann die Dateinamen — jeweils
-    // nullterminiert, am Ende ein doppeltes Nullbyte.
+    // With single selection the buffer holds one full path. With multiple
+    // selection the directory, then the file names - each null-terminated,
+    // with a double null byte at the end.
     const wchar_t* p = buf.data();
     const std::wstring first(p);
     p += first.size() + 1;
@@ -233,37 +235,36 @@ std::vector<std::string> openFilesDialog(HWND owner, const char* title, const ch
     return out;
 }
 
-// Setzt den Startordner eines IFileDialog, sofern er existiert.
+// Sets the start folder of an IFileDialog, if it exists.
 void setStartFolder(IFileDialog* dlg, const std::string& startDir) {
     if (startDir.empty()) return;
     IShellItem* item = nullptr;
     if (SUCCEEDED(SHCreateItemFromParsingName(toWide(startDir).c_str(), nullptr,
                                               IID_PPV_ARGS(&item)))) {
-        // SetFolder statt SetDefaultFolder: der zuletzt benutzte Ordner soll
-        // wirklich aufgehen, nicht nur beim allerersten Mal vorgeschlagen
-        // werden.
+        // SetFolder instead of SetDefaultFolder: the last used folder should
+        // really open, not just be suggested the very first time.
         dlg->SetFolder(item);
         item->Release();
     }
 }
 
-// Mehrere Ordner auf einmal auswaehlen.
+// Select several folders at once.
 //
-// Derselbe Dialog wie fuer einen Ordner, nur mit FOS_ALLOWMULTISELECT.
-// IFileOpenDialog liefert die Auswahl dann ueber GetResults als
-// IShellItemArray — GetResult (Einzahl) schlaegt in dem Fall fehl, deshalb
-// braucht es eine eigene Funktion und nicht nur ein zusaetzliches Flag.
+// The same dialog as for one folder, just with FOS_ALLOWMULTISELECT.
+// IFileOpenDialog then returns the selection via GetResults as an
+// IShellItemArray - GetResult (singular) fails in that case, so it needs a
+// function of its own and not just an extra flag.
 //
-// Im Dialog werden Ordner mit Strg und Umschalt ausgewaehlt wie Dateien.
-// Kleiner Halter fuer COM-Zeiger.
+// In the dialog, folders are selected with Ctrl and Shift just like files.
+// Small holder for COM pointers.
 //
-// Die Dialoge geben ihre Objekte bisher von Hand frei. Das ist richtig,
-// solange nichts dazwischen wirft — aber toUtf8 und std::string koennen
-// bei Speichermangel werfen, und dann bleibt das Objekt liegen.
+// The dialogs have so far released their objects by hand. That's correct as
+// long as nothing throws in between - but toUtf8 and std::string can throw
+// when out of memory, and then the object leaks.
 //
-// Ein Leck in einem Dateidialog ist kein Drama. Es von Hand richtig zu
-// machen und dabei auf Ausnahmefreiheit zu hoffen, ist trotzdem die
-// schlechtere Loesung, wenn die gute drei Zeilen kostet.
+// A leak in a file dialog is no big deal. Still, doing it right by hand and
+// hoping nothing throws is the worse solution when the good one costs three
+// lines.
 template <typename T>
 class ComPtr {
 public:
@@ -290,20 +291,20 @@ std::vector<std::string> pickFoldersDialog(HWND owner, const char* title,
                                 IID_PPV_ARGS(dlg.put()))))
         return result;
 
-    // .get(): ComPtr wandelt sich bewusst NICHT stillschweigend in einen
-    // Zeiger um. Bequem waere das, aber dann liesse sich der Halter auch
-    // versehentlich an Release() oder delete uebergeben — und genau davor
-    // soll er schuetzen.
+    // .get(): ComPtr deliberately does NOT silently convert to a pointer.
+    // That would be convenient, but then the holder could also accidentally
+    // be passed to Release() or delete - exactly what it is meant to guard
+    // against.
     setStartFolder(dlg.get(), startDir);
     DWORD opts = 0;
     dlg->GetOptions(&opts);
-    // FOS_FORCEFILESYSTEM bewusst NICHT setzen.
+    // Deliberately do NOT set FOS_FORCEFILESYSTEM.
     //
-    // Zusammen mit FOS_ALLOWMULTISELECT verhindert es die Mehrfachauswahl:
-    // der Dialog laesst dann nur einen Ordner markieren, ohne eine Meldung.
-    // Dass echte Pfade herauskommen, wird stattdessen beim Auslesen
-    // geprueft — GetDisplayName(SIGDN_FILESYSPATH) scheitert bei allem, was
-    // kein Ordner im Dateisystem ist, und der Eintrag wird uebersprungen.
+    // Combined with FOS_ALLOWMULTISELECT it prevents multiple selection: the
+    // dialog then only lets you mark one folder, without any message.
+    // That real paths come out is checked when reading the results instead -
+    // GetDisplayName(SIGDN_FILESYSPATH) fails for anything that isn't a
+    // folder in the file system, and that entry is skipped.
     dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_ALLOWMULTISELECT);
     if (title) {
         const std::wstring w = toWide(title);
@@ -330,8 +331,8 @@ std::vector<std::string> pickFoldersDialog(HWND owner, const char* title,
 }
 
 std::string pickFolderDialog(HWND owner, const char* title, const std::string& startDir) {
-    // IFileDialog statt SHBrowseForFolder: der alte Dialog ist winzig, kann
-    // keinen Pfad eintippen und sieht seit Vista aus wie aus Windows 2000.
+    // IFileDialog instead of SHBrowseForFolder: the old dialog is tiny, can't
+    // take a typed-in path and has looked like Windows 2000 ever since Vista.
     std::string result;
     IFileDialog* dlg = nullptr;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
@@ -362,7 +363,7 @@ std::string pickFolderDialog(HWND owner, const char* title, const std::string& s
     return result;
 }
 
-// Bildpunkte je Zoll des Systems, vertraeglich mit aelteren Windows-Fassungen.
+// System dots per inch, compatible with older Windows versions.
 UINT systemDpi() {
     using GetDpiForSystemFn = UINT(WINAPI*)();
     static GetDpiForSystemFn fn = []() -> GetDpiForSystemFn {
@@ -379,26 +380,26 @@ UINT systemDpi() {
     return dpi ? dpi : 96;
 }
 
-// --- Schriften -------------------------------------------------------------
+// --- Fonts -----------------------------------------------------------------
 //
-// Segoe UI deckt Latein samt Umlauten ab, aber kein Chinesisch und kein
-// Japanisch. Deshalb wird bei diesen Sprachen eine zweite Schrift
-// DAZUGELEGT — per MergeMode landen beide im selben Zeichensatz, und die
-// lateinischen Zeichen kommen weiterhin scharf aus Segoe UI.
+// Segoe UI covers Latin including umlauts, but no Chinese and no Japanese. So
+// for those languages a second font is ADDED ON TOP - via MergeMode both end
+// up in the same font atlas, and the Latin characters still come crisply from
+// Segoe UI.
 //
-// Glyphenbereiche braucht es seit ImGui 1.92 nicht mehr: der Zeichensatz
-// laedt nach, was tatsaechlich angezeigt wird. Vorher mussten fuer
-// Chinesisch 2500 und fuer Japanisch 1946 Ideogramme im Voraus gerastert
-// werden, bei jedem Sprachwechsel neu.
-// Schrift nur laden, wenn die Datei WIRKLICH da ist.
+// Glyph ranges are no longer needed since ImGui 1.92: the atlas loads on
+// demand whatever is actually displayed. Before that, 2500 ideographs for
+// Chinese and 1946 for Japanese had to be rasterized up front, again on every
+// language switch.
+// Only load a font if the file is REALLY there.
 //
-// ImGui loest bei einer fehlenden Schriftdatei ein IM_ASSERT_USER_ERROR
-// aus. Ist die Pruefung aktiv, bricht das Programm dort ab — und zwar nur
-// auf den Rechnern, denen die Datei fehlt. Genau so sah es aus: auf
-// Windows 11 lief es (dort gibt es SegoeIcons.ttf), auf Windows 10 nicht.
+// ImGui raises an IM_ASSERT_USER_ERROR for a missing font file. If the
+// assertion is active, the program aborts there - and only on the machines
+// that lack the file. That's exactly what it looked like: on Windows 11 it
+// ran (SegoeIcons.ttf exists there), on Windows 10 it didn't.
 //
-// Vorher nachsehen kostet einen Systemaufruf und nimmt der Sache jede
-// Abhaengigkeit davon, wie ImGui uebersetzt wurde.
+// Checking beforehand costs one system call and removes any dependence on
+// how ImGui was compiled.
 ImFont* addFontIfPresent(ImGuiIO& io, const std::wstring& path, float size,
                          const ImFontConfig* cfg, const ImWchar* ranges) {
     const DWORD attr = GetFileAttributesW(path.c_str());
@@ -409,13 +410,12 @@ ImFont* addFontIfPresent(ImGuiIO& io, const std::wstring& path, float size,
 void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
     io.Fonts->Clear();
 
-    // Unsinnige Skalierung abfangen.
+    // Catch nonsensical scaling.
     //
-    // ImGui erzeugt bei Schriftgroesse 0 keine Glyphen und stuerzt beim
-    // Zeichnen ab. GetDpiScaleForHwnd liefert normalerweise 1.0 bis 3.0,
-    // aber ein defekter Treiber oder eine ungewoehnliche
-    // Mehrschirmeinrichtung kann 0 melden — und dann ist der Absturz
-    // weit weg von seiner Ursache.
+    // At font size 0 ImGui creates no glyphs and crashes while drawing.
+    // GetDpiScaleForHwnd normally returns 1.0 to 3.0, but a broken driver or
+    // an unusual multi-monitor setup can report 0 - and then the crash is far
+    // away from its cause.
     if (!(dpi > 0.1f) || dpi > 8.0f) dpi = 1.0f;
 
     wchar_t winDir[MAX_PATH];
@@ -427,23 +427,23 @@ void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
     const float size = 17.0f * dpi;
 
     startupLog("  Grundschrift segoeui.ttf");
-    // Keine Bereichsangaben mehr.
+    // No more glyph ranges.
     //
-    // Seit ImGui 1.92 laedt der Zeichensatz Glyphen bei Bedarf nach, sofern
-    // das Backend ImGuiBackendFlags_RendererHasTextures unterstuetzt — das
-    // DX11-Backend tut das. Alle GetGlyphRangesXXX() sind damit veraltet.
+    // Since ImGui 1.92 the font atlas loads glyphs on demand, as long as the
+    // backend supports ImGuiBackendFlags_RendererHasTextures - the DX11
+    // backend does. All GetGlyphRangesXXX() are therefore obsolete.
     //
-    // Der Gewinn ist keine Kosmetik: fuer Chinesisch wurden bisher 2500 und
-    // fuer Japanisch 1946 Ideogramme im Voraus gerastert, bei jedem
-    // Sprachwechsel neu. Jetzt entsteht nur, was auch angezeigt wird.
+    // The gain is not cosmetic: for Chinese 2500 and for Japanese 1946
+    // ideographs used to be rasterized up front, again on every language
+    // switch. Now only what is actually displayed gets created.
     ImFont* base = addFontIfPresent(io, fontDir + L"segoeui.ttf", size, nullptr, nullptr);
     if (!base) {
         io.Fonts->AddFontDefault();
         return;
     }
 
-    // Zweite Schrift dazulegen. Welche Datei es ist, haengt von der Sprache
-    // ab; alle drei gehoeren zum Lieferumfang von Windows.
+    // Add a second font on top. Which file it is depends on the language; all
+    // three ship with Windows.
     const wchar_t* cjkFile = nullptr;
     switch (lang) {
         case g2::gui::Lang::Zh: cjkFile = L"msyh.ttc"; break;      // Microsoft YaHei
@@ -454,12 +454,12 @@ void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
     if (cjkFile) {
         startupLog("  CJK-Schrift");
         ImFontConfig cfg;
-        cfg.MergeMode = true;          // in denselben Zeichensatz einfuegen
-        cfg.OversampleH = 1;           // CJK-Glyphen sind gross, das genuegt
+        cfg.MergeMode = true;          // merge into the same font atlas
+        cfg.OversampleH = 1;           // CJK glyphs are large, this is enough
         cfg.OversampleV = 1;
         if (!addFontIfPresent(io, fontDir + cjkFile, size, &cfg, nullptr)) {
-            // Ausweichschriften, falls die bevorzugte fehlt. Lieber eine
-            // andere Schrift als leere Kaesten.
+            // Fallback fonts in case the preferred one is missing. Better a
+            // different font than empty boxes.
             for (const wchar_t* alt : {L"meiryo.ttc", L"msgothic.ttc", L"simsun.ttc",
                                        L"malgun.ttf"}) {
                 if (addFontIfPresent(io, fontDir + alt, size, &cfg, nullptr)) break;
@@ -467,26 +467,25 @@ void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
         }
     }
 
-    // Symbolschrift dazulegen.
+    // Add the icon font on top.
     //
-    // Windows 11 bringt "Segoe Fluent Icons" mit, Windows 10 nur
-    // "Segoe MDL2 Assets". Beide decken denselben Bereich ab, die Fluent-
-    // Variante hat rundere Ecken. Erst die neuere versuchen.
+    // Windows 11 ships "Segoe Fluent Icons", Windows 10 only "Segoe MDL2
+    // Assets". Both cover the same range, the Fluent variant has rounder
+    // corners. Try the newer one first.
     {
-        // Nur den Bereich anfordern, der tatsaechlich benutzt wird.
+        // Only request the range that is actually used.
         //
-        // Vorher standen hier E700 bis F8FF, also 4608 Zeichen — von denen
-        // zwanzig gebraucht werden. Der Zeichensatz legt fuer den ganzen
-        // Bereich eine Nachschlagetabelle an, und das ist Speicher und Zeit
-        // fuer nichts.
+        // This used to be E700 to F8FF, i.e. 4608 characters - of which twenty
+        // are needed. The font atlas builds a lookup table for the whole
+        // range, and that's memory and time for nothing.
         static const ImWchar iconRange[] = {static_cast<ImWchar>(g2::gui::kIconUsedMin),
                                             static_cast<ImWchar>(g2::gui::kIconUsedMax), 0};
         ImFontConfig cfg;
         cfg.MergeMode = true;
         cfg.OversampleH = 1;
         cfg.OversampleV = 1;
-        // Etwas kleiner als die Schrift: die Symbole sind auf voller
-        // Zeilenhoehe gezeichnet und wirken sonst wuchtiger als der Text.
+        // Slightly smaller than the font: the icons are drawn at full line
+        // height and otherwise look heavier than the text.
         cfg.GlyphOffset.y = 1.0f * dpi;
 
         startupLog("  Symbolschrift");
@@ -497,17 +496,16 @@ void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
                 break;
             }
         }
-        // Fehlt die Schrift, werden die Symbole weggelassen statt als leere
-        // Kaesten angezeigt.
+        // If the font is missing, the icons are left out instead of being
+        // shown as empty boxes.
         g2::gui::setIconsAvailable(ok);
     }
 
     startupLog("  Zeichensatz aufbauen");
     if (!io.Fonts->Build()) {
-        // Schlaegt der Aufbau fehl, ist der Zeichensatz unbrauchbar. Mit
-        // der Standardschrift weitermachen statt mit einem leeren Atlas
-        // ins Zeichnen zu gehen — dort waere der Absturz weit weg von
-        // seiner Ursache.
+        // If the build fails, the font atlas is unusable. Carry on with the
+        // default font instead of going into drawing with an empty atlas -
+        // there the crash would be far away from its cause.
         startupLog("  Zeichensatz fehlgeschlagen - Standardschrift");
         io.Fonts->Clear();
         io.Fonts->AddFontDefault();
@@ -545,24 +543,23 @@ bool createDevice(HWND hwnd) {
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-    // Erst die Grafikkarte, dann der Softwarerasterisierer.
+    // First the graphics card, then the software rasterizer.
     //
-    // Ohne den Rueckfallweg startet das Programm auf Rechnern ohne
-    // D3D11-faehigen Treiber gar nicht — und das betrifft mehr Faelle als
-    // man denkt: virtuelle Maschinen, Remotedesktop, alte oder fehlende
-    // Grafiktreiber. WARP gehoert zu Windows und ist immer vorhanden; fuer
-    // eine Oberflaeche aus Linien und Text reicht er vollkommen.
-    // NICHT unter 10_0 gehen.
+    // Without the fallback the program doesn't start at all on machines
+    // without a D3D11-capable driver - and that affects more cases than you'd
+    // think: virtual machines, Remote Desktop, old or missing graphics
+    // drivers. WARP is part of Windows and always present; for a UI made of
+    // lines and text it is entirely sufficient.
+    // Do NOT go below 10_0.
     //
-    // ImGuis DX11-Anbindung uebersetzt ihre Shader mit "vs_4_0", und das ist
-    // ein Ziel fuer Feature-Level 10.0 aufwaerts. Auf 9_1 oder 9_3 laesst
-    // sich das Geraet zwar erzeugen, aber die Shader scheitern — das Fenster
-    // erscheint weiss und das Programm stuerzt ab. Level 9.x braeuchte die
-    // Profile "vs_4_0_level_9_x", die ImGui nicht benutzt.
+    // ImGui's DX11 binding compiles its shaders with "vs_4_0", which is a
+    // target for feature level 10.0 and up. On 9_1 or 9_3 the device can be
+    // created, but the shaders fail - the window shows up white and the
+    // program crashes. Level 9.x would need the "vs_4_0_level_9_x" profiles,
+    // which ImGui doesn't use.
     //
-    // Ein Geraet zu erzeugen, das anschliessend nichts zeichnen kann, ist
-    // schlechter als gar keins: bei letzterem erscheint wenigstens die
-    // Fehlermeldung.
+    // Creating a device that then can't draw anything is worse than none at
+    // all: with the latter at least the error message appears.
     const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1,
                                         D3D_FEATURE_LEVEL_10_0};
     D3D_FEATURE_LEVEL got;
@@ -597,16 +594,17 @@ void destroyDevice() {
     if (g_device) { g_device->Release(); g_device = nullptr; }
 }
 
-// Kennung der WM_COPYDATA-Nachricht "diese Dateien oeffnen" ("G2C1").
+// ID of the WM_COPYDATA message "open these files" ("G2C1").
 constexpr ULONG_PTR kOpenFilesMessage = 0x47324331;
 
-// Dateien in der laufenden Oberflaeche oeffnen — derselbe Weg fuer Ziehen
-// aufs Fenster und fuer Dateien, die ein zweiter Programmstart weiterreicht.
+// Open files in the running UI - the same path for dropping onto the window
+// and for files handed over by a second program launch.
 //
-// .xsi gesammelt anhaengen, alles andere ueber openPath, also genau so wie
-// beim Ziehen auf die Exe. Frueher wurden .gla und anims.h beim Ziehen aufs
-// Fenster stillschweigend ignoriert, und ein nicht (mehr) vorhandener Pfad
-// galt als Ordner, weil INVALID_FILE_ATTRIBUTES das Verzeichnisbit hat.
+// Append .xsi files in one batch, everything else via openPath, i.e. exactly
+// like dropping onto the exe. Previously .gla and anims.h dropped onto the
+// window were silently ignored, and a path that did not (or no longer) exist
+// counted as a folder, because INVALID_FILE_ATTRIBUTES has the directory bit
+// set.
 void openPaths(const std::vector<std::string>& paths) {
     if (!g_app) return;
     std::vector<std::string> xsi;
@@ -633,8 +631,8 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
 
         case WM_DROPFILES: {
-            // Dateien auf das Fenster ziehen: .car werden geoeffnet, .xsi an
-            // das aktuelle Skript angehaengt.
+            // Files dropped onto the window: .car files are opened, .xsi files
+            // appended to the current script.
             HDROP drop = reinterpret_cast<HDROP>(wp);
             const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
             std::vector<std::string> paths;
@@ -649,9 +647,9 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         case WM_COPYDATA: {
-            // Ein zweiter Start von g2c — etwa per Doppelklick auf eine .car —
-            // reicht seine Dateien hierher weiter, statt ein zweites Fenster
-            // mit allen Tabs aufzumachen. Siehe forwardToRunningInstance.
+            // A second launch of g2c - e.g. by double-clicking a .car - hands
+            // its files over to here instead of opening a second window with
+            // all the tabs. See forwardToRunningInstance.
             const auto* cds = reinterpret_cast<const COPYDATASTRUCT*>(lp);
             if (!cds || cds->dwData != kOpenFilesMessage || !g_app) break;
             std::vector<std::string> paths;
@@ -669,20 +667,23 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         case WM_SYSCOMMAND:
-            if ((wp & 0xfff0) == SC_KEYMENU) return 0;   // Alt-Menue unterdruecken
+            if ((wp & 0xfff0) == SC_KEYMENU) return 0;   // suppress the Alt menu
             break;
 
         case WM_CLOSE:
-            // Nicht gleich zerstoeren. Frueher ging das Fenster sofort zu:
-            // ungespeicherte Aenderungen waren ohne Rueckfrage weg, und
-            // saveWindowPlacement fand danach kein Fenster mehr vor, sodass
-            // die Fensterlage nie gespeichert wurde.
+            // Don't destroy right away. The window used to close immediately:
+            // unsaved changes were gone without asking, and afterwards
+            // saveWindowPlacement found no window any more, so the window
+            // placement was never saved.
             //
-            // Jetzt entscheidet die Oberflaeche. Ohne Aenderungen endet die
-            // Hauptschleife sofort; sonst fragt ein Dialog, und die Schleife
-            // endet, sobald er beantwortet ist. Zerstoert wird das Fenster
-            // erst danach, am Ende von wWinMain.
+            // Now the UI decides. Without changes the main loop ends
+            // immediately; otherwise a dialog asks, and the loop ends as soon
+            // as it is answered. The window is only destroyed after that, at
+            // the end of wWinMain.
             if (!g_app || g_app->requestQuit()) PostQuitMessage(0);
+            // Closed from the taskbar while minimized: nothing is drawn then,
+            // so bring the window back or the question would stay invisible.
+            else if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
             return 0;
 
         case WM_DESTROY:
@@ -697,16 +698,16 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 }  // namespace
 
-// --- Fensterlage merken ----------------------------------------------------
+// --- Remember window placement ---------------------------------------------
 //
-// GetWindowPlacement statt GetWindowRect: die Struktur kennt neben der
-// Position auch den Zustand (normal, maximiert, minimiert) UND die Groesse,
-// die das Fenster im nicht-maximierten Zustand haette. Mit GetWindowRect
-// allein waere ein maximiertes Fenster beim naechsten Start bildschirmgross
-// aber nicht maximiert — und beim Wiederherstellen bliebe es riesig.
+// GetWindowPlacement instead of GetWindowRect: besides the position the struct
+// also knows the state (normal, maximized, minimized) AND the size the window
+// would have when not maximized. With GetWindowRect alone a maximized window
+// would be screen-sized but not maximized on the next start - and on restore
+// it would stay huge.
 //
-// Ein minimiertes Fenster wird als normal gespeichert: niemand will ein
-// Programm starten, das sofort in der Taskleiste verschwindet.
+// A minimized window is saved as normal: nobody wants to start a program that
+// immediately vanishes into the taskbar.
 std::string placementFile() {
     return (std::filesystem::path(g2::gui::App::configDir()) / "g2c_window.txt").string();
 }
@@ -759,10 +760,10 @@ bool restoreWindowPlacement(HWND hwnd) {
 
     if (r.right - r.left < 400 || r.bottom - r.top < 300) return false;
 
-    // Liegt das Fenster ausserhalb aller Bildschirme, nicht wiederherstellen.
+    // If the window lies outside all screens, don't restore it.
     //
-    // Das passiert nach dem Abziehen eines zweiten Monitors: das Fenster
-    // waere da, aber unsichtbar und nicht erreichbar.
+    // That happens after unplugging a second monitor: the window would be
+    // there, but invisible and unreachable.
     const HMONITOR mon = MonitorFromRect(&r, MONITOR_DEFAULTTONULL);
     if (!mon) return false;
 
@@ -770,20 +771,20 @@ bool restoreWindowPlacement(HWND hwnd) {
     return SetWindowPlacement(hwnd, &wp) != 0;
 }
 
-// Einstiegspunkt der Kommandozeile, liegt in tools/g2c.cpp.
+// Command-line entry point, lives in tools/g2c.cpp.
 int g2cMain(int argc, char** argv);
 
 namespace {
 
-// Ist das erste Argument ein Befehl der Kommandozeile?
+// Is the first argument a command-line command?
 //
-// Sonst waere gemeint: "diese Dateien in der Oberflaeche oeffnen". Das ist
-// der Fall, wenn man eine .car auf die Exe zieht — dann will man das
-// Fenster sehen, kein Konsolenfenster.
+// Otherwise the meaning would be: "open these files in the UI". That's the
+// case when a .car is dropped onto the exe - then you want to see the window,
+// not a console window.
 bool looksLikeCommand(const char* a) {
-    // Dieselbe Liste wie in g2cMain. export, makecar und about fehlten: sie
-    // oeffneten die Oberflaeche, obwohl die Fehlermeldung beim Grafikstart
-    // genau "g2c about" empfiehlt.
+    // The same list as in g2cMain. export, makecar and about were missing:
+    // they opened the UI, even though the error message on graphics startup
+    // recommends exactly "g2c about".
     static const char* kCmds[] = {"build", "anim",   "mesh",    "info",  "check", "xsi",
                                   "car",   "validate", "diff",  "scan",  "export", "makecar",
                                   "about", "version", "-h",     "--help", "/?",   "help",
@@ -793,21 +794,21 @@ bool looksLikeCommand(const char* a) {
     return false;
 }
 
-// Ausgabe an die aufrufende Eingabeaufforderung haengen.
+// Attach output to the calling command prompt.
 //
-// Das Programm ist als Fensteranwendung gebaut — sonst blitzte bei jedem
-// Doppelklick ein schwarzes Konsolenfenster auf. Fensteranwendungen haben
-// aber keine Konsole; ohne AttachConsole liefe die Kommandozeilenfassung
-// stumm. ATTACH_PARENT_PROCESS haengt sie an die Konsole, aus der sie
-// gestartet wurde. Klappt das nicht (etwa per Doppelklick gestartet), wird
-// eine eigene geoeffnet, damit die Ausgabe nicht verlorengeht.
+// The program is built as a GUI application - otherwise a black console
+// window would flash up on every double-click. GUI applications have no
+// console, though; without AttachConsole the command-line version would run
+// silently. ATTACH_PARENT_PROCESS attaches it to the console it was started
+// from. If that doesn't work (e.g. launched by double-click), a console of its
+// own is opened so the output doesn't get lost.
 void attachOrOpenConsole() {
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
         if (!AllocConsole()) return;
     }
-    // Umgeleitete Ausgabe ("g2c info a.gla > out.txt") nicht auf die
-    // Konsole umbiegen. Frueher wurde stdout immer neu auf CONOUT$ geoeffnet,
-    // und die Datei blieb leer.
+    // Don't bend redirected output ("g2c info a.gla > out.txt") back to the
+    // console. stdout used to always be reopened on CONOUT$, and the file
+    // stayed empty.
     const auto redirected = [](DWORD which) {
         const HANDLE h = GetStdHandle(which);
         if (!h || h == INVALID_HANDLE_VALUE) return false;
@@ -820,21 +821,21 @@ void attachOrOpenConsole() {
     freopen_s(&f, "CONIN$", "r", stdin);
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    // Die Eingabeaufforderung hat ihre Eingabezeile schon zurueckgegeben;
-    // ohne diesen Umbruch begaenne unsere Ausgabe mitten in der Zeile.
+    // The command prompt has already printed its prompt line again; without
+    // this line break our output would start in the middle of the line.
     std::printf("\n");
 }
 
-// Argumente als UTF-8, unabhaengig vom Einstiegspunkt.
+// Arguments as UTF-8, regardless of the entry point.
 //
-// __argv ist bei wWinMain LEER — die Laufzeitbibliothek fuellt bei einem
-// Unicode-Einstiegspunkt nur __wargv. Ein Zugriff auf __argv[1] laeuft
-// deshalb in einen Nullzeiger, und das Programm stuerzt ab, BEVOR das
-// Fenster erscheint. Von aussen sieht es aus, als passiere nichts.
+// With wWinMain __argv is EMPTY - with a Unicode entry point the runtime
+// library only fills __wargv. Accessing __argv[1] therefore hits a null
+// pointer, and the program crashes BEFORE the window appears. From the
+// outside it looks as if nothing happens.
 //
-// CommandLineToArgvW ist ausserdem der einzige zuverlaessige Weg fuer
-// Pfade mit Umlauten oder anderen Zeichen ausserhalb der Codepage — und
-// genau solche Pfade zieht man auf ein Programm.
+// CommandLineToArgvW is also the only reliable way for paths with umlauts or
+// other characters outside the code page - and those are exactly the kind of
+// paths people drop onto a program.
 class Args {
 public:
     Args() {
@@ -845,15 +846,14 @@ public:
         for (int i = 0; i < n; ++i) storage_.push_back(toUtf8(w[i]));
         LocalFree(w);
         for (auto& s : storage_) pointers_.push_back(s.data());
-        pointers_.push_back(nullptr);   // argv ist nullterminiert
+        pointers_.push_back(nullptr);   // argv is null-terminated
     }
 
-    // Startet mit "-reset" der gespeicherte Zustand verworfen werden?
+    // Started with "-reset" - should the saved state be discarded?
     //
-    // Ohne diesen Ausweg gibt es keinen, wenn eine Einstellungsdatei den
-    // Start verhindert: das Programm stuerzt bei jedem Versuch an
-    // derselben Stelle ab, und der Ordner ist fuer den Nutzer nicht
-    // auffindbar.
+    // Without this escape hatch there is none when a settings file prevents
+    // startup: the program crashes at the same spot on every attempt, and the
+    // user can't find the folder.
     bool hasNoFont() const {
         for (const auto& a : storage_)
             if (a == "-nofont" || a == "--nofont" || a == "/nofont") return true;
@@ -872,9 +872,9 @@ public:
         return i >= 0 && i < count() ? storage_[static_cast<std::size_t>(i)].c_str() : "";
     }
 
-    // Dateien unter den Argumenten, ohne Schalter wie -reset oder -nofont.
-    // Die wurden frueher ebenfalls als Pfad geoeffnet und erzeugten beim
-    // Start eine "nicht gefunden"-Meldung.
+    // Files among the arguments, without switches like -reset or -nofont.
+    // Those used to be opened as paths too and produced a "not found" message
+    // at startup.
     std::vector<std::string> files() const {
         std::vector<std::string> out;
         for (std::size_t i = 1; i < storage_.size(); ++i)
@@ -888,16 +888,16 @@ private:
     std::vector<char*>       pointers_;
 };
 
-// Laeuft g2c schon? Dann die Dateien dorthin schicken, statt ein zweites
-// Fenster zu oeffnen.
+// Is g2c already running? Then send the files there instead of opening a
+// second window.
 //
-// Ein Doppelklick auf eine .car startete frueher bei offenem g2c ein zweites
-// Fenster, das wieder alle zuletzt offenen Tabs lud. Beide schrieben beim
-// Beenden ihre Einstellungen, und das zuletzt geschlossene gewann.
+// Double-clicking a .car while g2c was open used to start a second window that
+// again loaded all the tabs open last time. Both wrote their settings on exit,
+// and the one closed last won.
 //
-// Das laufende Fenster oeffnet die Datei — oder springt auf ihren Tab, wenn
-// sie schon offen ist — und kommt nach vorn. Antwortet es nicht (aeltere
-// Fassung, haengt), startet dieses Programm ganz normal.
+// The running window opens the file - or jumps to its tab if it is already
+// open - and comes to the front. If it doesn't answer (older version, hung),
+// this program starts completely normally.
 bool forwardToRunningInstance(const Args& args) {
     if (args.hasReset()) return false;
     const auto files = args.files();
@@ -905,7 +905,7 @@ bool forwardToRunningInstance(const Args& args) {
     const HWND other = FindWindowW(L"g2cWindow", nullptr);
     if (!other) return false;
 
-    // Absolut machen: das andere Programm hat ein anderes Arbeitsverzeichnis.
+    // Make absolute: the other program has a different working directory.
     std::string data;
     for (const auto& f : files) {
         std::error_code ec;
@@ -919,8 +919,8 @@ bool forwardToRunningInstance(const Args& args) {
     cds.cbData = static_cast<DWORD>(data.size());
     cds.lpData = data.data();
 
-    // Das andere Fenster darf sich nach vorn holen — ohne diese Erlaubnis
-    // blinkte es nur in der Taskleiste.
+    // The other window is allowed to bring itself to the front - without this
+    // permission it would only flash in the taskbar.
     DWORD pid = 0;
     GetWindowThreadProcessId(other, &pid);
     AllowSetForegroundWindow(pid);
@@ -931,19 +931,289 @@ bool forwardToRunningInstance(const Args& args) {
     return ok != 0 && result == TRUE;
 }
 
+// --- HTTP for the updater -------------------------------------------------
+//
+// WinHTTP ships with every Windows, uses the system's proxy settings and
+// certificate store, and follows the redirect from github.com to the storage
+// host on its own. No library needed.
+
+// Test hook: G2C_UPDATE_TEST_SERVER=http://127.0.0.1:8765 sends the requests
+// for api.github.com and github.com there instead. The updater still checks
+// the ORIGINAL URLs, so the trust rules are exercised unchanged.
+std::string redirectForTest(const std::string& url) {
+    wchar_t buf[512];
+    const DWORD n = GetEnvironmentVariableW(L"G2C_UPDATE_TEST_SERVER", buf, 512);
+    if (n == 0 || n >= 512) return url;
+    const std::string server = toUtf8(buf);
+    for (const char* host : {"https://api.github.com", "https://github.com"})
+        if (url.rfind(host, 0) == 0) return server + url.substr(std::strlen(host));
+    return url;
+}
+
+std::string winHttpError(DWORD code) {
+    wchar_t* text = nullptr;
+    const DWORD n = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_HMODULE |
+                                       FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                   GetModuleHandleW(L"winhttp.dll"), code, 0,
+                                   reinterpret_cast<wchar_t*>(&text), 0, nullptr);
+    std::string out = n && text ? toUtf8(text) : std::string();
+    if (text) LocalFree(text);
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
+        out.pop_back();
+    return out.empty() ? "error " + std::to_string(code) : out;
+}
+
+class HttpGet {
+public:
+    // Sends the request and waits for the headers. status() == 0 means it failed.
+    explicit HttpGet(const std::string& originalUrl) { open(originalUrl); }
+
+    ~HttpGet() {
+        for (HINTERNET h : {request_, connect_, session_})
+            if (h) WinHttpCloseHandle(h);
+    }
+
+    HttpGet(const HttpGet&) = delete;
+    HttpGet& operator=(const HttpGet&) = delete;
+
+    int                status() const { return status_; }
+    const std::string& error() const { return error_; }
+    std::uint64_t      length() const { return length_; }
+
+    // Next piece of the body. 0 = end, -1 = error.
+    long long read(char* buf, DWORD size) {
+        DWORD got = 0;
+        if (!WinHttpReadData(request_, buf, size, &got)) {
+            fail();
+            return -1;
+        }
+        return got;
+    }
+
+private:
+    void open(const std::string& originalUrl) {
+        const std::string url = redirectForTest(originalUrl);
+        const std::wstring wurl = toWide(url);
+        URL_COMPONENTS uc{};
+        uc.dwStructSize = sizeof(uc);
+        uc.dwHostNameLength = static_cast<DWORD>(-1);
+        uc.dwUrlPathLength = static_cast<DWORD>(-1);
+        uc.dwExtraInfoLength = static_cast<DWORD>(-1);
+        if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) return fail();
+        const std::wstring host(uc.lpszHostName, uc.dwHostNameLength);
+        const std::wstring path = std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength) +
+                                  std::wstring(uc.lpszExtraInfo, uc.dwExtraInfoLength);
+
+        const std::wstring agent = L"g2c/" + toWide(g2::gui::update::thisBuild().version);
+        session_ = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session_)
+            session_ = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session_) return fail();
+        // Resolve, connect, send, receive. A dead network must not keep the
+        // program from closing for minutes.
+        WinHttpSetTimeouts(session_, 10000, 10000, 15000, 30000);
+
+        connect_ = WinHttpConnect(session_, host.c_str(), uc.nPort, 0);
+        if (!connect_) return fail();
+        const DWORD flags = uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+        request_ = WinHttpOpenRequest(connect_, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!request_) return fail();
+        if (originalUrl.rfind("https://api.github.com/", 0) == 0)
+            WinHttpAddRequestHeaders(request_, L"Accept: application/vnd.github+json\r\n",
+                                     static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD);
+        if (!WinHttpSendRequest(request_, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+            !WinHttpReceiveResponse(request_, nullptr))
+            return fail();
+
+        DWORD status = 0, size = sizeof(status);
+        if (!WinHttpQueryHeaders(request_, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                 WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
+                                 WINHTTP_NO_HEADER_INDEX))
+            return fail();
+        status_ = static_cast<int>(status);
+
+        DWORD length = 0;
+        size = sizeof(length);
+        if (WinHttpQueryHeaders(request_, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                                WINHTTP_HEADER_NAME_BY_INDEX, &length, &size,
+                                WINHTTP_NO_HEADER_INDEX))
+            length_ = length;
+    }
+
+    void fail() {
+        error_ = winHttpError(GetLastError());
+        status_ = 0;
+    }
+
+    HINTERNET     session_ = nullptr;
+    HINTERNET     connect_ = nullptr;
+    HINTERNET     request_ = nullptr;
+    int           status_ = 0;
+    std::uint64_t length_ = 0;
+    std::string   error_;
+};
+
+g2::gui::update::HttpResult httpGet(const std::string& url, std::size_t maxBytes) {
+    g2::gui::update::HttpResult out;
+    HttpGet req(url);
+    out.status = req.status();
+    out.error = req.error();
+    if (out.status == 0) return out;
+    char buf[16384];
+    for (;;) {
+        const long long n = req.read(buf, sizeof(buf));
+        if (n < 0) return {0, {}, req.error()};
+        if (n == 0) break;
+        out.body.append(buf, static_cast<std::size_t>(n));
+        if (out.body.size() > maxBytes) return {0, {}, "answer too large"};
+    }
+    return out;
+}
+
+std::string httpDownload(const std::string& url, const std::filesystem::path& dest,
+                         const std::function<bool(std::uint64_t, std::uint64_t)>& progress) {
+    HttpGet req(url);
+    if (req.status() == 0) return req.error();
+    if (req.status() != 200) return "HTTP " + std::to_string(req.status());
+    std::ofstream out(dest, std::ios::binary | std::ios::trunc);
+    if (!out) return "cannot write " + toUtf8(dest.filename().wstring());
+    std::vector<char> buf(1 << 16);
+    std::uint64_t done = 0;
+    for (;;) {
+        const long long n = req.read(buf.data(), static_cast<DWORD>(buf.size()));
+        if (n < 0) return req.error();
+        if (n == 0) break;
+        out.write(buf.data(), static_cast<std::streamsize>(n));
+        if (!out) return "cannot write " + toUtf8(dest.filename().wstring());
+        done += static_cast<std::uint64_t>(n);
+        if (progress && !progress(done, req.length())) return "cancelled";
+    }
+    out.close();
+    return out ? std::string() : "cannot write " + toUtf8(dest.filename().wstring());
+}
+
+std::filesystem::path exePath() {
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (n == 0) return {};
+        if (n < buf.size()) {
+            buf.resize(n);
+            return std::filesystem::path(buf);
+        }
+        buf.resize(buf.size() * 2);
+    }
+}
+
+// Set when the user chose "Restart now" after an update. The new process is
+// started at the very end of wWinMain: after the App has saved the settings
+// and after the window is gone - otherwise the new instance would find the
+// old window and hand its files over to it.
+bool g_relaunch = false;
+
+void relaunchSelf() {
+    const std::wstring exe = exePath().wstring();
+    std::wstring cmd = L"\"" + exe + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    // The user just clicked "Restart now", so this process may still bring
+    // windows to the front - pass that on, or the new window opens behind
+    // whatever else is on the screen.
+    AllowSetForegroundWindow(ASFW_ANY);
+    if (CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si,
+                       &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+// "g2c update [-check] [-stable|-snapshot]": the same updater as the update
+// bar, for the command line. Lives here and not in tools/g2c.cpp because only
+// this exe has WinHTTP - g2c-cli.exe is built for other systems too.
+int cmdUpdate(const Args& args) {
+    namespace upd = g2::gui::update;
+    bool checkOnly = false;
+    const upd::BuildInfo build = upd::thisBuild();
+    upd::Channel channel = upd::defaultChannel(build);
+    for (int i = 2; i < args.count(); ++i) {
+        const std::string a = args.at(i);
+        if (a == "-check") checkOnly = true;
+        else if (a == "-stable") channel = upd::Channel::Stable;
+        else if (a == "-snapshot") channel = upd::Channel::Snapshot;
+        else {
+            std::printf("Unbekannte Option: %s\n  g2c update [-check] [-stable|-snapshot]\n",
+                        a.c_str());
+            return 2;
+        }
+    }
+
+    // Leftovers of the previous "g2c update" - that one could not delete the
+    // exe it was running from.
+    upd::cleanupAfterUpdate(exePath());
+
+    upd::Updater u({httpGet, httpDownload}, build, exePath());
+    std::printf("Installiert : %s\n", upd::displayName(build).c_str());
+    u.check(channel, true);
+    u.wait();
+    upd::Status st = u.status();
+    if (st.phase == upd::Phase::Failed) {
+        std::printf("%s\n", g2::gui::describeUpdateError(st).c_str());
+        return 1;
+    }
+    std::printf("Verfuegbar  : %s\n", upd::displayName(st.release, channel).c_str());
+    if (st.phase == upd::Phase::UpToDate) {
+        std::printf("g2c ist aktuell.\n");
+        return 0;
+    }
+    if (checkOnly) {
+        std::printf("Installieren mit: g2c update\n");
+        return 0;
+    }
+
+    u.install();
+    const auto progress = [&] {
+        st = u.status();
+        std::printf("\rLade herunter: %.1f / %.1f MB   ", static_cast<double>(st.done) / 1048576.0,
+                    static_cast<double>(st.total) / 1048576.0);
+        std::fflush(stdout);
+    };
+    while (u.busy()) {
+        progress();
+        ::Sleep(200);
+    }
+    u.wait();
+    progress();   // the final state, even if the download was too fast to see
+    std::printf("\n");
+    if (st.phase != upd::Phase::Installed) {
+        std::printf("%s\n", g2::gui::describeUpdateError(st).c_str());
+        return 1;
+    }
+    if (!st.detail.empty()) std::printf("Hinweis: %s\n", st.detail.c_str());
+    std::printf("Installiert. Der naechste Start verwendet %s.\n",
+                upd::displayName(st.release, channel).c_str());
+    return 0;
+}
+
 }  // namespace
 
 int wWinMainGuarded(HINSTANCE inst);
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
-    // Jede Ausnahme abfangen und ZEIGEN.
+    // Catch every exception and SHOW it.
     //
-    // Ohne das beendet sich das Programm bei einem Fehler beim Laden der
-    // Einstellungen oder beim Wiederherstellen der Tabs lautlos — und ein
-    // Fenster, das sich sofort wieder schliesst, ist vom Nutzer nicht von
-    // einem kaputten Download zu unterscheiden.
+    // Without this the program exits silently on an error while loading the
+    // settings or restoring the tabs - and to the user, a window that closes
+    // again immediately is indistinguishable from a broken download.
     try {
-        return wWinMainGuarded(inst);
+        const int rc = wWinMainGuarded(inst);
+        // Here the App is destroyed (settings saved) and the window is gone.
+        if (g_relaunch) relaunchSelf();
+        return rc;
     } catch (const std::exception& e) {
         const std::wstring what = toWide(std::string("g2c wurde beendet:\n\n") + e.what());
         MessageBoxW(nullptr, what.c_str(), L"g2c", MB_OK | MB_ICONERROR);
@@ -956,17 +1226,23 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 }
 
 int wWinMainGuarded(HINSTANCE inst) {
-    // Bei jedem Start neu beginnen: eine Datei, die endlos waechst, liest
-    // niemand, und nur der letzte Versuch ist interessant.
+    // Start fresh on every launch: nobody reads a file that grows endlessly,
+    // and only the last attempt is of interest.
     {
         const std::wstring p = startupLogPath();
         if (!p.empty()) DeleteFileW(p.c_str());
     }
     startupLog("Start");
     Args args;
-    // Mit einem Befehl als erstem Argument arbeitet dieselbe Exe als
-    // Kommandozeilenwerkzeug. Eine Datei als Argument oeffnet dagegen die
-    // Oberflaeche mit dieser Datei.
+    // With a command as the first argument, the same exe works as a
+    // command-line tool. A file as the argument, on the other hand, opens the
+    // UI with that file.
+    if (args.count() > 1 && std::string(args.at(1)) == "update") {
+        attachOrOpenConsole();
+        const int rc = cmdUpdate(args);
+        std::fflush(stdout);
+        return rc;
+    }
     if (args.count() > 1 && looksLikeCommand(args.at(1))) {
         attachOrOpenConsole();
         const int rc = g2cMain(args.count(), args.argv());
@@ -980,13 +1256,13 @@ int wWinMainGuarded(HINSTANCE inst) {
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    // MUSS vor dem Erzeugen des Fensters stehen.
+    // MUST come before the window is created.
     //
-    // Ohne diese Anmeldung haelt Windows die Anwendung fuer eine alte mit
-    // fester Aufloesung von 96 dpi: sie zeichnet klein und Windows skaliert
-    // das fertige Bild hoch. Das Ergebnis ist durchgehend unscharf — Schrift
-    // wie Linien. Richtig ist, gleich in der Aufloesung des Bildschirms zu
-    // zeichnen.
+    // Without this declaration Windows treats the application as an old one
+    // with a fixed resolution of 96 dpi: it draws small and Windows scales the
+    // finished image up. The result is blurry throughout - text and lines
+    // alike. The right way is to draw at the screen's resolution in the first
+    // place.
     startupLog("DPI-Bewusstsein setzen");
     ImGui_ImplWin32_EnableDpiAwareness();
 
@@ -996,16 +1272,16 @@ int wWinMainGuarded(HINSTANCE inst) {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    // Symbol aus den eigenen Ressourcen. hIcon ist das grosse (Alt+Tab),
-    // hIconSm das kleine in der Titelleiste — beide angeben, sonst
-    // skaliert Windows das grosse herunter und es wird unscharf.
+    // Icon from our own resources. hIcon is the large one (Alt+Tab), hIconSm
+    // the small one in the title bar - specify both, otherwise Windows scales
+    // the large one down and it turns blurry.
     //
-    // LoadImageW mit SM_CXSMICON holt gezielt die 16-Pixel-Fassung aus der
-    // .ico. LoadIconW liefert immer die grosse; fuer die Titelleiste waere
-    // das eine heruntergerechnete und damit matschige Darstellung.
+    // LoadImageW with SM_CXSMICON specifically fetches the 16-pixel version
+    // from the .ico. LoadIconW always returns the large one; for the title bar
+    // that would be a downscaled and therefore mushy rendering.
     //
-    // Kennung 1, passend zu icon/g2c.rc: Windows nimmt fuer das Symbol im
-    // Explorer das Icon mit der NIEDRIGSTEN Kennung in der Exe.
+    // ID 1, matching icon/g2c.rc: for the icon in Explorer, Windows takes the
+    // icon with the LOWEST ID in the exe.
     wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
     wc.hIconSm = static_cast<HICON>(
         LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
@@ -1014,14 +1290,14 @@ int wWinMainGuarded(HINSTANCE inst) {
     startupLog("Fensterklasse anmelden");
     RegisterClassExW(&wc);
 
-    // Fenstergroesse in Bildpunkten, damit es auf hochaufloesenden
-    // Bildschirmen nicht winzig erscheint.
+    // Window size in pixels, so it doesn't look tiny on high-resolution
+    // screens.
     //
-    // GetDpiForSystem gibt es erst ab Windows 10 1607. Fest eingebunden
-    // startet das Programm auf aelteren Systemen gar nicht — es faellt schon
-    // beim Laden mit "Einsprungpunkt nicht gefunden" aus, bevor eine einzige
-    // Zeile lief. Deshalb zur Laufzeit nachschlagen und sonst den alten Weg
-    // ueber den Geraetekontext nehmen, den es seit jeher gibt.
+    // GetDpiForSystem only exists from Windows 10 1607 on. Linked statically,
+    // the program doesn't start at all on older systems - it already fails at
+    // load time with "entry point not found", before a single line has run.
+    // So look it up at runtime and otherwise take the old route via the device
+    // context, which has always existed.
     const UINT dpiRaw = systemDpi();
     const int  w = MulDiv(1500, static_cast<int>(dpiRaw), 96);
     const int  h = MulDiv(950, static_cast<int>(dpiRaw), 96);
@@ -1032,11 +1308,11 @@ int wWinMainGuarded(HINSTANCE inst) {
         destroyDevice();
         UnregisterClassW(wc.lpszClassName, inst);
 
-        // NICHT stillschweigend beenden.
+        // Do NOT exit silently.
         //
-        // Ein Fenster, das sich beim Doppelklick sofort wieder schliesst,
-        // ist fuer den Nutzer nicht von einem kaputten Download zu
-        // unterscheiden. Sagen, was fehlt.
+        // To the user, a window that closes again immediately after a
+        // double-click is indistinguishable from a broken download. Say what
+        // is missing.
         wchar_t msg[512];
         _snwprintf_s(msg, _TRUNCATE,
                      L"g2c konnte die Grafikausgabe nicht starten.\n\n"
@@ -1065,23 +1341,22 @@ int wWinMainGuarded(HINSTANCE inst) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // Fensterzustand und Spaltenbreiten neben die Einstellungen legen,
-    // nicht ins Arbeitsverzeichnis.
+    // Put window state and column widths next to the settings, not into the
+    // working directory.
     static std::string iniPath;
     iniPath = (std::filesystem::path(g2::gui::App::configDir()) / "g2c_gui.ini").string();
     io.IniFilename = iniPath.c_str();
 
-    // Skalierung des Bildschirms ermitteln, auf dem das Fenster liegt.
+    // Determine the scaling of the screen the window is on.
     bool firstFrame = true;
     startupLog("DPI ermitteln");
     const float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd);
 
-    // Mit "g2c -nofont" nur die eingebaute Schrift benutzen.
+    // With "g2c -nofont" only use the built-in font.
     //
-    // Die Schriften von Windows sind der einzige Teil des Starts, der von
-    // Dateien auf dem fremden Rechner abhaengt — eine beschaedigte oder
-    // ersetzte segoeui.ttf ist nicht auszuschliessen. Dieser Schalter
-    // ueberspringt sie vollstaendig.
+    // The Windows fonts are the only part of startup that depends on files on
+    // someone else's machine - a damaged or replaced segoeui.ttf can't be
+    // ruled out. This switch skips them entirely.
     if (args.hasNoFont()) {
         startupLog("Schriften ueberspringen (-nofont)");
         io.Fonts->Clear();
@@ -1119,22 +1394,29 @@ int wWinMainGuarded(HINSTANCE inst) {
         ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + w + L"\"").c_str(),
                       nullptr, SW_SHOWNORMAL);
     };
+    plat.network.get = httpGet;
+    plat.network.download = httpDownload;
+    plat.exePath = exePath();
+    plat.openUrl = [](const std::string& url) {
+        // Only web pages - never hand ShellExecute a path or a program.
+        if (url.rfind("https://", 0) != 0) return;
+        ShellExecuteW(nullptr, L"open", toWide(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    };
 
-    // Der wahrscheinlichste Absturzpunkt nach der Grafik: hier werden die
-    // gespeicherten Einstellungen gelesen und die zuletzt geoeffneten
-    // Skripte wiederhergestellt. Eine beschaedigte Datei in %APPDATA%\g2c
-    // schlaegt genau hier zu.
-    // Mit "g2c -reset" laesst sich der gespeicherte Zustand ueberspringen.
+    // The most likely crash point after the graphics: this is where the saved
+    // settings are read and the scripts opened last time are restored. A
+    // damaged file in %APPDATA%\g2c strikes exactly here.
+    // With "g2c -reset" the saved state can be skipped.
     //
-    // Ohne das gibt es keinen Ausweg, wenn eine Einstellungsdatei den Start
-    // verhindert: das Programm stuerzt bei jedem Versuch an derselben
-    // Stelle ab, und der Ordner ist fuer den Nutzer nicht auffindbar.
+    // Without it there is no way out when a settings file prevents startup:
+    // the program crashes at the same spot on every attempt, and the user
+    // can't find the folder.
     if (args.hasReset()) {
         startupLog("gespeicherten Zustand verwerfen (-reset)");
-        // Derselbe Ordner, aus dem auch gelesen wird — im mitnehmbaren
-        // Betrieb liegt er neben der Exe, nicht unter %APPDATA%. Und die
-        // Fensterdatei heisst g2c_gui.ini; geloescht wurde frueher eine
-        // imgui.ini, die es nie gab.
+        // The same folder that is read from - in portable mode it lives next
+        // to the exe, not under %APPDATA%. And the window file is called
+        // g2c_gui.ini; previously an imgui.ini was deleted, which never
+        // existed.
         const std::filesystem::path dir(g2::gui::App::configDir());
         for (const char* f : {"g2c_settings.txt", "g2c_window.txt", "g2c_gui.ini"}) {
             std::error_code ec;
@@ -1146,16 +1428,16 @@ int wWinMainGuarded(HINSTANCE inst) {
     g2::gui::App app(std::move(plat));
     app.settings().dpiScale = dpi;
 
-    // Auf die Exe gezogene oder als Argument uebergebene Dateien oeffnen.
+    // Open files dropped onto the exe or passed as arguments.
     for (const auto& f : args.files()) app.openPath(f);
-    // Der Oberflaeche sagen, wo das Protokoll liegt — sie ermittelt es
-    // nicht selbst, damit die Auskunft und die tatsaechlich beschriebene
-    // Datei nicht auseinanderlaufen koennen.
+    // Tell the UI where the log is - it doesn't determine it itself, so that
+    // the information and the file actually being written can't drift apart.
     app.setLogPath(toUtf8(startupLogPath()));
 
     g_app = &app;
 
     bool running = true;
+    bool occluded = false;
     while (running) {
         MSG msg;
         while (PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
@@ -1165,6 +1447,17 @@ int wWinMainGuarded(HINSTANCE inst) {
         }
         if (!running) break;
 
+        // Minimized or screen locked: nothing to show. Present does not wait
+        // for the display then, and the loop used to spin at about 60 % of a
+        // core the whole time the window sat in the taskbar. Builds run on
+        // their own threads and are not slowed down by this.
+        if (IsIconic(hwnd) ||
+            (occluded && g_swapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)) {
+            ::Sleep(15);
+            continue;
+        }
+        occluded = false;
+
         if (g_resize) {
             releaseRenderTarget();
             g_swapChain->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
@@ -1172,9 +1465,9 @@ int wWinMainGuarded(HINSTANCE inst) {
             createRenderTarget();
         }
 
-        // Sprachwechsel: der Zeichensatz muss mit anderen Glyphenbereichen
-        // neu aufgebaut werden. Die Texturen des Renderers haengen daran,
-        // also erst freigeben, dann neu bauen.
+        // Language switch: the font atlas must be rebuilt with different
+        // glyph ranges. The renderer's textures depend on it, so release them
+        // first, then rebuild.
         if (app.fontsDirty()) {
             ImGui_ImplDX11_InvalidateDeviceObjects();
             buildFonts(io, dpi, g2::gui::language());
@@ -1188,17 +1481,17 @@ int wWinMainGuarded(HINSTANCE inst) {
 
         app.draw();
 
-        // Fensterkreuz bei ungespeicherten Aenderungen: die Oberflaeche hat
-        // gefragt, und die Antwort war "speichern" oder "verwerfen".
+        // Window close button with unsaved changes: the UI has asked, and
+        // the answer was "save" or "discard".
         if (app.quitApproved()) running = false;
 
         ImGui::Render();
         const float clear[4] = {0.09f, 0.09f, 0.10f, 1.0f};
-        // Ohne Renderziel nichts zeichnen.
+        // Don't draw anything without a render target.
         //
-        // Schlaegt die Erzeugung fehl — etwa nach einem Treiberneustart —,
-        // waere g_rtv null. OMSetRenderTargets mit null zeichnet ins Leere:
-        // das Fenster bleibt weiss, und der naechste Zugriff stuerzt ab.
+        // If creating it fails - e.g. after a driver restart - g_rtv would be
+        // null. OMSetRenderTargets with null draws into nothing: the window
+        // stays white, and the next access crashes.
         if (!g_rtv) {
             ::Sleep(16);
             continue;
@@ -1206,19 +1499,19 @@ int wWinMainGuarded(HINSTANCE inst) {
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
         g_context->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        // Treiberneustart abfangen.
+        // Catch a driver restart.
         //
-        // Faellt der Grafiktreiber aus und wird von Windows neu gestartet
-        // (bei NVIDIA, AMD und Intel gleichermaessen ueblich, etwa nach
-        // einem Treiberupdate im laufenden Betrieb), meldet Present
-        // DEVICE_REMOVED oder DEVICE_RESET. Danach schlaegt JEDER weitere
-        // Aufruf fehl — ohne Pruefung sieht der Nutzer ein weisses Fenster
-        // und dann einen Absturz.
+        // If the graphics driver fails and is restarted by Windows (equally
+        // common with NVIDIA, AMD and Intel, e.g. after a driver update while
+        // running), Present reports DEVICE_REMOVED or DEVICE_RESET. After
+        // that EVERY further call fails - without a check the user sees a
+        // white window and then a crash.
         if (firstFrame) {
             startupLog("erstes Bild gezeichnet - ab hier laeuft alles");
             firstFrame = false;
         }
         const HRESULT pr = g_swapChain->Present(1, 0);   // vsync
+        occluded = pr == DXGI_STATUS_OCCLUDED;
         if (pr == DXGI_ERROR_DEVICE_REMOVED || pr == DXGI_ERROR_DEVICE_RESET) {
             const HRESULT reason =
                 (pr == DXGI_ERROR_DEVICE_REMOVED && g_device) ? g_device->GetDeviceRemovedReason()
@@ -1237,6 +1530,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     }
 
     g_app = nullptr;
+    g_relaunch = app.restartRequested();
     saveWindowPlacement(hwnd);
 
     ImGui_ImplDX11_Shutdown();

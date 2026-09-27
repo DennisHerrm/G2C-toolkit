@@ -23,16 +23,16 @@ std::string resolveAssetPath(const std::string& relative, const std::string& bas
     candidates.push_back(rel);
     if (!carDir.empty()) {
         candidates.push_back(fs::path(carDir) / rel);
-        // Manche Verzeichnisbaeume haben das "models/" schon in der Basis.
+        // Some directory trees already have the "models/" in the base.
         candidates.push_back(fs::path(carDir).parent_path() / rel);
     }
 
     for (const auto& c : candidates) {
         std::error_code ec;
         if (fs::exists(c, ec) && fs::is_regular_file(c, ec))
-            // make_preferred, weil die Pfade aus der .car Schraegstriche
-            // benutzen und die Basis unter Windows Backslashes. Beides
-            // funktioniert, sieht gemischt aber nach Fehler aus.
+            // make_preferred, because the paths from the .car use forward
+            // slashes and the base uses backslashes on Windows. Both work,
+            // but mixed together they look like an error.
             return c.lexically_normal().make_preferred().string();
     }
     return {};
@@ -42,7 +42,7 @@ AutoPaths guessPaths(const Script& script, const std::string& carPath) {
     AutoPaths out;
     std::error_code ec;
 
-    // Von der .car aus nach oben laufen, bis ein Ordner "models" auftaucht.
+    // Walk upwards from the .car until a "models" folder shows up.
     fs::path dir = fs::path(carPath).parent_path();
     for (int depth = 0; depth < 16 && !dir.empty(); ++depth) {
         if (dir.filename() == "models") {
@@ -53,7 +53,7 @@ AutoPaths guessPaths(const Script& script, const std::string& carPath) {
         if (up == dir) break;
         dir = up;
     }
-    // Sonst: liegt neben der .car ein "models"-Ordner?
+    // Otherwise: is there a "models" folder next to the .car?
     if (out.baseDir.empty()) {
         const fs::path here = fs::path(carPath).parent_path();
         if (fs::is_directory(here / "models", ec)) out.baseDir = here.string();
@@ -109,29 +109,29 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
     const std::string baseDir = opt.baseDir.empty() ? script.baseDir : opt.baseDir;
 
     xsi::EvalOptions eval;
-    eval.warnMissingBones = false;   // sonst 1289 mal dieselbe Meldung
+    eval.warnMissingBones = false;   // otherwise the same message 1289 times
 
-    // $scale aus dem Skript hat Vorrang vor dem Wert der Referenz-GLA.
+    // $scale from the script takes precedence over the reference GLA's value.
     //
-    // Normalerweise sind beide gleich; steht im Skript ein anderer, ist das
-    // eine Absicht des Autors und keine Nachlaessigkeit.
+    // Normally both are the same; if the script states a different one, that
+    // is the author's intent and not carelessness.
     eval.scale = reference.scale > 0.0f ? reference.scale : 1.0f;
     if (script.scale && *script.scale > 0.0) eval.scale = static_cast<float>(*script.scale);
 
-    // $keepmotion behaelt den "Motion"-Bone im Skelett. Die Wurzelbewegung
-    // wird trotzdem herausgerechnet.
+    // $keepmotion keeps the "Motion" bone in the skeleton. The root motion
+    // is still factored out.
     //
-    // So verhaelt sich Ravens Carcass (Ausgabe: "Keeping motion bone", danach
-    // "Compensating for motion bone"), und so ist Ravens ausgelieferte
-    // _humanoid.gla gebaut: deren _humanoid.car enthaelt $keepmotion, und
-    // trotzdem traegt jede Sequenz mit Nettobewegung die Rampe auf
-    // model_root. Nachgemessen an 1400 Sequenzen gegen die GLA aus
-    // assets1.pk3: mit Rampe stimmt die Wurzel bei 1396 ueberein, ohne bei
-    // nur 1144 — bei BOTH_RUNSTRAFE_LEFT1/RIGHT1 lagen 96 Einheiten dazwischen.
+    // That is how Raven's Carcass behaves (output: "Keeping motion bone",
+    // followed by "Compensating for motion bone"), and that is how Raven's
+    // shipped _humanoid.gla is built: its _humanoid.car contains $keepmotion,
+    // and yet every sequence with net motion carries the ramp on model_root.
+    // Measured on 1400 sequences against the GLA from assets1.pk3: with the
+    // ramp the root matches in 1396, without it in only 1144 - for
+    // BOTH_RUNSTRAFE_LEFT1/RIGHT1 the difference was 96 units.
     //
-    // Eine fruehere Fassung schaltete die Rampe bei $keepmotion ab. Die Figur
-    // lief dann waehrend der Animation aus ihrer Mitte heraus und sprang beim
-    // naechsten Durchlauf zurueck.
+    // An earlier version disabled the ramp with $keepmotion. The character
+    // then walked away from its center during the animation and snapped back
+    // on the next loop.
     eval.extractRootMotion = true;
 
     if (opt.originOverride) {
@@ -146,7 +146,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
     res.frames.numBones = numBones;
     res.carcassCompatible = opt.carcassCompatible;
 
-    // --- Pfade aufloesen (seriell, billig) --------------------------------
+    // --- Resolve paths (serial, cheap) ------------------------------------
     const std::size_t nGrabs = script.grabs.size();
     std::vector<std::string> resolved(nGrabs);
     for (std::size_t i = 0; i < nGrabs; ++i) {
@@ -172,8 +172,8 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
             os << "\n  " << m.file;
             os << "\n      Sequenz " << m.sequence;
             if (m.line) os << ", .car Zeile " << m.line;
-            // Wo genau gesucht wurde — das ist die Angabe, mit der man den
-            // Fehler ohne Raten findet.
+            // Exactly where we looked - that is the detail that lets you find
+            // the error without guessing.
             if (!baseDir.empty()) {
                 std::error_code ec;
                 os << "\n      erwartet: "
@@ -187,11 +187,11 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         throw std::runtime_error(os.str());
     }
 
-    // --- Laden und auswerten (parallel) -----------------------------------
+    // --- Load and evaluate (parallel) -------------------------------------
     //
-    // Jede Datei ist unabhaengig: lesen, parsen, FCurves einsammeln, Frames
-    // ausrechnen. Das Lesen allein macht rund vier Fuenftel der Laufzeit aus,
-    // und genau das skaliert ueber mehrere Threads am besten.
+    // Each file is independent: read, parse, collect FCurves, compute frames.
+    // Reading alone accounts for about four fifths of the run time, and that
+    // is exactly what scales best across multiple threads.
     struct Loaded {
         AnimationFrames frames;
         int             frameCount = 0;
@@ -208,11 +208,11 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
     std::mutex             progressMutex;
     std::atomic<std::size_t> done{0};
 
-    // Der Cache ist nicht threadsicher, wird aber aus mehreren Threads
-    // benutzt. Statt ihn zu sperren — was den Zweck der Parallelisierung
-    // untergraebe — bekommt jeder Thread eine eigene Instanz auf denselben
-    // Ordner. Die Eintraege sind einzelne Dateien und werden ueber
-    // Umbenennen atomar ersetzt, das vertraegt sich.
+    // The cache is not thread-safe, but it is used from multiple threads.
+    // Instead of locking it - which would defeat the purpose of the
+    // parallelization - each thread gets its own instance on the same
+    // folder. The entries are individual files and are replaced atomically
+    // via rename, so that works out.
     std::mutex cacheStatsMutex;
 
     parallelFor(
@@ -267,13 +267,12 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         },
         opt.threads);
 
-    // Vorhandene, aber unlesbare Dateien genauso behandeln wie fehlende.
+    // Treat files that exist but cannot be read exactly like missing ones.
     //
-    // Frueher wurden sie als Warnung vermerkt und uebersprungen. Das Ergebnis
-    // sah wie ein gelungener Bau aus, aber ab der Luecke stand jede
-    // nachfolgende Sequenz an einem anderen Zielframe als in der
-    // animation.cfg des Spiels — genau das, was ohne -skipmissing
-    // ausgeschlossen sein soll.
+    // They used to be noted as a warning and skipped. The result looked like
+    // a successful build, but from the gap onwards every following sequence
+    // sat at a different target frame than in the game's animation.cfg -
+    // exactly what is supposed to be ruled out without -skipmissing.
     if (!opt.skipMissing) {
         std::vector<std::string> unreadable;
         for (std::size_t i = 0; i < nGrabs; ++i)
@@ -291,7 +290,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         }
     }
 
-    // --- Zusammenhaengen (seriell, Reihenfolge zaehlt) --------------------
+    // --- Concatenate (serial, order matters) ------------------------------
     std::set<std::string> reportedMissingBones;
     int cursor = 0;
 
@@ -314,11 +313,11 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         else if (L.frameRate > 0) speed = L.frameRate;
 
         Sequence s;
-        // Kommentare aus dem Skript in die animation.cfg uebernehmen.
+        // Carry comments from the script over into the animation.cfg.
         //
-        // Nur beim Hauptgrab, nicht bei den -additional-Unterbereichen:
-        // die stehen in derselben Zeile und haetten denselben Kommentar
-        // wiederholt.
+        // Only for the main grab, not for the -additional sub-ranges:
+        // they are on the same line and would have repeated the same
+        // comment.
         s.commentsBefore = g.commentsBefore;
         s.trailingComment = g.trailingComment;
         s.name = g.enumName ? *g.enumName : g.derivedName();
@@ -335,8 +334,8 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
             fb.startFrame = cursor;
             fb.duration = L.frameCount;
             fb.fps = L.frameRate;
-            // Pro Frame und mit umgekehrtem Vorzeichen: die Rampe auf dem
-            // Wurzelbone ist die Gegenbewegung, averagevec die Bewegung selbst.
+            // Per frame and with the sign flipped: the ramp on the root bone is
+            // the counter-motion, averagevec is the motion itself.
             if (L.frameCount > 1)
                 for (int k = 0; k < 3; ++k)
                     fb.averageVec[k] = -L.rootMotion[k] / static_cast<float>(L.frameCount - 1);
@@ -360,12 +359,12 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
 
     if (!reportedMissingBones.empty()) {
         std::ostringstream os;
-        // Bewusst "in mindestens einer Datei": die Menge ist eine Vereinigung
-        // ueber alle Dateien. Ein Bone, der nur in Teilanimationen fehlt —
-        // etwa ltail in einer reinen Torso-Animation — landet hier ebenfalls,
-        // obwohl er anderswo sauber animiert wird. Die frueher hier stehende
-        // Formulierung "in keiner Animationsdatei" war schlicht falsch und
-        // hat den Verdacht auf die falsche Stelle gelenkt.
+        // Deliberately "in at least one file": the set is a union over all
+        // files. A bone that is only missing from partial animations - say
+        // ltail in a torso-only animation - ends up here as well, even though
+        // it is animated properly elsewhere. The wording "in no animation
+        // file" that used to be here was simply wrong and pointed suspicion
+        // at the wrong place.
         os << reportedMissingBones.size()
            << " Bone(s) in mindestens einer Datei nicht animiert, dort in Ruhepose: ";
         std::size_t i = 0;

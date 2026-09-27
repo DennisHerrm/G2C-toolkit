@@ -1,4 +1,4 @@
-// g2/mdxm.h — GLM schreiben.
+// g2/mdxm.h - Writing GLM.
 
 #pragma once
 
@@ -10,7 +10,7 @@
 namespace g2 {
 
 struct MdxmWriteStats {
-    std::uint64_t weightsDropped = 0;   // Vertices hatten mehr als 4 Gewichte
+    std::uint64_t weightsDropped = 0;   // vertices had more than 4 weights
     std::uint64_t weightsRenormalized = 0;
     std::size_t   maxBoneRefsUsed = 0;
 };
@@ -20,8 +20,8 @@ struct MdxmWriteResult {
     MdxmWriteStats            stats;
 };
 
-// Schreibt eine GLM. Bone-Referenzen werden pro Surface automatisch gesammelt
-// und auf lokale 5-Bit-Indizes gemappt.
+// Writes a GLM. Bone references are collected automatically per surface and
+// mapped to local 5-bit indices.
 MdxmWriteResult writeMdxm(const Mesh& mesh);
 
 }  // namespace g2

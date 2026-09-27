@@ -1,7 +1,7 @@
-// g2/xsi.h — dotXSI-Parser.
+// g2/xsi.h - dotXSI parser.
 //
-// dotXSI ist ein ASCII-Format aus der DirectX-.X-Familie. Die Grammatik ist
-// ueber alle Versionen gleich:
+// dotXSI is an ASCII format from the DirectX .X family. The grammar is the
+// same across all versions:
 //
 //     xsi 0101txt 0032
 //
@@ -15,16 +15,15 @@
 //         }
 //     }
 //
-// Template = Bezeichner [Instanzname] "{" Inhalt "}", wobei Inhalt entweder
-// weitere Templates oder Werte sind. Trennzeichen sind Semikolon, Komma und
-// Whitespace, alle gleichwertig. Kommentare mit // und slash-stern.
+// Template = identifier [instance name] "{" content "}", where content is
+// either further templates or values. Separators are semicolon, comma and
+// whitespace, all equivalent. Comments with // and slash-star.
 //
-// Was sich zwischen den Versionen unterscheidet, sind die Templatenamen und
-// deren Bedeutung — nicht die Syntax. Deshalb ist dieser Parser
-// versionsunabhaengig und liefert einen rohen Baum; die semantische Deutung
-// passiert eine Ebene darueber.
+// What differs between versions are the template names and their meaning -
+// not the syntax. That is why this parser is version-independent and returns
+// a raw tree; the semantic interpretation happens one level up.
 //
-// Carcass unterstuetzt 1.1, 1.3, 3.0 und 3.5 (erkennbar an den Headerkennungen
+// Carcass supports 1.1, 1.3, 3.0 and 3.5 (recognizable by the header tags
 // "0101txt", "0103txt", "0300txt", "0350txt").
 
 #pragma once
@@ -41,25 +40,25 @@ namespace g2::xsi {
 struct Version {
     int  major = 0;
     int  minor = 0;
-    bool binary = false;   // "bin" statt "txt" — wird hier nicht unterstuetzt
+    bool binary = false;   // "bin" instead of "txt" - not supported here
     std::string raw;
 
     std::string toString() const;
 };
 
-// Ein Wert im Template-Body. dotXSI unterscheidet Zahlen und Strings nicht
-// streng, deshalb wird der Rohtext behalten und bei Bedarf konvertiert.
+// A value in a template body. dotXSI does not strictly distinguish numbers
+// from strings, so the raw text is kept and converted on demand.
 class Value {
 public:
     explicit Value(std::string text) : text_(std::move(text)) {}
 
     const std::string& text() const { return text_; }
 
-    // Liefert nullopt, wenn der Text keine gueltige Zahl ist.
+    // Returns nullopt if the text is not a valid number.
     std::optional<double> asNumber() const;
     std::optional<long>   asInt() const;
 
-    // Wirft mit Positionsangabe, wenn die Konvertierung scheitert.
+    // Throws with position information if the conversion fails.
     double asNumberOrThrow(const char* context) const;
     long   asIntOrThrow(const char* context) const;
 
@@ -68,19 +67,19 @@ private:
 };
 
 struct Template {
-    std::string             type;       // z.B. "SI_Model"
-    std::string             name;       // Instanzname, oft leer
-    std::vector<Value>      values;     // direkte Werte im Body
-    std::vector<Template>   children;   // verschachtelte Templates
-    std::size_t             line = 0;   // Zeile des oeffnenden Bezeichners
+    std::string             type;       // e.g. "SI_Model"
+    std::string             name;       // instance name, often empty
+    std::vector<Value>      values;     // direct values in the body
+    std::vector<Template>   children;   // nested templates
+    std::size_t             line = 0;   // line of the opening identifier
 
-    // Erstes Kind mit passendem Typ, oder nullptr.
+    // First child of the matching type, or nullptr.
     const Template* find(std::string_view type) const;
 
-    // Alle Kinder mit passendem Typ.
+    // All children of the matching type.
     std::vector<const Template*> findAll(std::string_view type) const;
 
-    // Rekursive Suche in die Tiefe.
+    // Recursive depth-first search.
     const Template* findDeep(std::string_view type) const;
 
     std::size_t countDeep() const;
@@ -103,13 +102,13 @@ struct ParseError {
     std::string what() const;
 };
 
-// Parst dotXSI aus dem Speicher. Wirft std::runtime_error mit
-// Zeilen- und Spaltenangabe.
+// Parses dotXSI from memory. Throws std::runtime_error with line and
+// column information.
 Document parse(std::string_view text);
 Document parseFile(const std::string& path);
 
-// Uebersicht ueber die vorkommenden Templatetypen, absteigend nach Haeufigkeit.
-// Damit laesst sich eine unbekannte Datei erkunden, ohne sie zu lesen.
+// Overview of the template types that occur, in descending order of
+// frequency. This lets you explore an unknown file without reading it.
 struct TypeCount {
     std::string type;
     std::size_t count;
