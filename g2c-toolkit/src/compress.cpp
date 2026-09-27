@@ -1,5 +1,6 @@
 #include "g2/compress.h"
 
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -10,19 +11,53 @@
 
 namespace g2 {
 
+// Erst in eine Nachbardatei schreiben, dann umbenennen.
+//
+// Direkt in die Zieldatei zu schreiben kuerzt sie als Erstes auf null. Geht
+// danach etwas schief — Platte voll, Netzlaufwerk weg, Datei vom Spiel
+// gesperrt —, ist die alte Fassung verloren und die neue unvollstaendig.
+// Gerade bei der _humanoid.gla, die meist auch die Referenz des naechsten
+// Baus ist, waere das der Verlust der Arbeit mehrerer Tage.
+//
+// Das Umbenennen ersetzt das Ziel in einem Schritt: danach liegt entweder
+// die alte oder die neue Datei vollstaendig da, nie etwas dazwischen.
 void writeFileChecked(const std::string& path, const void* data, std::size_t size) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht zum Schreiben oeffnen");
+    namespace fs = std::filesystem;
+    const fs::path target(path);
+    fs::path tmp = target;
+    tmp += ".g2c_tmp";
 
-    if (size) {
-        f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
-        if (!f) throw std::runtime_error("Fehler beim Schreiben von \"" + path + "\"");
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht zum Schreiben oeffnen");
+
+        if (size) {
+            f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+            if (!f) {
+                f.close();
+                std::error_code ec;
+                fs::remove(tmp, ec);
+                throw std::runtime_error("Fehler beim Schreiben von \"" + path + "\"");
+            }
+        }
+
+        // Erst close() leert den Puffer. Ein Schreibfehler wird oft genau
+        // hier sichtbar und nicht schon beim write().
+        f.close();
+        if (!f) {
+            std::error_code ec;
+            fs::remove(tmp, ec);
+            throw std::runtime_error("Fehler beim Abschliessen von \"" + path + "\"");
+        }
     }
 
-    // Erst close() leert den Puffer. Ein Schreibfehler wird oft genau hier
-    // sichtbar und nicht schon beim write().
-    f.close();
-    if (!f) throw std::runtime_error("Fehler beim Abschliessen von \"" + path + "\"");
+    std::error_code ec;
+    fs::rename(tmp, target, ec);
+    if (ec) {
+        std::error_code ec2;
+        fs::remove(tmp, ec2);
+        throw std::runtime_error("Kann \"" + path + "\" nicht ersetzen: " + ec.message());
+    }
 }
 
 void writeFileChecked(const std::string& path, const std::string& text) {

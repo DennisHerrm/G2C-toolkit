@@ -85,8 +85,18 @@ if(G2C_HAVE_IPO)
   set_property(TARGET g2c PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
 endif()
 
+# Alle Programme mit UTF-8 als aktiver Codepage (siehe assets/utf8.manifest).
+# Ohne das lassen sich unter Windows keine Pfade mit Umlauten oeffnen.
+function(g2c_utf8 target)
+  if(MSVC)
+    target_sources(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/assets/utf8.manifest)
+  endif()
+endfunction()
+g2c_utf8(g2c)
+
 enable_testing()
 add_executable(g2_tests tests/tests.cpp)
+g2c_utf8(g2_tests)
 target_link_libraries(g2_tests PRIVATE g2)
 add_test(NAME g2_tests COMMAND g2_tests)
 
@@ -123,6 +133,7 @@ if(EXISTS ${IMGUI_DIR}/imgui.cpp)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_win32.py
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_wiring.py
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_batch.py
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_imgui.py
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Pruefe Windows-Anbindung, Verdrahtung und build.bat")
   endif()
@@ -130,6 +141,27 @@ if(EXISTS ${IMGUI_DIR}/imgui.cpp)
   add_executable(g2_gui_tests tests/gui_tests.cpp gui/app.cpp gui/i18n.cpp gui/icons.cpp gui/preview.cpp)
   target_include_directories(g2_gui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(g2_gui_tests PRIVATE g2 imgui)
+  g2c_utf8(g2_gui_tests)
+
+  # Oberflaeche wirklich bedienen: klicken, ziehen, tippen, ohne Fenster.
+  #
+  # Braucht ImGui mit eingeschalteten Test-Engine-Hooks und abgefangenen
+  # Zusicherungen. Das ist ein eigener Bau der ImGui-Quellen, damit die
+  # ausgelieferte g2c.exe davon nichts mitbekommt.
+  add_library(imgui_driver STATIC
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+  )
+  target_include_directories(imgui_driver PUBLIC ${IMGUI_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_compile_definitions(imgui_driver PUBLIC IMGUI_ENABLE_TEST_ENGINE
+                             IMGUI_USER_CONFIG="gui_driver_imconfig.h")
+  add_executable(g2_gui_driver tests/gui_driver.cpp gui/app.cpp gui/i18n.cpp gui/icons.cpp
+                 gui/preview.cpp)
+  target_include_directories(g2_gui_driver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(g2_gui_driver PRIVATE g2 imgui_driver)
+  g2c_utf8(g2_gui_driver)
 
   if(WIN32)
     target_sources(imgui PRIVATE
@@ -156,6 +188,7 @@ if(EXISTS ${IMGUI_DIR}/imgui.cpp)
     endif()
     target_include_directories(g2c-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(g2c-gui PRIVATE g2 imgui d3d11 dxgi comdlg32 ole32 shell32)
+    g2c_utf8(g2c-gui)
     if(MSVC)
       target_compile_options(g2c-gui PRIVATE /W4)
     endif()

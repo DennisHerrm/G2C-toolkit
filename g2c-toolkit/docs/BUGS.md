@@ -133,3 +133,64 @@ Stabil ist `2*atan2(|qa−qb|, |qa+qb|)` in doppelter Genauigkeit. Siehe
 | Translationsbereich | ±511 | `MC_UnCompressQuat` |
 
 Die Poolgrenze prueft Carcass gar nicht. `g2c` wirft dort eine Exception.
+
+---
+
+# Pruefung September 2026: Fehler in g2c selbst
+
+Gefunden mit den Unit-Tests, einem neuen Oberflaechentreiber
+(`tests/gui_driver.cpp`), einem Rundlauf ueber 53 echte .car-Dateien und
+einem Vergleich gegen Carcass v2.2 und Ravens ausgelieferte `_humanoid.gla`.
+Alle behoben; die Tests dazu stehen in `tests/`.
+
+## Ergebnis der Animationen
+
+- 1400 gemeinsame Sequenzen gegen Ravens `_humanoid.gla`: kein Koerper-Bone
+  weicht in irgendeinem Frame mehr als 0,13 Grad / 0,12 Einheiten ab
+  (Quantisierungsrauschen).
+- Voller Movie-Duels-Humanoid (1854 Dateien, 47422 Frames): bitgleich
+  reproduzierbar, unabhaengig von Cache und Threadzahl (1 bis 32).
+- Carcass v2.2 kann diesen Humanoid nicht mehr bauen: Abbruch an einer
+  Basepose-Abweichung (leye/reye in both_flamethrower.xsi), mit
+  `-ignorebasedeviations` dann an einer Translation von -520,8 (erlaubt
+  +-511).
+
+## Behoben
+
+| Bereich | Fehler | Folge |
+|---|---|---|
+| Bauen | `$keepmotion` schaltete die Wurzelrampe ab | Figur rutscht bis 96 Einheiten aus der Mitte |
+| Bauen | vorhandene, aber unlesbare .xsi still uebersprungen | alle folgenden Zielframes verschoben |
+| Bauen (GUI) | "vor dem Bauen speichern" ueber `&d - docs_.data()` auf eine Kopie | undefiniert; .car praktisch nie gespeichert |
+| Bauen (GUI) | Ausgaben ueber ungepruefte ofstreams, direkt ins Ziel | gesperrte/volle Platte: "gebaut" gemeldet, alte GLA auf null gekuerzt |
+| Alle Ausgaben | Schreiben ohne Nebendatei | Abbruch = halbe Datei. Jetzt: Nebendatei + Umbenennen |
+| .car speichern | Kopfkommentare, Zeilenendkommentare, `-makeskin`, unbekannte Flags, Anfuehrungszeichen, qdskip-Klammer, Zeilenreihenfolge | jede Zeile umgeschrieben, Teile verloren. Jetzt 53/53 Dateien zeilengenau |
+| .car speichern | Grabs ohne `$aseanimgrabinit` | Datei ohne Sequenzen |
+| .car speichern | `$include`-Grabs ins Hauptskript kopiert | doppelte Sequenzen |
+| GUI | Chinesisch/Japanisch: `%s` vor `%zu` | Absturz beim XSI-Ordner und beim GLA-Oeffnen. Jetzt Pruefung zur Uebersetzungszeit |
+| GUI | Umlaute in Pfaden | Datei nicht gefunden. Jetzt UTF-8-Manifest |
+| GUI | Schliessen (Kreuz, Strg+W, Alle, Fenster) | ungespeicherte Aenderungen ohne Rueckfrage weg |
+| GUI | "Neue .car" mit Oeffnen-Dialog | liess sich nie anlegen |
+| GUI | Loeschen einer Sequenz | Trennlinien darueber mitgeloescht |
+| GUI | Ziehen in der Tabelle | ganze Zielzeile eingerahmt, immer davor eingefuegt. Jetzt Linie ueber/unter der Zeile je nach Mausposition, Einfuegen genau dort; unter eine Ueberschrift gezogen bleibt sie darueber |
+| GUI | Umschalt-Auswahl mit Filter | ausgeblendete Zeilen mit ausgewaehlt und geloescht |
+| GUI | Ziehen auf anderen Tab | verschob Zeilen im falschen Skript |
+| GUI | Sequenzdialog/Loeschrueckfrage beim Tabwechsel | bearbeitete/loeschte im anderen Skript |
+| GUI | Hell/Dunkel bei >100 % DPI | Abstaende wuchsen je Wechsel, Knoepfe am Fensterrand unklickbar |
+| GUI | Zeilenkommentar per Doppelklick | oeffnete den Sequenzdialog; getippter Text ging verloren |
+| GUI | Export in vorhandenen Ordner | .xsi und .car ohne Rueckfrage ueberschrieben |
+| GUI | Vorschau mit fremder animation.cfg | Zugriff ausserhalb der Liste |
+| GUI | Strg+O, Strg+Umschalt+O, Strg+W, F5, Umschalt+F5, F7 | standen im Menue, taten nichts |
+| GUI | .gla/anims.h aufs Fenster gezogen | ignoriert |
+| GUI | Framezahlen nach Korrektur der Assetwurzel | blieben "fehlt" bis zum Neustart |
+| GUI | Fensterlage | wurde nie gespeichert; `-reset` loeschte die falsche Datei |
+| Tests | `g2_gui_tests` benutzte die echten Einstellungen | konnte eine echte .car ueberschreiben |
+| Tests | offene Datei bei `remove_all` | 77 Pruefungen still uebersprungen |
+| CLI | `anim ref.gla ref.gla ...`, `build` ohne -o im Modellordner | Referenz und animation.cfg ohne Sicherung ersetzt. Jetzt .bak |
+| CLI | Ziehen einer .car: GLA-Name der Referenz statt -makeskel | Engine nimmt die falsche animation.cfg |
+| CLI | `export`/`makecar`/`scan`: unbekannte Optionen ignoriert, `stof` | "-scale 0,64" = 0, "-orgin" = geschaetzt |
+| CLI | `mesh -compare` ohne Grenzpruefung | Lesen ausserhalb des Puffers |
+| CLI | GLM-Fehler, Ausnahme bei gezogener Datei | Rueckgabe 0 bzw. Programmende ohne Meldung |
+| CLI | `-cache X -clearcache`, `-o` ohne Endung, `-o ordner/` | falscher Cache geleert, "C:\jka.frames", "players//x.xsi" |
+| Lesen | negative Offsets, ungueltige Parent-Indizes in GLA und Cache | Lesen/Schreiben ausserhalb des Speichers |
+| Lesen | GLM-Surfaces nach uebersprungenem Mesh | Elternbezuege um eins verrutscht |

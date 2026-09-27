@@ -47,6 +47,19 @@ Cmd         cmdFromString(const std::string& s);
 // im Kopf jeder erzeugten Datei dokumentiert:
 //     enum, targetFrame, frameCount, loopFrame, frameSpeed
 struct Sequence {
+    // Kommentarzeilen, die VOR dieser Sequenz stehen sollen.
+    //
+    // Ravens animation.cfg gliedert die 1683 Sequenzen mit Trennern und
+    // Ueberschriften — ohne sie ist die Datei eine Wand aus Zahlen. Beim
+    // Bauen gingen sie bisher verloren, weil die cfg neu erzeugt wird.
+    //
+    // Die Zeilen stehen so, wie sie geschrieben werden sollen; ein "//"
+    // wird beim Schreiben vorangestellt, falls es fehlt.
+    std::vector<std::string> commentsBefore;
+
+    // Kommentar am Ende der Zeile, hinter den Zahlen.
+    std::string  trailingComment;
+
     std::string  name;
     int          targetFrame = 0;
     int          frameCount = 0;
@@ -60,6 +73,22 @@ struct Sequence {
 // $aseanimgrab <datei.xsi> [-loop N] [-framespeed N] [-enum NAME]
 //              [-qdskipstart] [-additional t c l s NAME]... [-qdskipstop]
 struct GrabDirective {
+    // Kommentarzeilen, die im Skript VOR diesem Grab stehen.
+    //
+    // Sie wandern in die erzeugte animation.cfg. Wer sein Skript gliedert
+    // — Trenner, Ueberschriften, Hinweise —, findet das in der cfg wieder,
+    // statt eine Wand aus Zahlen zu bekommen.
+    std::vector<std::string> commentsBefore;
+
+    // Kommentar am ENDE der Grab-Zeile, hinter den Angaben.
+    //
+    // Ravens animation.cfg nutzt das fuer Hinweise je Animation:
+    //
+    //     BOTH_WALK1_ANI  36698  24  0  30  // nur mit Anakins Schwert
+    //
+    // Er wandert in die erzeugte cfg an dieselbe Stelle.
+    std::string              trailingComment;
+
     std::string              file;
     std::optional<int>       loop;
     std::optional<int>       frameSpeed;
@@ -76,17 +105,46 @@ struct GrabDirective {
     std::vector<Additional> additional;
     std::size_t             line = 0;
 
+    // Flags, die dieser Parser nicht kennt, in ihrer Reihenfolge. Sie
+    // bleiben beim Speichern erhalten, auch wenn die Zeile neu entsteht.
+    std::vector<std::string> extraArgs;
+
+    // Die Zeile, wie sie in der Datei stand (ohne Zeilenende).
+    //
+    // Solange sich an diesem Grab nichts geaendert hat, wird genau sie
+    // zurueckgeschrieben. Ohne das formte jedes Speichern jede Zeile um —
+    // Flags in anderer Reihenfolge, andere Abstaende —, und aus einer
+    // kleinen Aenderung wurde ein Unterschied in tausend Zeilen.
+    std::string sourceLine;
+
+    // Stammt dieser Grab aus einer $include-Datei? Dann Kennung des
+    // $include im Hauptskript, sonst -1. Solche Grabs gehoeren der anderen
+    // Datei und werden beim Speichern nicht ins Hauptskript kopiert.
+    int fromInclude = -1;
+
     // Sequenzname, wenn kein -enum angegeben ist: Dateiname ohne Pfad und
     // Endung, in Grossbuchstaben. Gegen die echte _humanoid.car geprueft.
     std::string derivedName() const;
 };
 
 // $aseanimconvertmdx[_noask] <root> [-makeskel <pfad>] [-origin x y z]
+//                            [-makeskin]
 struct ConvertDirective {
     std::string                          root;
     std::string                          makeSkel;
     std::optional<std::array<double, 3>> origin;
     bool                                 noAsk = false;
+
+    // Carcass legt dann eine .skin neben die GLM. Ging beim Speichern
+    // frueher verloren, weil der Parser das Flag nicht kannte.
+    bool                                 makeSkin = false;
+    std::vector<std::string>             extraArgs;
+
+    // Wie beim Grab: Originalzeile samt Zeilenendkommentar. Die
+    // Kommentarzeilen darueber haengen an der zugehoerigen Statement.
+    std::string                          sourceLine;
+    std::string                          trailingComment;
+    int                                  fromInclude = -1;
 };
 
 struct Statement {
@@ -96,12 +154,44 @@ struct Statement {
     std::size_t              line = 0;
     std::string              file;     // Herkunft, wichtig bei $include
 
+    // Originalzeile und die Kommentarzeilen darueber. Beides wird beim
+    // Speichern unveraendert wieder ausgegeben — ein Kopfkommentar ueber
+    // $scale oder ein Hinweis hinter $keepmotion gehoert dem Autor.
+    std::string              sourceLine;
+    std::vector<std::string> commentsBefore;
+
+    // Aus einer $include-Datei: Kennung des $include im Hauptskript.
+    int                      fromInclude = -1;
+    // Nur bei $include im Hauptskript: die Kennung, die seine Inhalte tragen.
+    int                      includeId = -1;
+    // Wie viele eigene Grabs davor standen. Steht ein $include mitten
+    // zwischen den Grabs, wird es beim Speichern wieder an diese Stelle
+    // gesetzt.
+    std::size_t              grabsBefore = 0;
+
     // Bequemlichkeiten mit klarer Fehlermeldung statt stiller Nullen.
     const std::string& arg(std::size_t i, const char* what) const;
     double             argNumber(std::size_t i, const char* what) const;
 };
 
+// Eine einzelne Zeile als Grab bzw. Konvertierungsanweisung lesen — dieselben
+// Regeln wie beim Einlesen einer ganzen Datei. Wird auch beim Speichern
+// gebraucht, um festzustellen, ob sich ein Eintrag geaendert hat.
+GrabDirective    parseGrabLine(const std::string& line);
+ConvertDirective parseConvertLine(const std::string& line);
+
 struct Script {
+    // Kommentarzeilen NACH dem letzten Grab.
+    //
+    // Sie haben keinen Nachfolger, an dem sie haengen koennten. Ohne ein
+    // eigenes Feld liesse sich ein Trenner ans Ende der Liste weder
+    // schieben noch dort anlegen — und genau das will man, wenn der letzte
+    // Block eine Ueberschrift bekommen soll.
+    std::vector<std::string> trailingComments;
+
+    // Kommentarzeilen ganz am Ende der Datei, hinter dem letzten Befehl.
+    std::vector<std::string> endComments;
+
     std::vector<Statement> statements;
 
     // Aufgeloeste Werte der einfachen Zuweisungsbefehle, der Bequemlichkeit

@@ -242,12 +242,18 @@ AnimFile loadAnimation(const Document& doc, const std::string& sourcePath) {
             out.lastFrame = static_cast<int>(nums[1]);
             out.frameRate = static_cast<float>(nums[2]);
             out.hasScene = true;
+            out.sceneFirst = out.firstFrame;
+            out.sceneLast = out.lastFrame;
         }
     }
 
+    // collectModels fuehrt den Framebereich beim Einsammeln der Keys nach:
+    // Anfang ist der kleinste Key, Ende der groessere von SI_Scene-Ende und
+    // groesstem Key. Bei jeder sauber exportierten Datei stimmt das mit
+    // SI_Scene ueberein (an allen 1854 Dateien einer _humanoid.car
+    // nachgeprueft); weicht es ab, meldet sceneRangeDiffers() das.
     for (const auto& r : doc.roots) collectModels(r, -1, out);
 
-    // Framebereich aus den Keys nur bestimmen, wenn SI_Scene fehlt.
     if (out.hasScene) {
         bool haveKeys = false;
         for (const auto& n : out.nodes)

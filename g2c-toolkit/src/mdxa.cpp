@@ -57,8 +57,19 @@ std::string rdName(const std::uint8_t* p, std::size_t width) {
 
 void requireSize(const std::vector<std::uint8_t>& d, std::size_t off, std::size_t n,
                  const char* what) {
-    if (off + n > d.size())
+    // Ohne Ueberlauf formuliert: off + n kann bei einem unsinnigen Offset
+    // ueber das Ende von size_t hinauslaufen und dann klein aussehen.
+    if (off > d.size() || n > d.size() - off)
         throw std::runtime_error(std::string("GLA abgeschnitten beim Lesen von ") + what);
+}
+
+// Offsets aus dem Dateikopf sind vorzeichenbehaftet. Ein negativer Wert,
+// nach size_t gewandelt, wird riesig — und zusammen mit einer Laenge
+// wieder klein. Deshalb vor jeder Verwendung einzeln pruefen.
+std::size_t checkedOffset(std::int32_t v, const char* what) {
+    if (v < 0)
+        throw std::runtime_error(std::string("GLA beschaedigt: negativer Offset bei ") + what);
+    return static_cast<std::size_t>(v);
 }
 
 }  // namespace
@@ -388,13 +399,20 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
 
     for (int i = 0; i < numBones; ++i) {
         const std::int32_t rel = rdI32(p + headerEnd + static_cast<std::size_t>(i) * 4);
-        const std::size_t off = headerEnd + static_cast<std::size_t>(rel);
+        const std::size_t off = headerEnd + checkedOffset(rel, "Bone-Eintrag");
         requireSize(d, off, sizeof(fmt::MdxaSkel), "Bone-Eintrag");
 
         Bone& b = out.skeleton.bones[static_cast<std::size_t>(i)];
         b.name = rdName(p + off, fmt::kMaxQPath);
         b.flags = static_cast<std::uint32_t>(rdI32(p + off + 64));
         b.parent = rdI32(p + off + 68);
+
+        // Jeder spaetere Zugriff indiziert mit dem Parent: Vorschau,
+        // Auswertung, Export. Ein Wert ausserhalb des Skeletts wuerde dort
+        // fremden Speicher lesen oder beschreiben.
+        if (b.parent < -1 || b.parent >= numBones || b.parent == i)
+            throw std::runtime_error("GLA beschaedigt: Bone \"" + b.name +
+                                     "\" hat ungueltigen Parent-Index " + std::to_string(b.parent));
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c)
                 b.basePose.m[r][c] = rdF32(p + off + 72 + static_cast<std::size_t>(r * 4 + c) * 4);
@@ -402,21 +420,25 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
 
     // Indizes lesen und zugleich den groessten Pool-Index bestimmen, denn die
     // Poolgroesse steht nirgends in der Datei.
-    const std::size_t indexCount = static_cast<std::size_t>(numFrames) * numBones;
-    requireSize(d, static_cast<std::size_t>(ofsFrames), indexCount * 3, "Frame-Indizes");
+    const std::size_t indexCount = static_cast<std::size_t>(numFrames) * static_cast<std::size_t>(numBones);
+    const std::size_t framesAt = checkedOffset(ofsFrames, "Frame-Indizes");
+    if (indexCount > d.size() / 3)
+        throw std::runtime_error("GLA abgeschnitten beim Lesen von Frame-Indizes");
+    requireSize(d, framesAt, indexCount * 3, "Frame-Indizes");
     out.indices.resize(indexCount);
     std::uint32_t maxIndex = 0;
     for (std::size_t i = 0; i < indexCount; ++i) {
-        const std::uint32_t v = fmt::readIndex24(p + ofsFrames + i * 3);
+        const std::uint32_t v = fmt::readIndex24(p + framesAt + i * 3);
         out.indices[i] = v;
         maxIndex = std::max(maxIndex, v);
     }
 
     const std::size_t poolCount = indexCount ? maxIndex + 1u : 0u;
-    requireSize(d, static_cast<std::size_t>(ofsCompBonePool), poolCount * 14, "Bone-Pool");
+    const std::size_t poolAt = checkedOffset(ofsCompBonePool, "Bone-Pool");
+    requireSize(d, poolAt, poolCount * 14, "Bone-Pool");
     out.bonePool.resize(poolCount);
     for (std::size_t i = 0; i < poolCount; ++i)
-        std::memcpy(out.bonePool[i].comp, p + ofsCompBonePool + i * 14, 14);
+        std::memcpy(out.bonePool[i].comp, p + poolAt + i * 14, 14);
 
     return out;
 }

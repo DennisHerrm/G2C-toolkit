@@ -66,5 +66,21 @@ build\g2_tests.exe
 ## Erwartete Ausgabe
 
 ```
-268/268 Pruefungen bestanden
+448/448 Pruefungen bestanden
 ```
+
+## Oberflaeche automatisch durchklicken
+
+`g2_gui_driver` bedient die echte Oberflaeche ohne Fenster: Menues, alle
+drei Modi, Tabelle (Klick, Strg, Umschalt, Filter, Ziehen), Kontextmenues,
+Sequenzdialog, Kommentare, Pruefen, Bauen, Speichern, Schliessen, Export,
+Vergleich, Vorschau, alle Sprachen, Pfade mit Umlauten. Jede
+ImGui-Zusicherung und jede doppelte ID wird gemeldet.
+
+```bat
+build\Release\g2_gui_driver.exe C:\temp\g2c_gui <assetwurzel> <referenz.gla> <anims.h> <grosse.car>
+```
+
+Alles wird unter dem ersten Ordner geschrieben, `%APPDATA%` wird fuer den
+Lauf dorthin umgelenkt. Die uebergebenen Dateien werden nur gelesen; die
+.car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`.

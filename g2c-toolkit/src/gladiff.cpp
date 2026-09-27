@@ -6,6 +6,7 @@
 #include <cmath>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 
 namespace g2 {
 namespace {
@@ -83,6 +84,13 @@ DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
     // --- Frames ---------------------------------------------------------
     const int framesA = a.numFrames;
     const int framesB = b.numFrames;
+
+    // Ein negativer Versatz wuerde B vor seinem ersten Frame lesen. Er ist
+    // auch nie noetig: statt B nach hinten verschiebt man A mit vertauschten
+    // Dateien.
+    if (opt.frameOffsetB < 0)
+        throw std::runtime_error("Frameversatz darf nicht negativ sein (Dateien vertauschen)");
+
     int frames = framesA;
     if (opt.frameOffsetB != 0 || framesA != framesB)
         frames = std::min(framesA, framesB - opt.frameOffsetB);

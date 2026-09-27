@@ -19,7 +19,7 @@ IDI_G2C ICON "g2c.ico"
 // sondern mit einem Vorhersagemodell: eine unbekannte Datei kann allein
 // wegen "Verdaechtigkeit" markiert werden, ohne dass sie bekannter
 // Schadsoftware aehnelt. Eine Exe OHNE Herkunftsangaben ist dabei die
-// unguenstigste Ausgangslage ? sie sieht aus wie etwas, das seine Herkunft
+// unguenstigste Ausgangslage - sie sieht aus wie etwas, das seine Herkunft
 // verbergen will.
 //
 // Das ersetzt keine Signatur, aber es kostet nichts und nimmt dem

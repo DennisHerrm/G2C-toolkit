@@ -12,6 +12,7 @@
 #include <fstream>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <set>
 namespace fs=std::filesystem;
 
@@ -31,6 +32,25 @@ static void makeXsi(const fs::path& p) {
 int fails=0;
 void ck(bool c,const char*m){ if(!c){printf("  FEHLER: %s\n",m);fails++;} }
 int main(){
+  // Einstellungen des Nutzers nicht anfassen.
+  //
+  // Jede App stellt beim Start die zuletzt offenen Skripte aus %APPDATA%\g2c
+  // wieder her und schreibt die Einstellungen beim Beenden zurueck. Ohne
+  // Umlenkung oeffnete dieser Test die echten .car-Dateien des Nutzers,
+  // speicherte mit saveDocument(0) womoeglich eine davon und ueberschrieb
+  // am Ende seine Tabs und Ausgabeordner mit Testpfaden.
+  {
+    const fs::path sandbox = fs::temp_directory_path()/"g2c_gui_test_appdata";
+    std::error_code ec;
+    fs::remove_all(sandbox, ec);
+    fs::create_directories(sandbox, ec);
+#ifdef _WIN32
+    _putenv_s("APPDATA", sandbox.string().c_str());
+#else
+    setenv("APPDATA", sandbox.string().c_str(), 1);
+    setenv("HOME", sandbox.string().c_str(), 1);
+#endif
+  }
   const fs::path root = fs::temp_directory_path()/"g2c_gui_test";
   fs::remove_all(root); fs::create_directories(root/"sub"/"tief");
   for (auto p : {root/"a.car", root/"sub"/"b.car", root/"sub"/"tief"/"c.car"}) {
@@ -516,7 +536,7 @@ int main(){
         g2::gui::App aD(std::move(pD));
         ck(aD.loadGlaForExtract((nd/"_humanoid.gla").string()),"GLA aus eigenem Ordner");
         ck(!aD.extract().cfgPath.empty(),"animation.cfg von selbst gefunden");
-        ck(aD.extract().seqs.size()>50,"Sequenzen daraus gelesen");
+        ck(aD.extract().seqs.size()>5,"Sequenzen daraus gelesen");
         ck(!aD.extract().framesPath.empty(),".frames von selbst gefunden");
 
         // Ohne Begleitdateien darf nichts geraten werden.
@@ -540,7 +560,9 @@ int main(){
         ck(aC.loadAnimationCfg(cfg),"animation.cfg auch von Hand ladbar");
         // Keine feste Zahl erwarten: welche animation.cfg danebenliegt,
         // haengt vom Nutzer ab. JKA hat 1683 Sequenzen, JK2 nur 931.
-        ck(aC.extract().seqs.size()>50,"Sequenzen gelesen");
+        // Keine feste Zahl: welche animation.cfg danebenliegt, bestimmt der
+        // Nutzer. JKA hat 1683, JK2 989, ein Cutscene-Humanoid 26.
+        ck(aC.extract().seqs.size()>5,"Sequenzen gelesen");
         ck(aC.extract().selected.size()==aC.extract().seqs.size(),
            "Auswahlfeld passt zur Sequenzzahl");
 
@@ -559,8 +581,14 @@ int main(){
         // Animation traegt einen Rest Wurzelbewegung, der beim Neubauen in
         // die .frames wandert — das ist richtiges Verhalten und wuerde hier
         // faelschlich als Fehler zaehlen.
+        // Jede Sequenz durchgehen, nicht jede 97ste.
+        //
+        // Eine feste Schrittweite passt zu JKAs 1683 Sequenzen und
+        // ueberspringt bei einem Cutscene-Humanoid mit 26 alles ausser der
+        // ersten — der Test fand dann nichts und meldete einen Fehler, den
+        // es nicht gab.
         std::vector<std::size_t> rows;
-        for (size_t i=0;i<aC.extract().seqs.size() && rows.size()<3;i+=97) {
+        for (size_t i=0;i<aC.extract().seqs.size() && rows.size()<3;++i) {
           const auto& q = aC.extract().seqs[i];
           if (q.count < 3) continue;
           if (g2::xsiexp::residualMotion(aC.extract().gla,
@@ -570,8 +598,14 @@ int main(){
         ck(!rows.empty(),"brauchbare Sequenzen gefunden");
         ck(aC.exportSequences(rows, od.string())==rows.size(),"Sequenzen geschrieben");
 
+        // Ueber den Ordner nur zaehlen, wenn er auch entstanden ist.
+        //
+        // Ohne die Pruefung wirft der Iterator, und ein geworfener Test
+        // reisst die ganze Suite mit — statt eine Zeile zu melden.
+        std::error_code lec;
         size_t files=0;
-        for (const auto& e : fs::directory_iterator(od)) { (void)e; files++; }
+        if (fs::is_directory(od, lec))
+          for (const auto& e : fs::directory_iterator(od, lec)) { (void)e; files++; }
         ck(files==rows.size(),"je eine Datei je Sequenz");
 
         // Der eigentliche Beweis: zurueckgelesen muss dasselbe herauskommen.
@@ -848,6 +882,261 @@ int main(){
     g2::gui::App aB(std::move(pB));
     ck(aB.extract().basePose==g2::xsiexp::ExportOptions::BasePose::World,
        "Vorgabe ist die Weltpose");
+  }
+
+  // Mehrere Ordner auf einmal hinzufuegen.
+  {
+    const fs::path mr = fs::temp_directory_path()/"g2c_multifolder";
+    fs::remove_all(mr); fs::create_directories(mr);
+    { std::ofstream f(mr/"_humanoid.car");
+      f<<"$aseanimgrabinit\n$aseanimgrab a.xsi -enum BOTH_STAND1\n$aseanimgrabfinalize\n"; }
+
+    // Drei Quellordner mit je zwei Animationen.
+    for (const char* d : {"quelle1","quelle2","quelle3"}) {
+      fs::create_directories(mr/d);
+      makeXsi(mr/d/"eins.xsi");
+      makeXsi(mr/d/"zwei.xsi");
+    }
+
+    g2::gui::Platform pM;
+    // Die Plattform meldet drei Ordner auf einmal.
+    pM.pickFolders = [&](const char*, const std::string&) {
+      return std::vector<std::string>{(mr/"quelle1").string(), (mr/"quelle2").string(),
+                                      (mr/"quelle3").string()};
+    };
+    g2::gui::App aM(std::move(pM));
+    aM.openCar((mr/"_humanoid.car").string());
+    ck(aM.documents()[0].script.grabs.size()==1,"ein Grab am Anfang");
+
+    const auto dirs = aM.askFolders("test","");
+    ck(dirs.size()==3,"drei Ordner geliefert");
+    // addXsiFolder liefert die Zahl der beruehrten SKRIPTE, nicht der
+    // Dateien — bei einem offenen Skript also 1 je Ordner.
+    for (const auto& d : dirs) aM.addXsiFolder(d, false);
+    ck(aM.documents()[0].script.grabs.size()==7,
+       "sechs Dateien aus drei Ordnern angehaengt");
+
+    // Rueckfall: kann die Plattform nur einen, kommt einer - nie nichts.
+    g2::gui::Platform pS;
+    pS.pickFolder = [&](const char*, const std::string&) {
+      return (mr/"quelle1").string();
+    };
+    g2::gui::App aS(std::move(pS));
+    const auto einer = aS.askFolders("test","");
+    ck(einer.size()==1,"Rueckfall auf Einzelauswahl");
+
+    // Und ohne jede Auswahl darf nichts passieren.
+    g2::gui::Platform pN;
+    g2::gui::App aN(std::move(pN));
+    ck(aN.askFolders("test","").empty(),"ohne Dialog leere Liste");
+
+    fs::remove_all(mr);
+  }
+
+  // Trennlinien und Kommentare: der ganze Weg.
+  //
+  // In der Oberflaeche gesetzt -> in die .car geschrieben -> wieder
+  // eingelesen -> in der animation.cfg. Jede Stufe einzeln zu pruefen
+  // reicht nicht: der Wert muss durch alle vier.
+  {
+    const fs::path kd = fs::temp_directory_path()/"g2c_trenner";
+    fs::remove_all(kd); fs::create_directories(kd);
+    { std::ofstream f(kd/"_humanoid.car");
+      f<<"$aseanimgrabinit\n"
+       <<"$aseanimgrab a.xsi -enum BOTH_STAND1\n"
+       <<"$aseanimgrab b.xsi -enum BOTH_WALK1\n"
+       <<"$aseanimgrabfinalize\n"; }
+
+    g2::gui::Platform pT;
+    g2::gui::App aT(std::move(pT));
+    aT.openCar((kd/"_humanoid.car").string());
+    ck(aT.documents()[0].script.grabs.size()==2,"zwei Grabs");
+
+    // Wie der Knopf es tut.
+    aT.documents()[0].script.grabs[1].commentsBefore.push_back(
+        "//////////////////////////////////////////");
+    aT.documents()[0].script.grabs[1].commentsBefore.push_back("//  LAUFANIMATIONEN");
+    ck(aT.saveDocument(0),"gespeichert");
+
+    // Steht es wirklich in der Datei?
+    {
+      std::ifstream in(kd/"_humanoid.car");
+      std::string all((std::istreambuf_iterator<char>(in)), {});
+      ck(all.find("LAUFANIMATIONEN")!=std::string::npos,"Kommentar in der .car");
+      ck(all.find("LAUFANIMATIONEN")<all.find("b.xsi"),"steht VOR seiner Sequenz");
+    }
+
+    // Und beim Wiedereinlesen?
+    const auto wieder = g2::car::parseFile((kd/"_humanoid.car").string());
+    ck(wieder.grabs.size()==2,"wieder zwei Grabs");
+    if (wieder.grabs.size()==2) {
+      ck(wieder.grabs[0].commentsBefore.empty(),"erster ohne Kommentar");
+      ck(wieder.grabs[1].commentsBefore.size()==2,"zweiter mit zwei Zeilen");
+    }
+
+    // Bis in die animation.cfg.
+    std::vector<g2::car::Sequence> sq;
+    for (const auto& g : wieder.grabs) {
+      g2::car::Sequence q;
+      q.name = g.enumName ? *g.enumName : g.derivedName();
+      q.frameCount = 2;
+      q.commentsBefore = g.commentsBefore;
+      sq.push_back(std::move(q));
+    }
+    const std::string cfg = g2::car::writeAnimationCfg(sq, "test");
+    ck(cfg.find("LAUFANIMATIONEN")!=std::string::npos,"Kommentar in der cfg");
+    ck(cfg.find("LAUFANIMATIONEN")<cfg.find("BOTH_WALK1"),"in der cfg vor der Sequenz");
+    ck(cfg.find("LAUFANIMATIONEN")>cfg.find("BOTH_STAND1"),"und nach der vorigen");
+
+    // Leere Kommentarzeilen duerfen nicht in die cfg.
+    //
+    // Beim Anlegen ueber das Kontextmenue entsteht zunaechst eine leere
+    // Zeile. Bleibt sie leer, wird sie beim Bearbeiten wieder entfernt —
+    // aber wenn doch eine durchrutscht, darf sie in der Datei nicht als
+    // nacktes "//" landen.
+    {
+      std::vector<g2::car::Sequence> sq2;
+      g2::car::Sequence q;
+      q.name = "BOTH_STAND1";
+      q.frameCount = 2;
+      q.commentsBefore = {"// oben", "", "// unten"};
+      sq2.push_back(std::move(q));
+      const std::string cfg2 = g2::car::writeAnimationCfg(sq2, "t");
+      ck(cfg2.find("// oben")!=std::string::npos,"erste Zeile da");
+      ck(cfg2.find("// unten")!=std::string::npos,"dritte Zeile da");
+      // Die leere wird zur Leerzeile, nicht zu "//"
+      ck(cfg2.find("//\r\n//\r\n// unten")==std::string::npos,
+         "leere Zeile wird nicht zu //");
+    }
+
+    fs::remove_all(kd);
+  }
+
+  // Trenner verschieben: er gehoert keiner Sequenz.
+  {
+    const fs::path vd = fs::temp_directory_path()/"g2c_trennerverschieben";
+    fs::remove_all(vd); fs::create_directories(vd);
+    { std::ofstream f(vd/"_humanoid.car");
+      f<<"$aseanimgrabinit\n$aseanimgrab a.xsi -enum A\n$aseanimgrab b.xsi -enum B\n"
+         "$aseanimgrab c.xsi -enum C\n$aseanimgrabfinalize\n"; }
+
+    g2::gui::Platform pV;
+    g2::gui::App aV(std::move(pV));
+    aV.openCar((vd/"_humanoid.car").string());
+    auto& sc = aV.documents()[0].script;
+    ck(sc.grabs.size()==3,"drei Grabs");
+
+    sc.grabs[1].commentsBefore.push_back("// TRENNER");
+
+    // Nach oben: haengt sich an den vorigen Grab.
+    ck(aV.moveComment(0,1,0,true),"nach oben verschoben");
+    ck(sc.grabs[1].commentsBefore.empty(),"bei B weg");
+    ck(sc.grabs[0].commentsBefore.size()==1,"bei A angekommen");
+
+    // Und wieder zurueck.
+    ck(aV.moveComment(0,0,0,false),"nach unten verschoben");
+    ck(sc.grabs[1].commentsBefore.size()==1,"wieder bei B");
+
+    // Bis ganz nach unten - hinter die letzte Animation.
+    ck(aV.moveComment(0,1,0,false),"weiter nach unten");
+    ck(sc.grabs[2].commentsBefore.size()==1,"bei C");
+    ck(aV.moveComment(0,2,0,false),"ans Ende");
+    ck(sc.trailingComments.size()==1,"hinter der letzten Animation");
+    ck(sc.grabs[2].commentsBefore.empty(),"bei C weg");
+
+    // Ueber den Rand hinaus geht nicht.
+    ck(!aV.moveComment(0,2,0,false),"am Ende kein weiteres Verschieben");
+
+    // Und das Ganze muss die .car ueberleben.
+    ck(aV.saveDocument(0),"gespeichert");
+    const auto neu = g2::car::parseFile((vd/"_humanoid.car").string());
+    ck(neu.trailingComments.size()==1,"Schlusskommentar wieder eingelesen");
+
+    fs::remove_all(vd);
+  }
+
+  // Zeilenkommentar: .car -> Anzeige -> .car -> animation.cfg
+  {
+    const fs::path td = fs::temp_directory_path()/"g2c_zeilenkommentar";
+    fs::remove_all(td); fs::create_directories(td);
+    { std::ofstream f(td/"_humanoid.car");
+      f<<"$aseanimgrabinit\n"
+         "$aseanimgrab a.xsi -enum BOTH_WALK1_ANI  // nur mit Anakins Schwert\n"
+         "$aseanimgrab b.xsi -enum ROOT\n"
+         "$aseanimgrabfinalize\n"; }
+
+    g2::gui::Platform pZ;
+    g2::gui::App aZ(std::move(pZ));
+    aZ.openCar((td/"_humanoid.car").string());
+    auto& sc = aZ.documents()[0].script;
+    ck(sc.grabs.size()==2,"zwei Grabs");
+    ck(sc.grabs[0].trailingComment.find("Anakins")!=std::string::npos,
+       "Zeilenkommentar eingelesen");
+    ck(sc.grabs[1].trailingComment.empty(),"zweiter ohne");
+
+    // Der Kommentar darf die Auswertung nicht stoeren.
+    ck(sc.grabs[0].enumName && *sc.grabs[0].enumName=="BOTH_WALK1_ANI",
+       "enum trotz Kommentar erkannt");
+
+    // Speichern und wieder lesen.
+    sc.grabs[1].trailingComment = "// Basispose";
+    ck(aZ.saveDocument(0),"gespeichert");
+    const auto neu = g2::car::parseFile((td/"_humanoid.car").string());
+    ck(neu.grabs.size()==2,"wieder zwei Grabs");
+    if (neu.grabs.size()==2) {
+      ck(neu.grabs[0].trailingComment.find("Anakins")!=std::string::npos,"erster erhalten");
+      ck(neu.grabs[1].trailingComment.find("Basispose")!=std::string::npos,"zweiter erhalten");
+    }
+
+    // Und in der animation.cfg hinter den Zahlen.
+    std::vector<g2::car::Sequence> sq;
+    for (const auto& g : neu.grabs) {
+      g2::car::Sequence q;
+      q.name = g.enumName ? *g.enumName : g.derivedName();
+      q.frameCount = 2;
+      q.trailingComment = g.trailingComment;
+      sq.push_back(std::move(q));
+    }
+    const std::string cfg = g2::car::writeAnimationCfg(sq,"t");
+    const std::size_t z = cfg.find("BOTH_WALK1_ANI");
+    const std::size_t k = cfg.find("Anakins");
+    ck(z!=std::string::npos && k!=std::string::npos && k>z,
+       "Kommentar steht HINTER dem Namen");
+    // Zwischen beiden darf kein Zeilenumbruch liegen.
+    ck(cfg.find('\n', z) > k, "in derselben Zeile");
+
+    fs::remove_all(td);
+  }
+
+  // Trenner an beliebige Stelle umhaengen (was das Ziehen ausloest).
+  {
+    const fs::path dd = fs::temp_directory_path()/"g2c_trennerziehen";
+    fs::remove_all(dd); fs::create_directories(dd);
+    { std::ofstream f(dd/"_humanoid.car");
+      f<<"$aseanimgrabinit\n$aseanimgrab a.xsi -enum A\n$aseanimgrab b.xsi -enum B\n"
+         "$aseanimgrab c.xsi -enum C\n$aseanimgrabfinalize\n"; }
+
+    g2::gui::Platform pD;
+    g2::gui::App aD(std::move(pD));
+    aD.openCar((dd/"_humanoid.car").string());
+    auto& sc = aD.documents()[0].script;
+    sc.grabs[0].commentsBefore.push_back("// TRENNER");
+
+    // Von A direkt zu C - das Ziehen ueberspringt Zwischenstationen.
+    ck(aD.moveComment(0,0,0,false),"eine Stufe");
+    ck(sc.grabs[1].commentsBefore.size()==1,"bei B");
+    ck(aD.moveComment(0,1,0,false),"noch eine");
+    ck(sc.grabs[2].commentsBefore.size()==1,"bei C");
+
+    // Bis hinter die letzte Animation und zurueck.
+    ck(aD.moveComment(0,2,0,false),"ans Ende");
+    ck(sc.trailingComments.size()==1,"hinter der letzten");
+    ck(sc.grabs[2].commentsBefore.empty(),"bei C weg");
+
+    // Der Text muss unterwegs unveraendert bleiben.
+    ck(sc.trailingComments[0]=="// TRENNER","Text unveraendert");
+
+    fs::remove_all(dd);
   }
 
   ck(!app.buildRunning(),"kein Bau aktiv");

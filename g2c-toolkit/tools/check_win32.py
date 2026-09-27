@@ -148,6 +148,71 @@ def main():
             errors += fail(f"Symbolkennung {rid.group(1)} in g2c.rc, im Code aber "
                            f"{', '.join(sorted(used))}")
 
+    # 5b) Vorlagen und Typen muessen VOR ihrer ersten Verwendung stehen.
+    #
+    #     main_win32.cpp laesst sich hier nicht uebersetzen, also faellt so
+    #     etwas erst auf dem Zielrechner auf. MSVC meldet dann
+    #     "C7568: Nach der angenommenen Funktionsvorlage X fehlt die
+    #     Argumentliste" — eine Meldung, die nicht nach dem eigentlichen
+    #     Problem klingt.
+    for m in re.finditer(r"^(?:template\s*<[^>]*>\s*\n)?\s*(?:class|struct)\s+(\w+)\s*\{",
+                         src, re.M):
+        name = m.group(1)
+        erste = None
+        for u in re.finditer(r"\b" + re.escape(name) + r"\s*<", src):
+            erste = u.start()
+            break
+        if erste is not None and erste < m.start():
+            zeile = src[:erste].count("\n") + 1
+            errors += fail(f"'{name}' wird in Zeile {zeile} benutzt, aber erst danach "
+                           f"definiert", zeile)
+
+    # 5d) ComPtr darf nicht ohne .get() weitergereicht werden.
+    #
+    #     Der Halter wandelt sich bewusst NICHT stillschweigend in einen
+    #     Zeiger um. Das ist richtig so — aber dann muss beim Weiterreichen
+    #     .get() stehen, und MSVC meldet das sonst als C2664, eine Meldung
+    #     ueber fehlende Konvertierungsoperatoren.
+    #
+    #     Diese Datei laesst sich hier nicht uebersetzen, also faellt es
+    #     sonst erst auf dem Zielrechner auf.
+    # Nur INNERHALB der Funktion pruefen, in der der Halter deklariert ist.
+    #
+    # Dateiweit zu suchen war falsch: dieselben Namen ("dlg", "item")
+    # bezeichnen in den aelteren Dialogen rohe Zeiger, und die Pruefung
+    # meldete dort Fehler, die es nicht gab.
+    #
+    # Funktionsgrenze: die naechste Zeile, die in Spalte 0 mit einem
+    # Bezeichner beginnt und eine oeffnende Klammer enthaelt.
+    for m in re.finditer(r"\bComPtr<[^>]+>\s+(\w+)\s*;", src):
+        name = m.group(1)
+        rest = src[m.end():]
+        naechste = re.search(r"\n[A-Za-z_][\w:<>* ]*\([^;]*\)\s*\{", rest)
+        bereich = rest[: naechste.start()] if naechste else rest
+
+        for u in re.finditer(r"[(,]\s*" + re.escape(name) + r"\s*[,)]", bereich):
+            davor = bereich[max(0, u.start() - 60):u.start()]
+            # In Bedingungen ist der Halter direkt erlaubt (operator bool).
+            if re.search(r"(if|while|&&|\|\||return|!)\s*\(?\s*$", davor):
+                continue
+            zeile = src[: m.end() + u.start()].count("\n") + 1
+            errors += fail(f"ComPtr '{name}' wird in Zeile {zeile} ohne .get() "
+                           f"weitergereicht", zeile)
+            break
+
+    # 5c) Gleichnamige lokale Puffer in derselben Funktion.
+    #
+    #     MSVC meldet C4456 ("Deklaration blendet vorherige lokale
+    #     Deklaration aus"). Harmlos, solange man es merkt — aber in einer
+    #     langen Fensterprozedur greift man leicht zum falschen.
+    for m in re.finditer(r"\bwchar_t\s+(\w+)\s*\[", src):
+        name = m.group(1)
+        treffer = re.findall(r"\bwchar_t\s+" + re.escape(name) + r"\s*\[", src)
+        if len(treffer) > 2:
+            errors += fail(f"'{name}' ist {len(treffer)}x als lokaler wchar_t-Puffer "
+                           f"deklariert — leicht zu verwechseln")
+            break
+
     # 6a) Der angeforderte Symbolbereich muss alle benutzten Symbole
     #     enthalten. Wer eines ausserhalb hinzufuegt, saehe sonst ein leeres
     #     Kaestchen — und nur auf manchen Rechnern, weil es davon abhaengt,
