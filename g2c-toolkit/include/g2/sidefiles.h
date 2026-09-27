@@ -1,8 +1,8 @@
-// g2/sidefiles.h — Die beiden Begleitdateien, die Carcass neben GLA und GLM
-// erzeugt.
+// g2/sidefiles.h - The two companion files Carcass produces alongside the GLA
+// and GLM.
 //
-// Beide Formate sind an Ravens Originalen abgelesen: `model_red.skin` aus
-// dem Luke-Modell und `_humanoid.frames` aus einem echten Carcass-Lauf.
+// Both formats were derived from Raven's originals: `model_red.skin` from
+// the Luke model and `_humanoid.frames` from a real Carcass run.
 
 #pragma once
 
@@ -16,28 +16,28 @@ namespace g2 {
 
 // --- .skin ----------------------------------------------------------------
 //
-// Zeilenweise "surfacename,texturpfad", Zeilenende CRLF:
+// One "surfacename,texturepath" per line, CRLF line endings:
 //
 //     hips,models/players/luke/boots_hips_red.tga
 //     l_leg,models/players/luke/boots_hips_red.tga
 //     l_leg_cap_hips_off,models/players/stormtrooper/caps.tga
 //
-// Eingetragen werden alle Surfaces, die KEINE Tags sind. An Ravens
-// `model_red.skin` geprueft: 34 Eintraege bei 80 Surfaces, von denen 46 Tags
-// sind — also genau die uebrigen 34, abzueglich `stupidtriangle_off`, das
-// "[nomaterial]" traegt.
+// All surfaces that are NOT tags are listed. Checked against Raven's
+// `model_red.skin`: 34 entries for 80 surfaces, 46 of which are tags - so
+// exactly the remaining 34, minus `stupidtriangle_off`, which carries
+// "[nomaterial]".
 //
-// Die Datei ist kein Ghoul2-Format im engeren Sinn, sondern eine
-// Texturzuordnung, die das Spiel zur Laufzeit liest. Deshalb kommt es hier
-// auf den Shadernamen an und nicht auf die Geometrie.
+// The file is not a Ghoul2 format in the strict sense but a texture mapping
+// that the game reads at runtime. That is why what matters here is the
+// shader name, not the geometry.
 std::string writeSkin(const Mesh& mesh);
 
 // --- .frames --------------------------------------------------------------
 //
-// Ein Block je eingesammelter Animationsdatei:
+// One block per collected animation file:
 //
-//     <leerzeile>
-//     c:/pfad/zur/quelle.xsi
+//     <blank line>
+//     c:/path/to/source.xsi
 //     {
 //         "startframe"  "0"
 //         "duration"    "2"
@@ -45,22 +45,22 @@ std::string writeSkin(const Mesh& mesh);
 //         "averagevec"  "0.000 0.000 0.000"
 //     }
 //
-// Schluessel und Werte sind jeweils in Anfuehrungszeichen und durch einen
-// Tabulator getrennt, die Zeilen mit einem Tabulator eingerueckt.
+// Keys and values are each in quotes and separated by a tab, and the lines
+// are indented with a tab.
 //
-// `fps` ist die Framerate aus SI_Scene der Quelldatei, NICHT der
-// framespeed der animation.cfg: bei `face_alert.xsi` steht hier 60,
-// waehrend die .car per -framespeed 1 vorgibt.
+// `fps` is the frame rate from the source file's SI_Scene, NOT the
+// framespeed from animation.cfg: for `face_alert.xsi` this says 60, while
+// the .car specifies -framespeed 1.
 //
-// `averagevec` ist die Wurzelbewegung **pro Frame**, mit umgekehrtem
-// Vorzeichen zur Rampe auf dem Wurzelbone. Gegengeprueft:
+// `averagevec` is the root motion **per frame**, with the opposite sign of
+// the ramp on the root bone. Cross-checked:
 //
-//   both_strafe_left1   averagevec 3.520   Rampe -42.25/12 = -3.521
-//   both_death17        averagevec 0.028   Rampe -3.444/124 = -0.0278
-//   both_sit2tostand5   averagevec -0.084  Rampe +4.62/55  = +0.084
-//   both_wall_flip_right averagevec 0      keine Bewegung
+//   both_strafe_left1   averagevec 3.520   ramp -42.25/12 = -3.521
+//   both_death17        averagevec 0.028   ramp -3.444/124 = -0.0278
+//   both_sit2tostand5   averagevec -0.084  ramp +4.62/55  = +0.084
+//   both_wall_flip_right averagevec 0      no motion
 struct FrameEntry {
-    std::string sourcePath;   // wie im Skript referenziert, absolut
+    std::string sourcePath;   // as referenced in the script, absolute
     int         startFrame = 0;
     int         duration = 0;
     int         fps = 0;

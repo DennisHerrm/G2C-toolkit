@@ -36,9 +36,9 @@ void BuildJob::join() {
 App::App(Platform platform) : platform_(std::move(platform)) {
     loadSettings();
 
-    // Zuletzt offene Skripte wiederherstellen. Verschwundene werden
-    // stillschweigend uebergangen — eine Fehlerlawine beim Start waere
-    // laestiger als das fehlende Tab.
+    // Restore the scripts that were open last time. Missing ones are silently
+    // skipped - an avalanche of errors at startup would be more annoying than
+    // the missing tab.
     std::size_t restored = 0;
     for (const auto& t : savedTabs_) {
         std::error_code ec;
@@ -52,6 +52,33 @@ App::App(Platform platform) : platform_(std::move(platform)) {
     } else {
         log(LogLine::Kind::Info, tr(S::LogReady));
     }
+
+    if (platform_.network.get) {
+        updater_ = std::make_unique<update::Updater>(platform_.network, platform_.build,
+                                                     platform_.exePath);
+        if (updater_->justUpdated())
+            log(LogLine::Kind::Good, trf(S::UpdDone, update::displayName(platform_.build).c_str()));
+        // A self-built version never asks on its own: it has no version
+        // number to compare, and a developer's build must not be offered a
+        // replacement on every start.
+        const bool autoCheck = settings_.checkUpdates &&
+                               update::kindOf(platform_.build) != update::BuildKind::Dev;
+        updater_->startup(autoCheck, updateChannel());
+    }
+}
+
+update::Channel App::updateChannel() const {
+    if (settings_.updateChannel == static_cast<int>(update::Channel::Stable))
+        return update::Channel::Stable;
+    if (settings_.updateChannel == static_cast<int>(update::Channel::Snapshot))
+        return update::Channel::Snapshot;
+    return update::defaultChannel(platform_.build);
+}
+
+void App::checkForUpdates(bool manual) {
+    if (!updater_) return;
+    updateBannerHidden_ = false;
+    updater_->check(updateChannel(), manual);
 }
 
 App::~App() {
@@ -60,28 +87,27 @@ App::~App() {
     saveSettings();
 }
 
-// --- Einstellungen ueber Sitzungen hinweg ----------------------------------
+// --- Settings across sessions ----------------------------------------------
 //
-// Einfaches Schluessel=Wert-Format neben der ausfuehrbaren Datei. Kein INI-
-// Parser, kein JSON: es sind zehn Werte, und ein eigenes Format waere hier
-// mehr Aufwand als Nutzen.
+// Simple key=value format next to the executable. No INI parser, no JSON:
+// it's ten values, and a dedicated format would cost more than it's worth here.
 
-// Wo die Einstellungen liegen.
+// Where the settings live.
 //
-// Nicht im Arbeitsverzeichnis: das haengt davon ab, WIE das Programm
-// gestartet wurde. Per Doppelklick ist es der Ordner der Exe, aus einer
-// Verknuepfung deren Arbeitsverzeichnis, aus der Eingabeaufforderung
-// irgendein anderer. Die Einstellungen waren damit mal da und mal weg.
+// Not in the working directory: that depends on HOW the program was started.
+// Via double-click it's the exe's folder, from a shortcut it's the shortcut's
+// working directory, from the command prompt some other one. The settings were
+// therefore sometimes there and sometimes gone.
 //
-// Auch nicht unter "Dokumente": der Ordner gehoert dem Nutzer fuer eigene
-// Dateien. Programme, die dort ihre Konfiguration ablegen, muellen ihn zu.
-// Spiele legen dort Spielstaende ab, weil man die sichern und weitergeben
-// will — Fensterpositionen und Haekchen will man das nicht.
+// Not under "Documents" either: that folder belongs to the user for their own
+// files. Programs that store their configuration there clutter it up. Games
+// store savegames there because people want to back them up and share them -
+// nobody wants that for window positions and checkboxes.
 //
-// Richtig ist %APPDATA%\g2c\. Wer es lieber mitnehmbar haben will — Stick,
-// Netzlaufwerk, mehrere Zweige nebeneinander —, legt neben die Exe eine
-// leere Datei "g2c_portable.txt"; dann liegt alles daneben.
-// Auswahldialog mit Gedaechtnis je Zweck.
+// The right place is %APPDATA%\g2c\. Anyone who prefers it portable - USB stick,
+// network drive, several branches side by side - puts an empty file
+// "g2c_portable.txt" next to the exe; then everything lives next to it.
+// File dialog that remembers the last folder per purpose.
 std::vector<std::string> App::askFiles(const char* purpose, const char* title,
                                        const char* filter, bool multi) {
     if (!platform_.openFiles) return {};
@@ -114,9 +140,9 @@ std::string App::askSaveFile(const char* purpose, const char* title, const char*
     return out;
 }
 
-// Diese drei Aktionen gibt es im Menue, in der Werkzeugleiste und als
-// Tastenkuerzel. Alle Wege rufen dieselbe Funktion — frueher waren es drei
-// Abschriften, und die Tastenkuerzel fehlten ganz.
+// These three actions exist in the menu, in the toolbar and as keyboard
+// shortcuts. All paths call the same function - previously there were three
+// copies, and the keyboard shortcuts were missing entirely.
 void App::newCarDialog() {
     std::string p = askSaveFile("car", tr(S::DlgTitleNewCar), "Carcass-Skript (*.car)\0*.car\0",
                                 "car");
@@ -156,11 +182,11 @@ bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool 
 
     if (nachOben) {
         if (line > 0) {
-            // Innerhalb desselben Blocks tauschen.
+            // Swap within the same block.
             std::swap(von[line], von[line - 1]);
         } else {
-            // An den vorigen Grab anhaengen — dort ans Ende, damit der
-            // Trenner in der Anzeige genau eine Zeile hoeher landet.
+            // Append to the previous grab - at its end, so that the separator
+            // ends up exactly one line higher in the display.
             if (grab == 0) return false;
             von.erase(von.begin() + static_cast<long>(line));
             d.script.grabs[grab - 1].commentsBefore.push_back(text);
@@ -170,13 +196,13 @@ bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool 
             std::swap(von[line], von[line + 1]);
         } else {
             if (grab + 1 >= d.script.grabs.size()) {
-                // Hinter die LETZTE Animation. Dort gibt es keinen Grab
-                // mehr, an dem der Trenner haengen koennte — dafuer ist
-                // trailingComments da.
+                // After the LAST animation. There is no grab left there that
+                // the separator could be attached to - that's what
+                // trailingComments is for.
                 von.erase(von.begin() + static_cast<long>(line));
                 d.script.trailingComments.push_back(text);
             } else {
-                // Ans Ende: zum naechsten Grab, dort an den Anfang.
+                // At the end: move to the next grab, at its beginning.
                 von.erase(von.begin() + static_cast<long>(line));
                 auto& zu = d.script.grabs[grab + 1].commentsBefore;
                 zu.insert(zu.begin(), text);
@@ -196,7 +222,7 @@ std::vector<std::string> App::askFolders(const char* purpose, const char* title)
     if (platform_.pickFolders) {
         out = platform_.pickFolders(title, start);
     } else if (platform_.pickFolder) {
-        // Rueckfall: besser einer als keiner.
+        // Fallback: one is better than none.
         std::string one = platform_.pickFolder(title, start);
         if (!one.empty()) out.push_back(std::move(one));
     }
@@ -207,12 +233,12 @@ std::vector<std::string> App::askFolders(const char* purpose, const char* title)
 std::string App::configDir() {
     std::error_code ec;
 
-    // Mitnehmbarer Betrieb: Markierungsdatei neben der Exe.
+    // Portable mode: marker file next to the exe.
     const fs::path here = fs::current_path(ec);
     if (!ec && fs::exists(here / "g2c_portable.txt", ec)) return here.string();
 
     std::string appdata = envValue("APPDATA");
-    if (appdata.empty()) appdata = envValue("HOME");   // fuer Tests unter Linux
+    if (appdata.empty()) appdata = envValue("HOME");   // for tests under Linux
     if (appdata.empty()) return here.string();
 
     const fs::path dir = fs::path(appdata) / "g2c";
@@ -224,8 +250,8 @@ std::string App::configDir() {
 std::string App::settingsPath() const {
     const fs::path target = fs::path(configDir()) / "g2c_settings.txt";
 
-    // Einmalige Uebernahme aus dem alten Ort, damit niemand seine
-    // Einstellungen verliert.
+    // One-time migration from the old location, so nobody loses their
+    // settings.
     std::error_code ec;
     if (!fs::exists(target, ec)) {
         const fs::path old = fs::current_path(ec) / "g2c_settings.txt";
@@ -235,8 +261,8 @@ std::string App::settingsPath() const {
 }
 
 void App::saveSettings() const {
-    // Erst vollstaendig im Speicher, dann in einem Zug ersetzen. Stuerzt das
-    // Programm beim Beenden ab, bleibt die alte Datei ganz statt halb.
+    // Build it completely in memory first, then replace in one go. If the
+    // program crashes on exit, the old file stays whole instead of half-written.
     std::ostringstream f;
     f << "basedir=" << settings_.baseDir << "\n";
     f << "refgla=" << settings_.referenceGla << "\n";
@@ -250,10 +276,13 @@ void App::saveSettings() const {
     f << "readframes=" << (settings_.readFrameCounts ? 1 : 0) << "\n";
     f << "dark=" << (settings_.darkMode ? 1 : 0) << "\n";
     f << "lang=" << settings_.language << "\n";
+    f << "updates=" << (settings_.checkUpdates ? 1 : 0) << "\n";
+    f << "updchannel=" << settings_.updateChannel << "\n";
+    if (!settings_.skippedUpdate.empty()) f << "updskip=" << settings_.skippedUpdate << "\n";
 
-    // Die Bindepose-Wahl gehoert zum Export, nicht zum Skript — sie bleibt
-    // deshalb ueber Sitzungen erhalten. Wer sie einmal umstellen musste,
-    // will das nicht bei jedem Start wiederholen.
+    // The bind pose choice belongs to the export, not to the script - so it is
+    // kept across sessions. Anyone who had to change it once doesn't want to
+    // repeat that on every start.
     f << "xsiver=" << (extract_.xsiVersion == xsiexp::ExportOptions::Version::V30 ? 30 : 35)
       << "\n";
     f << "basepose=" << (extract_.basePose == xsiexp::ExportOptions::BasePose::World   ? 0
@@ -261,25 +290,25 @@ void App::saveSettings() const {
                                                                                        : 2)
       << "\n";
 
-    // Ausgabeorte je Skript. So bleibt die Zuordnung erhalten, auch wenn die
-    // Tabs beim naechsten Start anders geoeffnet werden.
+    // Output locations per script. That way the mapping is kept even if the
+    // tabs are opened differently on the next start.
     for (const auto& d : docs_)
         if (!d.outputDir.empty()) f << "out:" << d.path << "=" << d.outputDir << "\n";
 
-    // Offene Tabs und der aktive. Beim naechsten Start liegt derselbe Stand
-    // wieder da — bei zwanzig Skripten ist das der Unterschied zwischen
-    // "weiterarbeiten" und "erst mal alles wieder aufmachen".
+    // Open tabs and the active one. On the next start the same state is back -
+    // with twenty scripts that's the difference between "keep working" and
+    // "first reopen everything".
     f << "active=" << active_ << "\n";
     for (const auto& d : docs_) f << "tab=" << d.path << "\n";
 
-    // Zuletzt benutzter Ordner je Auswahldialog.
+    // Last used folder per file dialog.
     for (const auto& [k, v] : lastDirs_) f << "dir:" << k << "=" << v << "\n";
 
     try {
         writeFileChecked(settingsPath(), f.str());
     } catch (const std::exception&) {
-        // Einstellungen sind Bequemlichkeit. Beim Beenden gibt es niemanden
-        // mehr, dem man den Fehler zeigen koennte.
+        // Settings are a convenience. On exit there is nobody left to show
+        // the error to.
     }
 }
 
@@ -316,6 +345,12 @@ void App::loadSettings() {
         }
         else if (key == "readframes") settings_.readFrameCounts = asBool();
         else if (key == "dark") settings_.darkMode = asBool();
+        else if (key == "updates") settings_.checkUpdates = asBool();
+        else if (key == "updchannel") {
+            const int v = std::atoi(val.c_str());
+            settings_.updateChannel = v == 0 || v == 1 ? v : -1;
+        }
+        else if (key == "updskip") settings_.skippedUpdate = val;
         else if (key == "lang") {
             try {
                 settings_.language = std::stoi(val);
@@ -323,8 +358,8 @@ void App::loadSettings() {
             } catch (...) {
             }
         }
-        // "threads" wird bewusst ignoriert: aeltere Einstellungsdateien
-        // koennten eine Begrenzung enthalten, die es nicht mehr geben soll.
+        // "threads" is deliberately ignored: older settings files might
+        // contain a limit that is no longer supposed to exist.
         else if (key.rfind("out:", 0) == 0) savedOutputs_[key.substr(4)] = val;
         else if (key == "tab") savedTabs_.push_back(val);
         else if (key.rfind("dir:", 0) == 0) lastDirs_[key.substr(4)] = val;
@@ -341,12 +376,12 @@ void App::loadSettings() {
 void App::log(LogLine::Kind kind, std::string text) {
     std::lock_guard<std::mutex> lock(logMutex_);
     log_.push_back(LogLine{kind, std::move(text)});
-    // Nicht unbegrenzt wachsen lassen — bei einem Stapelbau ueber hunderte
-    // Skripte kaeme sonst schnell mehr zusammen, als jemand liest.
+    // Don't let it grow without bound - a batch build over hundreds of scripts
+    // would otherwise quickly pile up more than anyone reads.
     while (log_.size() > 2000) log_.pop_front();
 }
 
-// --- Dokumente -------------------------------------------------------------
+// --- Documents -------------------------------------------------------------
 
 bool App::openCar(const std::string& path) {
     for (std::size_t i = 0; i < docs_.size(); ++i) {
@@ -360,8 +395,8 @@ bool App::openCar(const std::string& path) {
     Document d;
     d.path = path;
     d.title = fs::path(path).filename().string();
-    // Der endgueltige Titel entsteht unten in refreshTabTitles: bei gleichen
-    // Dateinamen entscheidet der Ordner.
+    // The final title is produced below in refreshTabTitles: for identical
+    // file names the folder decides.
     try {
         car::ParseOptions po;
         po.followIncludes = false;
@@ -377,14 +412,14 @@ bool App::openCar(const std::string& path) {
     if (const auto it = savedOutputs_.find(path); it != savedOutputs_.end())
         d.outputDir = it->second;
 
-    // Assetwurzel und Referenz-GLA aus der Lage der .car ableiten, solange
-    // nichts eingestellt ist.
+    // Derive the asset root and reference GLA from the location of the .car,
+    // as long as nothing is configured.
     //
-    // Ohne Wurzel laesst sich kein einziger Pfad aufloesen: die .car nennt
-    // "models/players/...", und wo das beginnt, weiss nur der Ordnerbaum.
-    // Die Kommandozeile macht das beim Draufziehen laengst; es hier nicht zu
-    // tun hiess, den Nutzer etwas von Hand suchen zu lassen, was das Programm
-    // selbst weiss.
+    // Without a root not a single path can be resolved: the .car says
+    // "models/players/...", and only the folder tree knows where that starts.
+    // The command line has long done this on drag-and-drop; not doing it here
+    // meant making the user search by hand for something the program already
+    // knows.
     if (settings_.baseDir.empty() || settings_.referenceGla.empty()) {
         const auto guess = car::guessPaths(d.script, path);
         if (settings_.baseDir.empty() && !guess.baseDir.empty()) {
@@ -403,12 +438,12 @@ bool App::openCar(const std::string& path) {
     return true;
 }
 
-// Eindeutige Tabtitel.
+// Unique tab titles.
 //
-// In einem Modellbaum heissen alle Skripte "_humanoid.car" — zwanzig Tabs
-// mit demselben Text sind wertlos. Unterscheidbar sind sie am Ordner, und
-// genau der wird dann zum Titel. Nur wo der Dateiname schon eindeutig ist,
-// bleibt er stehen.
+// In a model tree all scripts are called "_humanoid.car" - twenty tabs with
+// the same text are worthless. They can be told apart by their folder, and
+// that is exactly what becomes the title. Only where the file name is already
+// unique does it stay.
 void App::refreshTabTitles() {
     std::map<std::string, int> nameCount;
     for (const auto& d : docs_) nameCount[fs::path(d.path).filename().string()]++;
@@ -425,7 +460,7 @@ void App::refreshTabTitles() {
     }
 }
 
-// --- Zweiter Modus: GLA zurueck nach dotXSI --------------------------------
+// --- Second mode: GLA back to dotXSI ---------------------------------------
 
 bool App::loadGlaForExtract(const std::string& path) {
     try {
@@ -439,13 +474,12 @@ bool App::loadGlaForExtract(const std::string& path) {
         extract_.cfgPath.clear();
         extract_.withMotion = 0;
 
-        // -origin erkennen. Wird es beim Export nicht wieder eingesetzt,
-        // zieht das Neubauen es ein ZWEITES Mal ab, und das Modell steht 24
-        // Einheiten daneben.
+        // Detect -origin. If it isn't put back in on export, rebuilding
+        // subtracts it a SECOND time, and the model ends up 24 units off.
         extract_.origin = xsiexp::detectOrigin(extract_.gla);
 
-        // Ohne animation.cfg gibt es nur einen Block. Besser als nichts:
-        // man sieht wenigstens, dass die Datei gelesen wurde.
+        // Without animation.cfg there is only one block. Better than nothing:
+        // at least you can see that the file was read.
         ExtractSeq all;
         all.name = fs::path(path).stem().string();
         all.start = 0;
@@ -485,14 +519,14 @@ void App::findCompanionFiles(const std::string& glaPath) {
     const std::string stem = fs::path(glaPath).stem().string();
     if (dir.empty() || !fs::is_directory(dir, ec)) return;
 
-    // Nach Haeufigkeit geordnet: Ravens Name zuerst, dann unser eigener
-    // Ausgabename, dann der Notnagel "genau eine Datei dieser Art im Ordner".
+    // Ordered by frequency: Raven's name first, then our own output name,
+    // then the last resort "exactly one file of this kind in the folder".
     const auto pick = [&](const std::vector<std::string>& names, const char* ext) -> std::string {
         for (const auto& n : names) {
             const fs::path p = dir / n;
             if (fs::exists(p, ec)) return p.string();
         }
-        // Genau eine? Dann ist sie gemeint. Mehrere? Dann nicht raten.
+        // Exactly one? Then that's the one meant. Several? Then don't guess.
         std::string found;
         int count = 0;
         fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
@@ -519,16 +553,16 @@ void App::findCompanionFiles(const std::string& glaPath) {
         log(LogLine::Kind::Warn, tr(S::LogNoCfgNearby));
     }
 
-    // Die .frames ist optional: sie enthaelt nur die Wurzelbewegung, und die
-    // haben ohnehin die wenigsten Sequenzen.
+    // The .frames is optional: it only contains the root motion, and few
+    // sequences have that anyway.
     const std::string fr = pick({stem + ".frames", "animation.frames"}, ".frames");
     if (!fr.empty() && loadFramesFile(fr))
         log(LogLine::Kind::Good, trf(S::LogFound, fs::path(fr).filename().string().c_str()));
 }
 
 namespace {
-// Sequenznamen vergleichbar machen: Grossschreibung und Leerzeichen am Rand
-// sind in animation.cfg-Dateien nicht einheitlich.
+// Make sequence names comparable: capitalization and surrounding whitespace
+// are not consistent in animation.cfg files.
 std::string seqKey(std::string v) {
     while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r')) v.pop_back();
     std::transform(v.begin(), v.end(), v.begin(),
@@ -611,9 +645,9 @@ bool App::loadAnimationCfg(const std::string& path) {
         ExtractSeq s;
         if (!(is >> s.name >> s.start >> s.count >> s.loopFrame >> s.fps)) continue;
 
-        // Sequenzen ausserhalb der Datei ueberspringen statt anzuzeigen: sie
-        // liessen sich ohnehin nicht exportieren, und in der Liste wuerde
-        // man sie fuer brauchbar halten.
+        // Skip sequences outside the file instead of showing them: they
+        // couldn't be exported anyway, and in the list they would look
+        // usable.
         if (s.count <= 0 || s.start < 0 || s.start + s.count > extract_.gla.numFrames) {
             ++skipped;
             continue;
@@ -621,9 +655,9 @@ bool App::loadAnimationCfg(const std::string& path) {
         out.push_back(std::move(s));
     }
 
-    // Keine einzige passende Sequenz: die cfg gehoert zu einer anderen GLA.
-    // Dann die bisherige Liste behalten — eine leere Liste liess die
-    // Vorschau abstuerzen, und exportieren liesse sich damit ohnehin nichts.
+    // Not a single matching sequence: the cfg belongs to a different GLA.
+    // Then keep the current list - an empty list crashed the preview, and
+    // nothing could be exported with it anyway.
     if (out.empty()) {
         log(LogLine::Kind::Bad, trf(S::LogNoSeqIn, path.c_str()));
         return false;
@@ -655,15 +689,15 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
         if (r >= extract_.seqs.size()) continue;
         const ExtractSeq& s = extract_.seqs[r];
         opt.fps = s.fps > 0 ? s.fps : 20;
-        // Erst die .frames, wenn es eine gibt. Fehlt sie — oder fehlt darin
-        // diese Sequenz —, laesst sich die Wurzelbewegung aus der GLA selbst
-        // rekonstruieren: sie steht dort als lineare Rampe auf dem
-        // Wurzelbone. Gegen Ravens eigene _humanoid.frames geprueft: bei allen
-        // 178 Sequenzen mit Bewegung stimmt der Wert ueberein.
+        // The .frames first, if there is one. If it's missing - or this
+        // sequence is missing from it - the root motion can be reconstructed
+        // from the GLA itself: it is stored there as a linear ramp on the
+        // root bone. Checked against Raven's own _humanoid.frames: the value
+        // matches for all 178 sequences with motion.
         //
-        // Frueher wurde der Wert danach ein zweites Mal aus der .frames
-        // gelesen und ueberschrieb die Rekonstruktion mit "nichts", sobald
-        // die Sequenz dort fehlte.
+        // Previously the value was then read from the .frames a second time
+        // and overwrote the reconstruction with "nothing" whenever the
+        // sequence was missing there.
         opt.rootMotionPerFrame =
             extract_.framesPath.empty()
                 ? std::nullopt
@@ -694,9 +728,9 @@ std::size_t App::exportAllWithScript(const std::string& dir, const std::string& 
                                      const std::string& xsiPrefix) {
     if (!extract_.loaded || extract_.seqs.empty()) return 0;
 
-    // Unterbereiche zusammenfassen: exportierte man jede Sequenz als eigene
-    // Datei, haette die neue GLA mehr Frames als die alte und die
-    // animation.cfg passte nicht mehr.
+    // Merge sub-ranges: if every sequence were exported as its own file, the
+    // new GLA would have more frames than the old one and the animation.cfg
+    // would no longer match.
     std::vector<xsiexp::CfgSequence> in;
     for (const auto& s : extract_.seqs) in.push_back({s.name, s.start, s.count, s.loopFrame, s.fps});
     const auto g = xsiexp::groupSequences(in);
@@ -710,8 +744,8 @@ std::size_t App::exportAllWithScript(const std::string& dir, const std::string& 
         log(LogLine::Kind::Warn, msg);
     }
 
-    // Nur die Master schreiben. Der Zeilenindex muss zur Sequenzliste
-    // passen, also ueber den Namen zurueckgesucht.
+    // Write only the masters. The row index has to match the sequence list,
+    // so it is looked up again by name.
     std::vector<std::size_t> rows;
     for (const auto& m : g.masters)
         for (std::size_t i = 0; i < extract_.seqs.size(); ++i)
@@ -722,18 +756,17 @@ std::size_t App::exportAllWithScript(const std::string& dir, const std::string& 
 
     const std::size_t n = exportSequences(rows, dir);
 
-    // Der Versatz MUSS derselbe sein wie beim Export, sonst zieht das
-    // Neubauen ihn nicht wieder ab.
-    // Skelettpfad aus dem Kopf der GLA: dort steht genau der Wert, den
-    // Carcass seinerzeit als -makeskel bekommen hat.
+    // The offset MUST be the same as on export, otherwise rebuilding doesn't
+    // subtract it again.
+    // Skeleton path from the GLA header: it holds exactly the value Carcass
+    // was given as -makeskel back then.
     const auto sc = xsiexp::buildScript(g, xsiPrefix, extract_.origin,
                                         extract_.gla.skeleton.scale, false,
                                         extract_.gla.skeleton.name);
     try {
-        // Eine vorhandene .car ist womoeglich Handarbeit — etwa wenn der
-        // Modellordner selbst als Ziel gewaehlt wurde. Vor dem Ersetzen
-        // sichern, und zwar jedes Mal: die letzte Fassung ist die, die man
-        // zurueckhaben will.
+        // An existing .car may be handwritten - e.g. when the model folder
+        // itself was chosen as the target. Back it up before replacing, and
+        // do so every time: the latest version is the one you want back.
         std::error_code ec;
         if (fs::exists(carPath, ec)) {
             const std::string bak = carPath + ".bak";
@@ -758,12 +791,11 @@ std::string lowerName(std::string v) {
 }
 }  // namespace
 
-// Vor dem Export pruefen, was im Zielordner schon liegt.
+// Before exporting, check what's already in the target folder.
 //
-// Der Export schrieb frueher kommentarlos ueber gleichnamige .xsi und die
-// .car. Wer versehentlich seinen Quellordner als Ziel waehlte, verlor damit
-// die Originalanimationen — die exportierten sind quantisiert, also nicht
-// dasselbe.
+// The export used to silently overwrite .xsi files of the same name and the
+// .car. Anyone who accidentally picked their source folder as the target lost
+// the original animations - the exported ones are quantized, so not the same.
 void App::exportWithConfirm(std::vector<std::size_t> rows, bool withCar) {
     const auto& ex = extract_;
     if (!ex.loaded || ex.outDir.empty()) return;
@@ -791,7 +823,7 @@ void App::exportWithConfirm(std::vector<std::size_t> rows, bool withCar) {
 
     pendingExport_ = {std::move(rows), withCar, std::move(existing), true};
     if (pendingExport_.existing.empty()) {
-        // Nichts wird ueberschrieben: ohne Rueckfrage los.
+        // Nothing gets overwritten: go ahead without asking.
         const PendingExport p = pendingExport_;
         pendingExport_ = {};
         runExport(p.rows, p.withCar);
@@ -804,7 +836,7 @@ void App::runExport(const std::vector<std::size_t>& rows, bool withCar) {
         exportSequences(rows, outDir);
         return;
     }
-    // Pfadpraefix aus dem Zielordner ableiten: alles ab "models/".
+    // Derive the path prefix from the target folder: everything from "models/".
     const std::string norm = fs::path(outDir).generic_string();
     const std::size_t m = norm.rfind("/models/");
     const std::string prefix = (m == std::string::npos) ? std::string() : norm.substr(m + 1) + "/";
@@ -874,22 +906,22 @@ std::size_t App::openFolder(const std::string& root) {
 void App::closeDocument(std::size_t index) {
     if (index >= docs_.size()) return;
     const std::string path = docs_[index].path;
-    // Dialoge, die sich auf dieses Skript beziehen, gleich mit schliessen.
+    // Close dialogs that refer to this script right along with it.
     if (editDocPath_ == path) {
         editOpen_ = false;
         editRow_ = -1;
     }
     if (pendingDeleteDocPath_ == path) pendingDelete_.clear();
 
-    // Den aktiven Tab behalten, wenn es nicht der geschlossene ist. Frueher
-    // sprang die Auswahl beim Schliessen eines Tabs links vom aktiven auf
-    // den Nachbarn.
+    // Keep the active tab if it isn't the one being closed. Previously,
+    // closing a tab to the left of the active one made the selection jump
+    // to the neighbor.
     if (active_ > static_cast<int>(index)) --active_;
     docs_.erase(docs_.begin() + static_cast<long>(index));
     if (active_ >= static_cast<int>(docs_.size())) active_ = static_cast<int>(docs_.size()) - 1;
     if (active_ < 0) active_ = 0;
-    // ImGui waehlt nach dem Schliessen selbst einen Nachbarn. Den hier
-    // bestimmten durchsetzen, damit Anzeige und Programm dasselbe meinen.
+    // ImGui picks a neighbor on its own after closing. Enforce the one chosen
+    // here so that the display and the program agree.
     if (!docs_.empty()) activate(active_);
     refreshTabTitles();
 }
@@ -925,7 +957,7 @@ bool App::requestQuit() {
     return false;
 }
 
-// Ungespeicherte Aenderungen: speichern, verwerfen oder abbrechen.
+// Unsaved changes: save, discard or cancel.
 void App::drawCloseDialog() {
     if (pendingClose_.empty()) return;
     if (!ImGui::IsPopupOpen("###closedlg")) ImGui::OpenPopup("###closedlg");
@@ -947,9 +979,9 @@ void App::drawCloseDialog() {
         if (save)
             for (const std::size_t i : dirty) ok = saveDocument(i) && ok;
         if (!ok) {
-            // Speichern schlug fehl: nichts schliessen, der Grund steht im
-            // Protokoll.
+            // Saving failed: close nothing, the reason is in the log.
             quitRequested_ = false;
+            restartRequested_ = false;
         } else if (quitRequested_) {
             quitApproved_ = true;
         } else {
@@ -971,6 +1003,7 @@ void App::drawCloseDialog() {
     if (ImGui::Button(tr(S::No)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         pendingClose_.clear();
         quitRequested_ = false;
+        restartRequested_ = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -979,12 +1012,12 @@ void App::drawCloseDialog() {
 std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) {
     if (docs_.empty() || files.empty()) return 0;
 
-    // Erst pruefen, was hereinkommt.
+    // First check what's coming in.
     //
-    // Ein Ordner oder eine Datei, die keine .xsi ist, laesst sich anhaengen
-    // und faellt erst beim Bauen auf — dort steht dann ein Pfad in der
-    // Fehlerliste, mit dem niemand etwas anfangen kann. Besser hier
-    // abweisen, wo klar ist, was der Nutzer gerade getan hat.
+    // A folder or a file that isn't an .xsi can be appended and only shows up
+    // during the build - where the error list then contains a path nobody can
+    // make sense of. Better to reject it here, where it's clear what the user
+    // just did.
     std::vector<std::string> good;
     std::size_t rejected = 0;
     for (const std::string& f : files) {
@@ -1014,9 +1047,9 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
     const auto appendTo = [&](Document& d) {
         for (const std::string& f : good) {
             car::GrabDirective g;
-            // Relativ zum basedir speichern, wenn moeglich — die .car
-            // enthaelt sonst absolute Pfade und ist auf keinem anderen
-            // Rechner mehr brauchbar.
+            // Store relative to basedir if possible - otherwise the .car
+            // contains absolute paths and is no longer usable on any other
+            // machine.
             g.file = f;
             if (!settings_.baseDir.empty()) {
                 std::error_code ec;
@@ -1049,11 +1082,11 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
     return touched;
 }
 
-// Skript zurueckschreiben.
+// Write the script back.
 //
-// Vorher wird eine Sicherung angelegt. Die .car ist Handarbeit von Jahren;
-// sie ohne Netz zu ueberschreiben waere fahrlaessig, zumal beim Schreiben
-// Kommentare und Einrueckungen verlorengehen.
+// A backup is made first. The .car is years of handwork; overwriting it
+// without a safety net would be reckless, especially since comments and
+// indentation get lost when writing.
 bool App::saveDocument(std::size_t index) {
     if (index >= docs_.size()) return false;
     Document& d = docs_[index];
@@ -1064,8 +1097,8 @@ bool App::saveDocument(std::size_t index) {
         const fs::path bak = fs::path(d.path).string() + ".bak";
         if (!fs::exists(bak, ec) && fs::exists(d.path, ec)) {
             fs::copy_file(d.path, bak, ec);
-            // Ohne Sicherung nicht ueberschreiben: der Nutzer hat sie
-            // eingeschaltet und verlaesst sich darauf.
+            // Don't overwrite without a backup: the user turned it on and
+            // relies on it.
             if (ec) {
                 log(LogLine::Kind::Bad, trf(S::LogCannotWrite, bak.string().c_str()));
                 return false;
@@ -1095,8 +1128,8 @@ std::size_t App::saveAllDocuments() {
 }
 
 std::size_t App::addXsiFolder(const std::string& folder, bool toAll) {
-    // Alle .xsi eines Baums einsammeln, sortiert — sonst haengt die
-    // Reihenfolge der Sequenzen davon ab, wie das Dateisystem sie liefert.
+    // Collect all .xsi of a tree, sorted - otherwise the order of the
+    // sequences depends on how the file system returns them.
     std::vector<std::string> files;
     std::error_code ec;
     std::vector<fs::path> stack{fs::path(folder)};
@@ -1138,27 +1171,27 @@ void App::stopFrameWorker() {
     frameWorkerStop_.store(false);
 }
 
-// Framezahlen im Hintergrund nachladen.
+// Load frame counts in the background.
 //
-// Beim ersten Mal muss jede .xsi gelesen werden — bei 1289 Dateien dauert
-// das. Im Vordergrund waere das Fenster solange eingefroren, also laeuft es
-// nebenher und die Spalte fuellt sich nach und nach. Beim zweiten Mal kommt
-// alles aus dem Zwischenspeicher und steht praktisch sofort.
+// The first time, every .xsi has to be read - with 1289 files that takes a
+// while. In the foreground the window would be frozen that whole time, so it
+// runs alongside and the column fills in gradually. The second time
+// everything comes from the cache and is there practically instantly.
 void App::startFrameWorker(const Document& d) {
     if (frameWorkerRunning_.load()) return;
     if (settings_.baseDir.empty()) return;
 
-    // Assetwurzel geaendert? Dann gelten die bisherigen Zahlen nicht mehr.
-    // War die Wurzel zuerst falsch geraten, stand ueberall "fehlt" — und
-    // blieb so bis zum Neustart, auch nachdem sie korrigiert war.
+    // Asset root changed? Then the previous counts are no longer valid.
+    // If the root was guessed wrong at first, "missing" showed everywhere -
+    // and stayed that way until restart, even after it was corrected.
     if (!frameWorkerBaseDir_.empty() && frameWorkerBaseDir_ != settings_.baseDir) {
         std::lock_guard<std::mutex> lock(frameMutex_);
         frameCounts_.clear();
     }
     frameWorkerBaseDir_ = settings_.baseDir;
 
-    // Fehlende einsammeln, damit der Thread nicht auf die Dokumentliste
-    // zugreifen muss — die kann sich unter ihm aendern.
+    // Collect the missing ones so the thread doesn't have to access the
+    // document list - it can change underneath it.
     std::vector<std::string> todo;
     {
         std::lock_guard<std::mutex> lock(frameMutex_);
@@ -1184,7 +1217,7 @@ void App::startFrameWorker(const Document& d) {
         std::size_t missing = 0;
         for (const auto& rel : todo) {
             if (frameWorkerStop_.load()) break;
-            int frames = -2;   // nicht auffindbar
+            int frames = -2;   // not found
             const std::string full = car::resolveAssetPath(rel, baseDir, carDir);
             if (!full.empty()) {
                 try {
@@ -1219,7 +1252,7 @@ std::size_t App::assignDefaultOutputs(bool onlyEmpty) {
     return n;
 }
 
-// --- Sequenzen umordnen und loeschen ---------------------------------------
+// --- Reordering and deleting sequences -------------------------------------
 
 bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
     if (docIndex >= docs_.size()) return false;
@@ -1233,9 +1266,9 @@ bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
     g.insert(g.begin() + static_cast<long>(to), item);
     closeEditorOf(docIndex);
 
-    // Die Auswahl muss mitwandern. Sonst zeigt sie nach dem Verschieben auf
-    // eine andere Sequenz, und der naechste Klick auf "Loeschen" trifft die
-    // falsche.
+    // The selection has to move along. Otherwise, after moving, it points at
+    // a different sequence, and the next click on "Delete" hits the wrong
+    // one.
     if (d.selected.size() == n) {
         const char sel = d.selected[from];
         d.selected.erase(d.selected.begin() + static_cast<long>(from));
@@ -1267,10 +1300,9 @@ std::size_t App::moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
     rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
     if (rows.back() >= n) return 0;
 
-    // Erst herausnehmen, dann einfuegen. Die Zielposition muss um die
-    // Zeilen verringert werden, die VOR ihr entfernt wurden — sonst landet
-    // der Block zu weit hinten, und zwar genau um die Anzahl der
-    // verschobenen Zeilen.
+    // Remove first, then insert. The target position has to be reduced by
+    // the rows removed BEFORE it - otherwise the block lands too far back,
+    // by exactly the number of rows moved.
     std::size_t target = before;
     for (const std::size_t r : rows)
         if (r < before) --target;
@@ -1306,7 +1338,7 @@ bool App::keepRootLast(std::size_t docIndex) {
 
     for (std::size_t i = 0; i + 1 < g.size(); ++i) {
         if (!isRootGrab(g[i])) continue;
-        // Ohne moveGrab, sonst ruft sich das gegenseitig auf.
+        // Without moveGrab, otherwise the two would call each other.
         const auto item = g[i];
         g.erase(g.begin() + static_cast<long>(i));
         g.push_back(item);
@@ -1327,8 +1359,7 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
     if (docIndex >= docs_.size() || rows.empty()) return 0;
     Document& d = docs_[docIndex];
 
-    // Absteigend, damit sich die noch offenen Indizes nicht unter der
-    // Schleife verschieben.
+    // Descending, so the remaining indices don't shift underneath the loop.
     std::sort(rows.begin(), rows.end(), std::greater<>());
     rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
 
@@ -1336,16 +1367,16 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
     for (const std::size_t r : rows) {
         if (r >= d.script.grabs.size()) continue;
 
-        // Trenner und Ueberschriften ueber der Sequenz stehenlassen.
+        // Leave separators and headings above the sequence in place.
         //
-        // Technisch haengen sie am folgenden Grab, fuer den Nutzer sind es
-        // eigene Zeilen — sie lassen sich einzeln ziehen und loeschen. Frueher
-        // verschwanden sie mit der Sequenz darunter, ohne dass die
-        // Rueckfrage sie erwaehnt haette.
+        // Technically they are attached to the following grab; for the user
+        // they are separate rows - they can be dragged and deleted
+        // individually. Previously they disappeared along with the sequence
+        // below them, without the confirmation prompt mentioning them.
         auto& moved = d.script.grabs[r].commentsBefore;
         if (keepComments && !moved.empty()) {
-            // Absteigend geloescht: der Grab dahinter ist der naechste, der
-            // bleibt.
+            // Deleted in descending order: the grab after it is the next one
+            // that stays.
             auto& target = (r + 1 < d.script.grabs.size()) ? d.script.grabs[r + 1].commentsBefore
                                                           : d.script.trailingComments;
             target.insert(target.begin(), moved.begin(), moved.end());
@@ -1357,8 +1388,7 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
     if (n) {
         d.dirty = true;
         d.validated = false;
-        // Ein offener Bearbeitungsdialog koennte auf eine geloeschte Zeile
-        // zeigen.
+        // An open edit dialog could point at a deleted row.
         closeEditorOf(docIndex);
     }
     return n;
@@ -1369,8 +1399,8 @@ std::size_t App::copyGrabs(std::size_t docIndex, const std::vector<std::size_t>&
     const Document& d = docs_[docIndex];
 
     clipboard_.clear();
-    // In der Reihenfolge der Zeilen, nicht der Auswahl — sonst haengt das
-    // Ergebnis davon ab, in welcher Reihenfolge angeklickt wurde.
+    // In row order, not selection order - otherwise the result depends on
+    // the order in which things were clicked.
     std::vector<std::size_t> sorted = rows;
     std::sort(sorted.begin(), sorted.end());
     for (const std::size_t r : sorted)
@@ -1380,7 +1410,7 @@ std::size_t App::copyGrabs(std::size_t docIndex, const std::vector<std::size_t>&
 
 std::size_t App::cutGrabs(std::size_t docIndex, const std::vector<std::size_t>& rows) {
     const std::size_t n = copyGrabs(docIndex, rows);
-    // Die Kommentare wandern mit in die Ablage und kommen beim Einfuegen mit.
+    // The comments go into the clipboard too and come back on paste.
     if (n) deleteGrabs(docIndex, rows, false);
     return n;
 }
@@ -1390,8 +1420,8 @@ std::size_t App::pasteGrabs(std::size_t docIndex, std::size_t before) {
     Document& d = docs_[docIndex];
     if (before > d.script.grabs.size()) before = d.script.grabs.size();
 
-    // Eingefuegt wird eine eigene Zeile dieses Skripts, auch wenn die Vorlage
-    // aus einer $include-Datei stammte — sonst liesse der Schreiber sie weg.
+    // What gets inserted is a row of this script itself, even if the source
+    // came from an $include file - otherwise the writer would omit it.
     std::vector<car::GrabDirective> items = clipboard_;
     for (auto& g : items) g.fromInclude = -1;
     d.script.grabs.insert(d.script.grabs.begin() + static_cast<long>(before), items.begin(),
@@ -1405,10 +1435,10 @@ std::size_t App::pasteGrabs(std::size_t docIndex, std::size_t before) {
     return items.size();
 }
 
-// Der Sequenzdialog merkt sich eine Zeilennummer. Verschiebt sich die Liste
-// darunter, zeigt sie auf eine andere Sequenz — der Dialog bearbeitete dann
-// still eine fremde Zeile. Deshalb schliessen, sobald sich die Reihenfolge
-// im selben Skript aendert.
+// The sequence dialog remembers a row number. If the list shifts underneath
+// it, it points at a different sequence - the dialog then silently edited
+// someone else's row. So close it as soon as the order changes in the same
+// script.
 void App::closeEditorOf(std::size_t docIndex) {
     if (docIndex < docs_.size() && docs_[docIndex].path == editDocPath_) {
         editOpen_ = false;
@@ -1423,9 +1453,9 @@ bool App::newCar(const std::string& path) {
         return false;
     }
 
-    // Ein leeres, aber vollstaendiges Skript: init und finalize umschliessen
-    // die Grabs, die Konvertierungsanweisung nennt das Zielmodell. Ohne die
-    // drei waere die Datei kein gueltiges Carcass-Skript.
+    // An empty but complete script: init and finalize enclose the grabs, the
+    // convert directive names the target model. Without those three the file
+    // wouldn't be a valid Carcass script.
     car::Script sc;
     car::addGrabFrame(sc);
 
@@ -1472,7 +1502,7 @@ void App::validateDocument(std::size_t index) {
     car::ValidateOptions vo;
     vo.baseDir = settings_.baseDir;
     vo.readFrameCounts = settings_.readFrameCounts;
-    vo.threads = 0;   // alle Kerne
+    vo.threads = 0;   // all cores
     if (!enums_.empty()) vo.enums = &enums_;
     if (settings_.useCache && !settings_.baseDir.empty())
         vo.cacheDir = (fs::path(settings_.baseDir) / "g2c_cache").string();
@@ -1488,7 +1518,7 @@ void App::validateAll() {
     log(err ? LogLine::Kind::Bad : LogLine::Kind::Good, trf(S::LogValidation, err, warn));
 }
 
-// --- Bauen -----------------------------------------------------------------
+// --- Building --------------------------------------------------------------
 
 bool App::writeOutput(const std::string& title, const std::string& path, const std::string& data) {
     try {
@@ -1512,30 +1542,30 @@ void App::buildOne(const Document& d, const Settings& st) {
 
         car::BuildOptions bo;
         bo.baseDir = st.baseDir;
-        bo.threads = 0;   // alle Kerne
+        bo.threads = 0;   // all cores
         bo.carcassCompatible = st.carcassCompat;
         if (st.useCache && !st.baseDir.empty())
             bo.cacheDir = (fs::path(st.baseDir) / "g2c_cache").string();
 
-        // Fehlende Dateien vorab melden — uebersetzt und mit Zuordnung.
+        // Report missing files up front - translated and with attribution.
         //
-        // Die Ausnahme aus der Bibliothek ist auf Deutsch und traegt den
-        // vollen Text; hier wird stattdessen aus den strukturierten Daten
-        // eine Meldung in der eingestellten Sprache gebaut, die sagt, WELCHE
-        // Sequenz betroffen ist und wo die Datei erwartet wurde.
+        // The library's exception is in German and carries the full text;
+        // instead, a message in the configured language is built here from
+        // the structured data, saying WHICH sequence is affected and where the
+        // file was expected.
         {
             car::BuildOptions probe = bo;
             probe.skipMissing = true;
 
-            // Der Probelauf darf NICHT werfen. Fehlen alle Dateien, bricht
-            // build mit "keine einzige lesbar" ab — dann kaeme die
-            // ausfuehrliche Meldung nie zustande, und der Nutzer saehe genau
-            // den unbrauchbaren Satz, den sie ersetzen soll.
+            // The probe run must NOT throw. If all files are missing, build
+            // aborts with "not a single one readable" - then the detailed
+            // message would never be produced, and the user would see exactly
+            // the useless sentence it is meant to replace.
             std::vector<car::BuildResult::MissingFile> missing;
             try {
                 missing = car::build(d.script, ref.skeleton, d.path, probe).missing;
             } catch (const std::exception&) {
-                // Alles fehlt: die Liste selbst aufbauen.
+                // Everything is missing: build the list ourselves.
                 for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
                     const auto& g = d.script.grabs[i];
                     if (!car::resolveAssetPath(g.file, st.baseDir,
@@ -1584,12 +1614,12 @@ void App::buildOne(const Document& d, const Settings& st) {
             }
         }
 
-        // Schreibt der Bau auf die Referenz-GLA?
+        // Does the build write onto the reference GLA?
         //
-        // Dann wird dieselbe Datei gelesen und beschrieben, und Windows
-        // sperrt sie: "Kann ... nicht oeffnen", bei jedem Grab erneut.
-        // Die Meldung nennt den Pfad, aber nicht den Grund — man sucht dann
-        // nach fehlenden Rechten statt nach der Ueberschneidung.
+        // Then the same file is read and written, and Windows locks it:
+        // "Cannot open ...", again for every grab. The message names the path
+        // but not the reason - you then look for missing permissions instead
+        // of the overlap.
         if (!d.outputDir.empty() && !st.referenceGla.empty()) {
             std::error_code rec;
             const fs::path refPath(st.referenceGla);
@@ -1600,18 +1630,18 @@ void App::buildOne(const Document& d, const Settings& st) {
             }
         }
 
-        // Geaenderte Skripte wurden schon in startBuild gespeichert, im
-        // Hauptthread. Hier waere es falsch: d ist eine Kopie, und docs_
-        // gehoert der Oberflaeche.
+        // Modified scripts were already saved in startBuild, on the main
+        // thread. Doing it here would be wrong: d is a copy, and docs_
+        // belongs to the UI.
 
         const car::BuildResult br = car::build(d.script, ref.skeleton, d.path, bo);
         for (const auto& w : br.warnings) log(LogLine::Kind::Warn, d.title + ": " + w);
 
-        // Doppelte Namen auch beim BAUEN melden, nicht nur beim Validieren.
+        // Report duplicate names on BUILD too, not only on validation.
         //
-        // Wer baut, ohne vorher zu validieren, bekaeme sonst eine
-        // animation.cfg, in der eine Animation unerreichbar ist — und merkt
-        // es erst im Spiel, wo nichts darauf hindeutet.
+        // Anyone who builds without validating first would otherwise get an
+        // animation.cfg in which one animation is unreachable - and only
+        // notice in the game, where nothing points to it.
         {
             std::map<std::string, int> gesehen;
             for (const auto& sq : br.sequences) {
@@ -1628,14 +1658,14 @@ void App::buildOne(const Document& d, const Settings& st) {
                     doppelt.push_back(name);
                 }
 
-            // NICHT schreiben, solange Namen doppelt sind.
+            // Do NOT write while names are duplicated.
             //
-            // Eine GLA mit unerreichbaren Animationen sieht fertig aus und
-            // faellt erst im Spiel auf — dort deutet dann nichts auf die
-            // Ursache. Lieber gar nichts schreiben und es hier sagen.
+            // A GLA with unreachable animations looks finished and only
+            // shows up in the game - where nothing then points to the cause.
+            // Better to write nothing at all and say so here.
             if (!doppelt.empty()) {
-                // Die Namen mitgeben: der Aufrufer traegt sie als Meldungen
-                // ein, damit der Klick darauf zu den Zeilen springt.
+                // Pass the names along: the caller enters them as messages so
+                // that clicking one jumps to the rows.
                 {
                     std::lock_guard<std::mutex> lock(dupMutex_);
                     pendingDuplicates_ = doppelt;
@@ -1646,19 +1676,20 @@ void App::buildOne(const Document& d, const Settings& st) {
         }
 
         MdxaWriteOptions wo;
-        wo.threads = 0;   // alle Kerne
+        wo.threads = 0;   // all cores
         if (st.carcassCompat) {
             wo.compress.rounding = Rounding::Legacy;
             wo.compress.optimizeQuat = false;
             wo.compress.canonicalizeSign = false;
         }
-        // Der GLA-Name im Kopf kommt aus -makeskel, NICHT aus der Referenz.
+        // The GLA name in the header comes from -makeskel, NOT from the
+        // reference.
         //
-        // Er steht als Zeichenkette in der Datei und sagt der Engine, welches
-        // Skelett das ist. Uebernahmen wir ihn von der Referenz, trug jede
-        // gebaute Datei "models/players/_humanoid/_humanoid" — egal wohin sie
-        // gehoerte. Im Spiel meldete sich ein eigener Humanoid dann als der
-        // Standard-Humanoid, und die Engine nahm dessen animation.cfg.
+        // It is stored as a string in the file and tells the engine which
+        // skeleton this is. When we took it from the reference, every built
+        // file carried "models/players/_humanoid/_humanoid" - no matter where
+        // it belonged. In the game a custom humanoid then identified itself as
+        // the standard humanoid, and the engine used that one's animation.cfg.
         Skeleton outSkel = ref.skeleton;
         if (d.script.convert && !d.script.convert->makeSkel.empty()) {
             std::string ms = d.script.convert->makeSkel;
@@ -1681,11 +1712,11 @@ void App::buildOne(const Document& d, const Settings& st) {
             stem = (sl == std::string::npos) ? ms : ms.substr(sl + 1);
         }
 
-        // Jede Ausgabe ueber writeOutput: erst in eine Nebendatei, dann in
-        // einem Zug ersetzen, Fehler ins Protokoll. Frueher schrieben
-        // ungepruefte ofstreams direkt ins Ziel — war die GLA gesperrt (Spiel
-        // oder ModView offen) oder die Platte voll, stand trotzdem "gebaut" im
-        // Protokoll, und die alte Datei war schon auf null gekuerzt.
+        // Every output goes through writeOutput: first into a side file, then
+        // replaced in one go, errors go to the log. Previously unchecked
+        // ofstreams wrote directly to the target - if the GLA was locked (game
+        // or ModView open) or the disk full, the log still said "built", and
+        // the old file had already been truncated to zero.
         const fs::path gla = outDir / (stem + ".gla");
         if (!writeOutput(d.title, gla.string(),
                          std::string(reinterpret_cast<const char*>(res.data.data()),
@@ -1699,15 +1730,15 @@ void App::buildOne(const Document& d, const Settings& st) {
             head << br.totalFrames() << " frames; " << br.sequences.size()
                  << " sequences; erzeugt von g2c";
             const std::string cfg = car::writeAnimationCfg(br.sequences, head.str());
-            // Keine .bak: die animation.cfg wird bei jedem Bau vollstaendig
-            // neu erzeugt, eine Sicherung davon waere wertlos und liegt nur
-            // im Ordner herum. Fuer .car-Dateien, die von Hand bearbeitet
-            // werden, ist das anders — dort bleibt die Sicherung.
+            // No .bak: the animation.cfg is regenerated completely on every
+            // build, a backup of it would be worthless and just clutter the
+            // folder. For .car files, which are edited by hand, that's
+            // different - the backup stays there.
             if (!writeOutput(d.title, (outDir / "animation.cfg").string(), cfg)) return;
         }
         log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
 
-        // Ausgabeordner merken, damit er sich oeffnen laesst.
+        // Remember the output folder so it can be opened.
         {
             std::lock_guard<std::mutex> lock(outputDirMutex_);
             lastOutputDir_ = outDir.string();
@@ -1773,15 +1804,15 @@ void App::startBuild(bool allTabs) {
         which.push_back(static_cast<std::size_t>(active_));
     }
 
-    // Geaenderte Skripte vor dem Bauen speichern — hier, im Hauptthread.
+    // Save modified scripts before building - here, on the main thread.
     //
-    // Gebaut wird der Zustand im Speicher. Blieb die Datei auf der Platte die
-    // alte, hatte man nach dem Schliessen eine GLA, die zu keiner .car mehr
-    // passte, und beim naechsten Oeffnen war die Aenderung weg.
+    // What gets built is the in-memory state. If the file on disk stayed the
+    // old one, after closing you had a GLA that no longer matched any .car,
+    // and on the next open the change was gone.
     //
-    // Frueher geschah das im Arbeitsthread ueber "&d - docs_.data()" — aber d
-    // war dort eine Kopie, die Zeigerdifferenz also undefiniert. Gespeichert
-    // wurde praktisch nie, schlimmstenfalls ein anderes Skript.
+    // Previously this happened on the worker thread via "&d - docs_.data()" -
+    // but d was a copy there, so the pointer difference was undefined. It
+    // practically never saved, and in the worst case saved a different script.
     for (const std::size_t i : which) {
         if (!docs_[i].dirty || docs_[i].path.empty()) continue;
         if (!docs_[i].outputDir.empty() && saveDocument(i))
@@ -1795,8 +1826,9 @@ void App::startBuild(bool allTabs) {
         return;
     }
 
-    // Vorab pruefen statt mittendrin abbrechen: wer zwanzig Skripte anstoesst,
-    // will vorher wissen, dass eines kein Ziel hat, nicht nach zehn Minuten.
+    // Check up front instead of aborting halfway: anyone kicking off twenty
+    // scripts wants to know beforehand that one has no target, not after ten
+    // minutes.
     std::vector<std::string> noTarget;
     for (const auto& t : targets)
         if (t.outputDir.empty()) noTarget.push_back(t.title);
@@ -1809,16 +1841,15 @@ void App::startBuild(bool allTabs) {
         return;
     }
 
-    // Schreiben zwei Skripte in denselben Ordner?
+    // Do two scripts write to the same folder?
     //
-    // Dann ueberschreibt die zweite GLA die erste, und schlimmer: die
-    // animation.cfg gehoert danach zur zweiten, waehrend die erste GLA weg
-    // ist. Im Spiel sieht das aus wie vertauschte Animationen, und die
-    // Ursache ist von aussen nicht erkennbar.
+    // Then the second GLA overwrites the first, and worse: the animation.cfg
+    // then belongs to the second, while the first GLA is gone. In the game
+    // that looks like swapped animations, and the cause can't be seen from
+    // the outside.
     //
-    // Nur warnen, nicht abbrechen: es gibt Faelle, in denen genau das
-    // gewollt ist — etwa wenn ein Skript ausdruecklich ein anderes ersetzen
-    // soll.
+    // Only warn, don't abort: there are cases where exactly that is intended -
+    // e.g. when one script is explicitly supposed to replace another.
     for (std::size_t i = 0; i < targets.size(); ++i) {
         if (targets[i].outputDir.empty()) continue;
         for (std::size_t j = i + 1; j < targets.size(); ++j) {
@@ -1837,9 +1868,8 @@ void App::startBuild(bool allTabs) {
     job_.total.store(targets.size());
     job_.running.store(true);
 
-    // Kopien der Dokumente UND der Einstellungen, damit die Oberflaeche
-    // waehrend des Baus bedienbar bleibt und nichts unter dem Arbeitsthread
-    // wegeditiert wird.
+    // Copies of the documents AND the settings, so the UI stays usable during
+    // the build and nothing gets edited away underneath the worker thread.
     job_.worker = std::thread([this, targets = std::move(targets), st = settings_] {
         for (const auto& d : targets) {
             if (job_.cancel.load()) break;
@@ -1854,18 +1884,18 @@ void App::startBuild(bool allTabs) {
     });
 }
 
-// --- Darstellung -----------------------------------------------------------
+// --- Appearance ------------------------------------------------------------
 
 void App::applyStyle() {
     ImGuiStyle& s = ImGui::GetStyle();
 
-    // Jedes Mal von der Grundeinstellung ausgehen.
+    // Start from the defaults every time.
     //
-    // ScaleAllSizes multipliziert, was gerade eingestellt ist. Frueher wurden
-    // nur einige Felder zurueckgesetzt, der Rest wuchs bei jedem Wechsel
-    // zwischen Hell und Dunkel um den DPI-Faktor: nach sechs Wechseln bei
-    // 150 % lagen die Abstaende bei 63 statt 6 Pixeln, und der Greifrand der
-    // Fenster ueberdeckte die Knoepfe an ihrem unteren Rand.
+    // ScaleAllSizes multiplies whatever is currently set. Previously only some
+    // fields were reset; the rest grew by the DPI factor on every switch
+    // between light and dark: after six switches at 150 % the spacing was 63
+    // instead of 6 pixels, and the windows' resize grip covered the buttons
+    // along their bottom edge.
     s = ImGuiStyle();
     s.WindowRounding = 6.0f;
     s.FrameRounding = 4.0f;
@@ -1907,8 +1937,8 @@ void App::applyStyle() {
         ImGui::StyleColorsLight();
     }
 
-    // Alle Groessen mitskalieren. Die Schrift wird in der Fensteranbindung
-    // passend geladen; hier gehen Abstaende, Rundungen und Rollbalken mit.
+    // Scale all sizes along. The font is loaded at the right size in the
+    // window backend; here spacing, rounding and scrollbars follow suit.
     s.ScaleAllSizes(k);
     styleApplied_ = true;
 }
@@ -1964,9 +1994,9 @@ void App::drawMenuBar() {
                 if (ImGui::MenuItem(langName(cand), nullptr, language() == cand)) {
                     setLanguage(cand);
                     settings_.language = l;
-                    // Die Schriftzeichen fuer Chinesisch und Japanisch sind
-                    // beim Start nicht geladen. Die Fensteranbindung baut den
-                    // Zeichensatz neu auf, sobald sie das hier sieht.
+                    // The glyphs for Chinese and Japanese aren't loaded at
+                    // startup. The window backend rebuilds the font atlas as
+                    // soon as it sees this.
                     fontsDirty_ = true;
                 }
             }
@@ -1975,6 +2005,8 @@ void App::drawMenuBar() {
         ImGui::Separator();
         ImGui::MenuItem(withIcon(ICON_SETTINGS, tr(S::Settings)), nullptr, &showSettings_);
         ImGui::Separator();
+        if (updater_ && ImGui::MenuItem(tr(S::UpdCheckNow), nullptr, false, !updater_->busy()))
+            checkForUpdates(true);
         ImGui::MenuItem(tr(S::About), nullptr, &showAbout_);
         ImGui::EndMenu();
     }
@@ -2022,8 +2054,8 @@ void App::drawToolbar() {
     ImGui::SameLine();
     if (iconButton(ICON_FOLDER, kIconInfo, tr(S::BtnAddXsiFolder)) &&
         (platform_.pickFolders || platform_.pickFolder)) {
-        // Mehrere Ordner auf einmal: bei einem Modell mit Animationen aus
-        // zehn Quellen ist zehnmal klicken die eigentliche Arbeit.
+        // Several folders at once: for a model with animations from ten
+        // sources, clicking ten times is the actual work.
         const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
         for (const auto& d : dirs) addXsiFolder(d, false);
         if (dirs.size() > 1)
@@ -2053,16 +2085,16 @@ void App::drawToolbar() {
 
 void App::drawSettingsPanel() {
     if (!showSettings_) return;
-    // Breite mitskalieren, sonst sind die Pfade auf hochaufloesenden
-    // Bildschirmen abgeschnitten. Rollbar, damit der Inhalt nie ueberlaeuft.
+    // Scale the width too, otherwise the paths get cut off on high-resolution
+    // screens. Scrollable, so the content never overflows.
     const float sw = 360.0f * (settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f);
     ImGui::BeginChild("settings", ImVec2(sw, 0), ImGuiChildFlags_Borders,
                       ImGuiWindowFlags_AlwaysVerticalScrollbar);
     ImGui::SeparatorText(tr(S::SecPaths));
 
-    // purpose: Schluessel fuer das Ordnergedaechtnis. Jede Zeile bekommt
-    // ihren eigenen, damit anims.h, Assetwurzel und Referenz-GLA sich nicht
-    // gegenseitig den zuletzt benutzten Ordner ueberschreiben.
+    // purpose: key for the folder memory. Each row gets its own, so that
+    // anims.h, asset root and reference GLA don't overwrite each other's
+    // last used folder.
     const auto pathRow = [&](const char* purpose, const char* label, std::string& value,
                              bool folder, const char* filter) {
         ImGui::TextUnformatted(label);
@@ -2122,28 +2154,163 @@ void App::drawSettingsPanel() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::ReadFrameCountsTooltip));
 
-    // Keine Threadeinstellung mehr.
+    // No thread setting anymore.
     //
-    // Es gab nie einen guten Grund, weniger als alle Kerne zu benutzen: die
-    // Ausgabe ist nachweislich unabhaengig von der Threadzahl bitgleich, und
-    // eine Einstellung, die man nur falsch stellen kann, ist keine
-    // Einstellung. Threads bleibt fest auf 0, was "alle Kerne" bedeutet.
+    // There was never a good reason to use fewer than all cores: the output
+    // is demonstrably bit-identical regardless of the thread count, and a
+    // setting that can only be set wrong is no setting. Threads stays fixed
+    // at 0, which means "all cores".
     ImGui::Spacing();
     ImGui::TextDisabled(tr(S::CoresInUse), g2::defaultThreadCount());
 
+    drawUpdateSettings();
+
+    ImGui::EndChild();
+}
+
+void App::drawUpdateSettings() {
+    if (!updater_) return;
+    ImGui::SeparatorText(tr(S::SecUpdates));
+    ImGui::Checkbox(tr(S::UpdAuto), &settings_.checkUpdates);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::UpdAutoTip));
+
+    const char* names[] = {tr(S::UpdStable), tr(S::UpdSnapshot)};
+    int ch = static_cast<int>(updateChannel());
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Combo("##updchannel", &ch, names, 2)) settings_.updateChannel = ch;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::UpdChannelTip));
+
+    ImGui::TextDisabled(tr(S::AboutVersion), update::displayName(platform_.build).c_str());
+    ImGui::BeginDisabled(updater_->busy());
+    if (ImGui::Button(tr(S::UpdCheckNow))) checkForUpdates(true);
+    ImGui::EndDisabled();
+}
+
+std::string describeUpdateError(const update::Status& st) {
+    switch (st.error) {
+        case update::Error::Network: return trf(S::UpdErrNetwork, st.detail.c_str());
+        case update::Error::NoRelease: return tr(S::UpdErrNoRelease);
+        case update::Error::BadAnswer: return tr(S::UpdErrBadAnswer);
+        case update::Error::NoAsset: return trf(S::UpdErrNoAsset, st.detail.c_str());
+        case update::Error::Untrusted: return tr(S::UpdErrUntrusted);
+        case update::Error::Checksum: return trf(S::UpdErrChecksum, st.detail.c_str());
+        case update::Error::Write: return trf(S::UpdErrWrite, st.detail.c_str());
+        case update::Error::Cancelled: return tr(S::UpdCancelled);
+        case update::Error::None: break;
+    }
+    return {};
+}
+
+// Bar below the toolbar: new version, download progress, restart.
+//
+// Not a modal dialog: an update is never urgent enough to interrupt a build
+// or an edit, and the bar stays until it is answered.
+void App::drawUpdateBanner() {
+    if (!updater_) return;
+    const update::Status st = updater_->status();
+    const bool skipped = !st.manual && !settings_.skippedUpdate.empty() &&
+                         update::releaseId(st.release, updateChannel()) == settings_.skippedUpdate;
+    switch (st.phase) {
+        case update::Phase::Idle: return;
+        case update::Phase::Checking:
+        case update::Phase::UpToDate:
+            if (!st.manual) return;
+            break;
+        case update::Phase::Available:
+            if (updateBannerHidden_ || skipped) return;
+            break;
+        case update::Phase::Failed:
+            // A startup check without network is nobody's business.
+            if (!st.manual) return;
+            break;
+        default: break;
+    }
+
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const bool  bad = st.phase == update::Phase::Failed;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, bad ? ImVec4(0.45f, 0.16f, 0.16f, 0.55f)
+                                                : ImVec4(0.16f, 0.36f, 0.62f, 0.45f));
+    ImGui::BeginChild("updbanner", ImVec2(0, 0),
+                      ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleColor();
+
+    const std::string mine = update::displayName(platform_.build);
+    const std::string theirs = update::displayName(st.release, updateChannel());
+    const auto mb = [](std::uint64_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
+
+    switch (st.phase) {
+        case update::Phase::Checking:
+            ImGui::TextUnformatted(tr(S::UpdChecking));
+            break;
+        case update::Phase::UpToDate:
+            iconText(ICON_CHECK, kIconGood, trf(S::UpdUpToDate, mine.c_str()).c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::DlgClose))) updater_->dismiss();
+            break;
+        case update::Phase::Available:
+            iconText(ICON_INFO, kIconInfo,
+                     trf(S::UpdAvailable, theirs.c_str(), mine.c_str()).c_str());
+            ImGui::SameLine(0, 16 * k);
+            if (ImGui::SmallButton(tr(S::UpdInstall))) updater_->install();
+            if (!st.release.htmlUrl.empty() && platform_.openUrl) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton(tr(S::UpdNotes))) platform_.openUrl(st.release.htmlUrl);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::UpdLater))) updateBannerHidden_ = true;
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::UpdSkip))) {
+                settings_.skippedUpdate = update::releaseId(st.release, updateChannel());
+                updateBannerHidden_ = true;
+            }
+            break;
+        case update::Phase::Downloading: {
+            ImGui::TextUnformatted(trf(S::UpdDownloading, theirs.c_str()).c_str());
+            ImGui::SameLine();
+            char overlay[64];
+            std::snprintf(overlay, sizeof(overlay), "%.1f / %.1f MB", mb(st.done), mb(st.total));
+            const float frac =
+                st.total ? static_cast<float>(st.done) / static_cast<float>(st.total) : 0.0f;
+            ImGui::ProgressBar(frac, ImVec2(220 * k, 0), overlay);
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::BtnCancel))) updater_->cancel();
+            break;
+        }
+        case update::Phase::Installed:
+            iconText(ICON_CHECK, kIconGood, trf(S::UpdInstalled, theirs.c_str()).c_str());
+            ImGui::SameLine(0, 16 * k);
+            if (ImGui::SmallButton(tr(S::UpdRestart))) {
+                restartRequested_ = true;
+                requestQuit();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::UpdLater))) updater_->dismiss();
+            if (!st.detail.empty()) ImGui::TextDisabled("%s", st.detail.c_str());
+            break;
+        case update::Phase::Failed: {
+            iconText(ICON_ERROR, kIconBad, describeUpdateError(st).c_str());
+            ImGui::SameLine(0, 16 * k);
+            if (platform_.openUrl && ImGui::SmallButton(tr(S::UpdOpenPage)))
+                platform_.openUrl(std::string("https://github.com/") + update::kRepo + "/releases");
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::DlgClose))) updater_->dismiss();
+            break;
+        }
+        case update::Phase::Idle: break;
+    }
     ImGui::EndChild();
 }
 
 namespace {
 
-// Ziehen und Ablegen in der Sequenztabelle: VOR oder HINTER der Zeile?
+// Drag and drop in the sequence table: BEFORE or AFTER the row?
 //
-// ImGui rahmte beim Darueberziehen die ganze Zeile ein, und abgelegt wurde
-// immer davor. Man sah also nicht, wo die Sequenz landet, und in die
-// untere Haelfte einer Zeile zu ziehen hiess trotzdem "davor".
+// When dragging over, ImGui outlined the whole row, and the drop always went
+// before it. So you couldn't see where the sequence would land, and dragging
+// into the lower half of a row still meant "before".
 //
-// Jetzt entscheidet die Mausposition: obere Haelfte davor, untere Haelfte
-// dahinter — und eine Linie zeigt genau diese Stelle.
+// Now the mouse position decides: upper half before, lower half after - and
+// a line shows exactly that spot.
 constexpr ImGuiDragDropFlags kDropFlags =
     ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
 
@@ -2152,9 +2319,9 @@ bool dropBelow() {
     return ImGui::GetMousePos().y > mid;
 }
 
-// Einfuegelinie an der Ober- oder Unterkante des zuletzt gezeichneten
-// Elements. Auf der Vordergrundebene, weil die Tabelle jede Spalte auf
-// ihren eigenen Bereich beschneidet; begrenzt auf das Tabellenfenster.
+// Insertion line at the top or bottom edge of the last drawn item. On the
+// foreground layer, because the table clips each column to its own area;
+// limited to the table window.
 void drawDropLine(bool below, float k) {
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
@@ -2169,7 +2336,7 @@ void drawDropLine(bool below, float k) {
 
 }  // namespace
 
-// Dieselbe Regel wie beim Zeichnen: Name oder Datei enthaelt den Filtertext.
+// Same rule as when drawing: the name or the file contains the filter text.
 bool App::rowVisible(const Document& d, std::size_t i) const {
     if (filter_[0] == '\0') return true;
     if (i >= d.script.grabs.size()) return false;
@@ -2185,11 +2352,11 @@ void App::drawSequenceTable(Document& d) {
         return;
     }
 
-    // Ausgabeort dieses Skripts.
+    // Output location of this script.
     //
-    // Wichtig ist, dass man SIEHT, ob hier etwas Eigenes steht oder der
-    // globale Wert durchschlaegt. Ein Platzhalter in Grau sieht aus wie ein
-    // gesetzter Wert und ist damit schlimmer als gar keine Anzeige.
+    // What matters is that you SEE whether something of its own is set here
+    // or the global value shines through. A gray placeholder looks like a set
+    // value and is therefore worse than no display at all.
     {
         const bool own = !d.outputDir.empty();
 
@@ -2198,8 +2365,8 @@ void App::drawSequenceTable(Document& d) {
         if (own) {
             ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", d.outputDir.c_str());
         } else {
-            // Uebersetzt, und ohne Geviertstrich: der liegt ausserhalb des
-            // Zeichensatzes der deutschen Schrift und erschien als "?".
+            // Translated, and without an em dash: it lies outside the glyph
+            // range of the German font and showed up as "?".
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1), "%s", tr(S::NotSet));
         }
 
@@ -2262,12 +2429,12 @@ void App::drawSequenceTable(Document& d) {
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                   ImGuiTableFlags_SizingStretchProp;
-    // Ausdruecklich die verbleibende Hoehe. Mit -1 blieb je nach Umgebung
-    // Platz uebrig, und darunter klaffte eine Leerflaeche.
-    // Achte Spalte: der Zeilenkommentar. Die Zahl MUSS zur Anzahl der
-    // TableSetupColumn-Aufrufe passen — sonst meldet ImGui
-    // "Called TableSetupColumn() too many times", und die ueberzaehlige
-    // Spalte rutscht in eine eigene Zeile.
+    // Explicitly the remaining height. With -1, depending on the environment,
+    // space was left over and an empty gap gaped below.
+    // Eighth column: the row comment. The number MUST match the number of
+    // TableSetupColumn calls - otherwise ImGui reports
+    // "Called TableSetupColumn() too many times", and the extra column slips
+    // into a row of its own.
     if (!ImGui::BeginTable("seqs", 8, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
         return;
 
@@ -2279,8 +2446,8 @@ void App::drawSequenceTable(Document& d) {
     ImGui::TableSetupColumn(tr(S::ColExtra), ImGuiTableColumnFlags_WidthFixed, 60);
     ImGui::TableSetupColumn(tr(S::ColSource), ImGuiTableColumnFlags_WidthStretch, 3.0f);
     ImGui::TableSetupColumn(tr(S::ColEnum), ImGuiTableColumnFlags_WidthFixed, 70);
-    // Zeilenkommentar ganz rechts: er ist ein Hinweis, keine Angabe, die
-    // man beim Ueberfliegen braucht.
+    // Row comment on the far right: it's a note, not information you need
+    // when skimming.
     ImGui::TableSetupColumn(tr(S::ColComment), ImGuiTableColumnFlags_WidthStretch, 1.5f);
     ImGui::TableHeadersRow();
     if (ImGui::TableGetHoveredColumn() == 6 && ImGui::IsItemHovered())
@@ -2297,32 +2464,32 @@ void App::drawSequenceTable(Document& d) {
             g.file.find(needle) == std::string::npos)
             continue;
 
-        // Kommentarzeilen ueber der Sequenz anzeigen.
+        // Show comment lines above the sequence.
         //
-        // Ohne das sieht man in der Tabelle nicht, wo die Gliederung sitzt —
-        // und sie waere nur in der fertigen animation.cfg sichtbar, also zu
-        // spaet zum Nachbessern.
+        // Without this you can't see in the table where the structure is -
+        // and it would only be visible in the finished animation.cfg, i.e.
+        // too late to fix.
         for (std::size_t ci = 0; ci < g.commentsBefore.size(); ++ci) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
             const bool bearbeite = editCommentGrab_ == static_cast<int>(i) &&
                                    editCommentLine_ == static_cast<int>(ci);
-            // Eigene Kennung aus Grab und Zeile. Frueher i*1000+ci: das
-            // kollidierte ab Grab 900 mit den Schlusskommentaren (900000+ti)
-            // und ab Grab 1 mit den Zeilen-IDs grosser Skripte.
+            // Own ID from grab and line. Previously i*1000+ci: that collided
+            // from grab 900 on with the trailing comments (900000+ti) and from
+            // grab 1 on with the row IDs of large scripts.
             char cid[48];
             std::snprintf(cid, sizeof(cid), "cmt%zu_%zu", i, ci);
             ImGui::PushID(cid);
 
             if (bearbeite) {
-                // Direkt in der Zeile bearbeiten.
+                // Edit directly in the row.
                 ImGui::SetNextItemWidth(-1);
-                // Einmal Fokus anfordern, wenn das Bearbeiten beginnt — nicht in
-                // jedem Bild, solange gerade nichts aktiv ist. Direkt nach dem
-                // Doppelklick haelt noch die Maus das Element darunter, und
-                // die wiederholte Anforderung kam nie zum Zug: das Feld
-                // erschien, aber getippter Text ging ins Leere.
+                // Request focus once when editing starts - not every frame
+                // while nothing is active. Right after the double-click the
+                // mouse still holds the item underneath, and the repeated
+                // request never got its turn: the field appeared, but typed
+                // text went nowhere.
                 if (focusEditField_) {
                     ImGui::SetKeyboardFocusHere();
                     focusEditField_ = false;
@@ -2331,13 +2498,13 @@ void App::drawSequenceTable(Document& d) {
                     "##cedit", editCommentBuf_, sizeof(editCommentBuf_),
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
 
-                // Uebernehmen bei Enter ODER wenn der Fokus weggeht —
-                // sonst geht die Eingabe verloren, wenn jemand danebenklickt.
+                // Apply on Enter OR when focus leaves - otherwise the input
+                // is lost when someone clicks elsewhere.
                 if (fertig || (!ImGui::IsItemActive() && ImGui::IsItemDeactivated())) {
                     std::string neu = editCommentBuf_;
                     if (neu.empty()) {
-                        // Leer = Zeile loeschen. Eine leere Kommentarzeile
-                        // haette in der cfg keinen Zweck.
+                        // Empty = delete the line. An empty comment line
+                        // would serve no purpose in the cfg.
                         d.script.grabs[i].commentsBefore.erase(
                             d.script.grabs[i].commentsBefore.begin() + static_cast<long>(ci));
                     } else {
@@ -2355,10 +2522,10 @@ void App::drawSequenceTable(Document& d) {
                                       ImGuiSelectableFlags_AllowDoubleClick);
                 ImGui::PopStyleColor();
 
-                // Ziehen wie eine Sequenz.
+                // Drag like a sequence.
                 //
-                // Eigene Kennung "g2c_cmt": ein Trenner soll sich nicht mit
-                // einer Sequenz vertauschen lassen, und umgekehrt.
+                // Separate ID "g2c_cmt": a separator must not be swappable with
+                // a sequence, and vice versa.
                 if (!hasFilter &&
                     ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
                     const std::size_t payload[3] = {static_cast<std::size_t>(active_), i, ci};
@@ -2367,7 +2534,7 @@ void App::drawSequenceTable(Document& d) {
                     ImGui::EndDragDropSource();
                 }
                 if (!hasFilter && ImGui::BeginDragDropTarget()) {
-                    // Ueber der Kommentarzeile ci oder darunter.
+                    // Above comment line ci or below it.
                     const bool below = dropBelow();
                     const std::size_t at = below ? ci + 1 : ci;
                     if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
@@ -2379,8 +2546,8 @@ void App::drawSequenceTable(Document& d) {
                             log(LogLine::Kind::Warn, tr(S::DragOtherTab));
                         }
                     }
-                    // Eine Sequenz zwischen zwei Trennlinien: die Zeilen
-                    // oberhalb der Linie gehen an die eingefuegte Sequenz.
+                    // A sequence between two separator lines: the lines above
+                    // the drop line go to the inserted sequence.
                     if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_row", kDropFlags)) {
                         const auto* q = static_cast<const std::size_t*>(pl->Data);
                         if (q[0] == static_cast<std::size_t>(active_)) {
@@ -2408,11 +2575,11 @@ void App::drawSequenceTable(Document& d) {
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CommentEditHint));
 
-                // Rechtsklick auf die Kommentarzeile: loeschen.
+                // Right-click on the comment line: delete.
                 if (ImGui::BeginPopupContextItem("cctx")) {
-                    // Der Trenner laesst sich unabhaengig von den
-                    // Animationen verschieben — er gehoert keiner Sequenz,
-                    // auch wenn er im Dateiformat an einer haengt.
+                    // The separator can be moved independently of the
+                    // animations - it belongs to no sequence, even though in
+                    // the file format it is attached to one.
                     if (ImGui::MenuItem(tr(S::MoveUp)))
                         moveComment(static_cast<std::size_t>(active_), i, ci, true);
                     if (ImGui::MenuItem(tr(S::MoveDown)))
@@ -2441,23 +2608,22 @@ void App::drawSequenceTable(Document& d) {
                                    ImGui::GetColorU32(ImVec4(0.45f, 0.32f, 0.10f, 1.0f)));
             jumpToRow_ = -1;
         }
-        // Beim Druecken entscheidet sich, was das Ziehen bedeutet: auf einer
-        // bereits ausgewaehlten Zeile ein Verschieben, sonst eine neue
-        // Auswahl. So macht es der Explorer.
+        // On press it is decided what the drag means: on an already selected
+        // row a move, otherwise a new selection. That's how Explorer does it.
         const bool wasSelected = sel;
 
-        // AllowOverlap: die Zeile spannt ueber alle Spalten, darf aber die
-        // Elemente darin nicht verdecken. Ohne das kam kein Klick beim
-        // Zeilenkommentar an — ein Doppelklick darauf oeffnete stattdessen
-        // den Sequenzdialog —, und die Tooltips der Enum-Spalte erschienen nie.
+        // AllowOverlap: the row spans all columns but must not cover the items
+        // inside it. Without this no click reached the row comment - a
+        // double-click on it opened the sequence dialog instead - and the
+        // tooltips of the enum column never appeared.
         if (ImGui::Selectable(name.c_str(), sel || isJumpTarget,
                               ImGuiSelectableFlags_SpanAllColumns |
                                   ImGuiSelectableFlags_AllowDoubleClick |
                                   ImGuiSelectableFlags_AllowOverlap)) {
-            // Mehrfachauswahl wie in jedem Dateimanager:
-            //   einfacher Klick   - nur diese Zeile
-            //   Strg + Klick      - einzelne dazu oder weg
-            //   Umschalt + Klick  - Bereich vom Anker bis hierher
+            // Multi-selection like in any file manager:
+            //   plain click       - only this row
+            //   Ctrl + click      - add or remove a single row
+            //   Shift + click     - range from the anchor to here
             const bool ctrl = ImGui::IsKeyDown(ImGuiMod_Ctrl);
             const bool shift = ImGui::IsKeyDown(ImGuiMod_Shift);
 
@@ -2465,9 +2631,9 @@ void App::drawSequenceTable(Document& d) {
                 std::size_t a = static_cast<std::size_t>(selAnchor_), b = i;
                 if (a > b) std::swap(a, b);
                 if (!ctrl) std::fill(d.selected.begin(), d.selected.end(), char{0});
-                // Nur sichtbare Zeilen. Mit Filter lagen dazwischen
-                // ausgeblendete Sequenzen, die mit ausgewaehlt wurden — und
-                // "Loeschen" traf dann Zeilen, die man nicht sehen konnte.
+                // Only visible rows. With a filter, hidden sequences lay in
+                // between and got selected too - and "Delete" then hit rows
+                // you couldn't see.
                 for (std::size_t k = a; k <= b && k < d.selected.size(); ++k)
                     if (rowVisible(d, k)) d.selected[k] = 1;
             } else if (ctrl) {
@@ -2486,11 +2652,10 @@ void App::drawSequenceTable(Document& d) {
             }
         }
 
-        // Auswahl mit gehaltener Maustaste aufziehen.
+        // Drag out a selection with the mouse button held.
         //
-        // Beginnt nur auf einer NICHT ausgewaehlten Zeile — sonst koennte man
-        // eine getroffene Auswahl nicht mehr verschieben, ohne sie vorher zu
-        // verlieren.
+        // Only starts on a NON-selected row - otherwise you could no longer
+        // move an existing selection without losing it first.
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !wasSelected && !ImGui::IsKeyDown(ImGuiMod_Ctrl) &&
             !ImGui::IsKeyDown(ImGuiMod_Shift)) {
@@ -2506,20 +2671,20 @@ void App::drawSequenceTable(Document& d) {
                 if (rowVisible(d, k)) d.selected[k] = 1;
         }
 
-        // Umordnen durch Ziehen.
+        // Reorder by dragging.
         //
-        // Nur ohne Filter: die Tabelle zeigt dann alle Zeilen, und die
-        // Zielposition ist eindeutig. Mit Filter waere "hierhin" mehrdeutig,
-        // weil dazwischen ausgeblendete Sequenzen liegen.
+        // Only without a filter: the table then shows all rows, and the target
+        // position is unambiguous. With a filter "here" would be ambiguous,
+        // because hidden sequences lie in between.
         if (!hasFilter) {
-            // Die Nutzlast traegt das Skript mit. ImGui schaltet beim
-            // Darueberziehen den Tab um; ohne diese Angabe verschob ein Ziehen
-            // von Tab A nach Tab B die Zeile mit derselben Nummer in B.
+            // The payload carries the script along. ImGui switches tabs when
+            // dragging over them; without this, a drag from tab A to tab B moved
+            // the row with the same number in B.
             if (wasSelected &&
                 ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
                 const std::size_t payload[2] = {static_cast<std::size_t>(active_), i};
                 ImGui::SetDragDropPayload("g2c_row", payload, sizeof(payload));
-                // Bei mehreren gewaehlten Zeilen sagen, dass alle mitkommen.
+                // With several selected rows, say that all of them come along.
                 const std::size_t nsel =
                     static_cast<std::size_t>(std::count(d.selected.begin(), d.selected.end(), 1));
                 if (nsel > 1)
@@ -2529,9 +2694,9 @@ void App::drawSequenceTable(Document& d) {
                 ImGui::EndDragDropSource();
             }
             if (ImGui::BeginDragDropTarget()) {
-                // Obere Haelfte: davor, also zwischen die Kommentarzeilen
-                // dieser Sequenz und die Sequenz selbst. Untere Haelfte:
-                // dahinter, vor die Kommentarzeilen der naechsten.
+                // Upper half: before, i.e. between this sequence's comment
+                // lines and the sequence itself. Lower half: after, before the
+                // comment lines of the next one.
                 const bool below = dropBelow();
                 const std::size_t nKomm = g.commentsBefore.size();
                 if (const ImGuiPayload* pc = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
@@ -2557,8 +2722,8 @@ void App::drawSequenceTable(Document& d) {
                             for (std::size_t r = 0; r < d.selected.size(); ++r)
                                 if (d.selected[r]) rows.push_back(r);
                             if (std::find(rows.begin(), rows.end(), from) == rows.end()) rows = {from};
-                            // Davor: die Ueberschriften dieser Sequenz stehen
-                            // oberhalb der Linie und gehen an die eingefuegte.
+                            // Before: this sequence's headings sit above the
+                            // line and go to the inserted one.
                             pendingBlock_ = below ? PendingBlock{rows, i + 1, 0}
                                                   : PendingBlock{rows, i, nKomm};
                         }
@@ -2568,7 +2733,7 @@ void App::drawSequenceTable(Document& d) {
             }
         }
 
-        // Rechte Maustaste: umordnen, bearbeiten, loeschen.
+        // Right mouse button: reorder, edit, delete.
         if (ImGui::BeginPopupContextItem(("ctx" + std::to_string(i)).c_str())) {
             if (ImGui::MenuItem(withIcon(ICON_EDIT, tr(S::CtxEdit)))) {
                 editRow_ = static_cast<int>(i);
@@ -2577,8 +2742,8 @@ void App::drawSequenceTable(Document& d) {
             }
             ImGui::Separator();
 
-            // Betroffen sind alle ausgewaehlten Zeilen; ist die
-            // angeklickte nicht darunter, gilt nur sie.
+            // All selected rows are affected; if the clicked one isn't among
+            // them, only it applies.
             std::vector<std::size_t> rows;
             for (std::size_t k = 0; k < d.selected.size(); ++k)
                 if (d.selected[k]) rows.push_back(k);
@@ -2599,11 +2764,11 @@ void App::drawSequenceTable(Document& d) {
             ImGui::EndDisabled();
             if (hasFilter) ImGui::TextDisabled("%s", tr(S::FilterBlocksMove));
 
-            // Ausgewaehlte hierhin verschieben — der Rechtsklick sagt WOHIN.
+            // Move the selected rows here - the right-click says WHERE.
             //
-            // Zusammen mit der Mehrfachauswahl ist das der bequemste Weg,
-            // verstreute Sequenzen zusammenzufuehren: erst mit Strg
-            // einsammeln, dann an der Zielstelle rechtsklicken.
+            // Together with multi-selection this is the most convenient way to
+            // gather scattered sequences: first collect them with Ctrl, then
+            // right-click at the target spot.
             {
                 std::vector<std::size_t> selOnly;
                 for (std::size_t k = 0; k < d.selected.size(); ++k)
@@ -2621,15 +2786,15 @@ void App::drawSequenceTable(Document& d) {
                 }
             }
 
-            // Schnellweg fuer die Gliederung, ohne den Dialog zu oeffnen.
+            // Shortcut for structuring, without opening the dialog.
             if (ImGui::MenuItem(tr(S::AddDivider))) {
                 d.script.grabs[i].commentsBefore.push_back(
                     "//////////////////////////////////////////");
                 d.dirty = true;
             }
             if (ImGui::MenuItem(tr(S::AddComment))) {
-                // Leere Zeile anlegen und sofort zum Bearbeiten oeffnen —
-                // ohne Umweg ueber den Dialog.
+                // Create an empty line and open it for editing right away -
+                // without a detour through the dialog.
                 d.script.grabs[i].commentsBefore.emplace_back();
                 editCommentGrab_ = static_cast<int>(i);
                 focusEditField_ = true;
@@ -2706,20 +2871,20 @@ void App::drawSequenceTable(Document& d) {
                 ImGui::SetTooltip(tr(S::EnumTooltipMissing), name.c_str());
         }
 
-        // Zeilenkommentar: anzeigen und per Doppelklick bearbeiten.
+        // Row comment: display it and edit it via double-click.
         //
-        // Er steht in der .car hinter der Grab-Zeile und wandert in die
-        // animation.cfg an dieselbe Stelle — so macht es Raven auch.
+        // In the .car it sits after the grab line and moves into the
+        // animation.cfg at the same spot - that's how Raven does it too.
         ImGui::TableNextColumn();
         {
             const bool bearbeite = editTrailGrab_ == static_cast<int>(i);
             if (bearbeite) {
                 ImGui::SetNextItemWidth(-1);
-                // Einmal Fokus anfordern, wenn das Bearbeiten beginnt — nicht in
-                // jedem Bild, solange gerade nichts aktiv ist. Direkt nach dem
-                // Doppelklick haelt noch die Maus das Element darunter, und
-                // die wiederholte Anforderung kam nie zum Zug: das Feld
-                // erschien, aber getippter Text ging ins Leere.
+                // Request focus once when editing starts - not every frame
+                // while nothing is active. Right after the double-click the
+                // mouse still holds the item underneath, and the repeated
+                // request never got its turn: the field appeared, but typed
+                // text went nowhere.
                 if (focusEditField_) {
                     ImGui::SetKeyboardFocusHere();
                     focusEditField_ = false;
@@ -2729,8 +2894,8 @@ void App::drawSequenceTable(Document& d) {
                                      ImGuiInputTextFlags_EnterReturnsTrue);
                 if (fertig || (!ImGui::IsItemActive() && ImGui::IsItemDeactivated())) {
                     std::string neu = editTrailBuf_;
-                    // Ohne "//" davor waere es in der Datei keine
-                    // Kommentarzeile, sondern Unsinn hinter den Zahlen.
+                    // Without a leading "//" it wouldn't be a comment line in
+                    // the file, but garbage after the numbers.
                     if (!neu.empty() && neu.compare(0, 2, "//") != 0) neu = "// " + neu;
                     d.script.grabs[i].trailingComment = neu;
                     d.dirty = true;
@@ -2754,19 +2919,19 @@ void App::drawSequenceTable(Document& d) {
 
         ImGui::PopID();
     }
-    // Ablagezeile ganz unten.
+    // Drop row at the very bottom.
     //
-    // Ohne sie liesse sich ein Trenner nur dann ans Ende ziehen, wenn dort
-    // schon einer liegt — also genau dann nicht, wenn man den ersten
-    // hinsetzen will.
+    // Without it a separator could only be dragged to the end if one is
+    // already there - i.e. precisely not when you want to place the first
+    // one.
     if (!d.script.grabs.empty()) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::PushID("dropend");
         ImGui::Selectable("##dropend", false, ImGuiSelectableFlags_SpanAllColumns);
         if (ImGui::BeginDragDropTarget()) {
-            // Die Linie steht immer oben: direkt hinter der letzten Animation,
-            // vor den Schlusskommentaren.
+            // The line is always at the top: right after the last animation,
+            // before the trailing comments.
             const std::size_t ende = d.script.grabs.size();
             if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
                 const auto* q = static_cast<const std::size_t*>(pl->Data);
@@ -2797,11 +2962,10 @@ void App::drawSequenceTable(Document& d) {
         ImGui::PopID();
     }
 
-    // Kommentare hinter der letzten Animation.
+    // Comments after the last animation.
     //
-    // Sie haengen an keinem Grab und wuerden sonst nur in der fertigen
-    // animation.cfg auftauchen — also da, wo man sie nicht mehr bearbeiten
-    // kann.
+    // They aren't attached to any grab and would otherwise only show up in
+    // the finished animation.cfg - i.e. where they can no longer be edited.
     for (std::size_t ti = 0; ti < d.script.trailingComments.size(); ++ti) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -2814,8 +2978,8 @@ void App::drawSequenceTable(Document& d) {
         ImGui::PopStyleColor();
 
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
-            // Schlusszeilen sitzen nicht an einem Grab — die Herkunft wird
-            // mit dem Grab-Index "ganz hinten" verschluesselt.
+            // Trailing lines aren't attached to a grab - the origin is
+            // encoded with the grab index "at the very end".
             const std::size_t payload[3] = {static_cast<std::size_t>(active_), d.script.grabs.size(), ti};
             ImGui::SetDragDropPayload("g2c_cmt", payload, sizeof(payload));
             ImGui::TextUnformatted(c.empty() ? " " : c.c_str());
@@ -2839,7 +3003,7 @@ void App::drawSequenceTable(Document& d) {
 
         if (ImGui::BeginPopupContextItem("tctx")) {
             if (ImGui::MenuItem(tr(S::MoveUp)) && !d.script.grabs.empty()) {
-                // Zurueck an den letzten Grab.
+                // Back to the last grab.
                 d.script.grabs.back().commentsBefore.push_back(c);
                 d.script.trailingComments.erase(
                     d.script.trailingComments.begin() + static_cast<long>(ti));
@@ -2858,12 +3022,12 @@ void App::drawSequenceTable(Document& d) {
 
     ImGui::EndTable();
 
-    // Verschobenen Trenner jetzt umhaengen — nicht mitten im Zeichnen.
+    // Re-attach the moved separator now - not in the middle of drawing.
     if (pendingCommentMove_.aktiv) {
         const auto m = pendingCommentMove_;
         pendingCommentMove_ = {};
 
-        // Text holen und an der alten Stelle entfernen.
+        // Fetch the text and remove it from the old spot.
         std::string text;
         bool gefunden = false;
         if (m.vonGrab >= d.script.grabs.size()) {
@@ -2886,8 +3050,8 @@ void App::drawSequenceTable(Document& d) {
             auto& ziel = m.zuGrab < d.script.grabs.size() ? d.script.grabs[m.zuGrab].commentsBefore
                                                           : d.script.trailingComments;
             std::size_t pos = m.zuZeile;
-            // Aus derselben Liste entfernt und dahinter eingefuegt: die
-            // Zielposition ist um eins nach vorn gerutscht.
+            // Removed from the same list and inserted after it: the target
+            // position has shifted forward by one.
             const bool gleicheListe =
                 (m.vonGrab >= d.script.grabs.size() && m.zuGrab >= d.script.grabs.size()) ||
                 m.vonGrab == m.zuGrab;
@@ -2901,14 +3065,14 @@ void App::drawSequenceTable(Document& d) {
 
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) rangeSelecting_ = false;
 
-    // Umordnen erst HIER ausfuehren, nach der Tabelle.
+    // Only perform the reordering HERE, after the table.
     //
-    // Mitten im Zeichnen die Liste umzustellen, ueber die gerade iteriert
-    // wird, ist der klassische Weg zum Absturz. Deshalb merkt sich das
-    // Kontextmenue nur, WAS zu tun ist, und getan wird es danach.
-    // Einfuegen erst NACH der Tabelle, aus demselben Grund wie das
-    // Umordnen: mitten im Zeichnen die Liste zu veraendern, ueber die
-    // gerade iteriert wird, ist der klassische Weg zum Absturz.
+    // Rearranging the list that is currently being iterated in the middle of
+    // drawing is the classic way to crash. That's why the context menu only
+    // remembers WHAT to do, and it is done afterwards.
+    // Pasting only AFTER the table, for the same reason as reordering:
+    // changing the list that is currently being iterated in the middle of
+    // drawing is the classic way to crash.
     if (pendingPaste_ >= 0) {
         const std::size_t n =
             pasteGrabs(static_cast<std::size_t>(active_), static_cast<std::size_t>(pendingPaste_));
@@ -2922,9 +3086,9 @@ void App::drawSequenceTable(Document& d) {
         std::sort(pb.rows.begin(), pb.rows.end());
         pb.rows.erase(std::unique(pb.rows.begin(), pb.rows.end()), pb.rows.end());
 
-        // Kommentare oberhalb der Ablagelinie gehoeren danach zur ersten
-        // verschobenen Sequenz — vor dem Verschieben umhaengen, dann wandern
-        // sie mit und landen genau dort, wo die Linie stand.
+        // Comments above the drop line then belong to the first moved
+        // sequence - re-attach them before moving, then they travel along and
+        // land exactly where the line was.
         auto& grabs = d.script.grabs;
         const bool valid = pb.before <= grabs.size() && pb.rows.back() < grabs.size() &&
                            std::find(pb.rows.begin(), pb.rows.end(), pb.before) == pb.rows.end();
@@ -2968,26 +3132,26 @@ void App::drawTabs() {
         label += "###" + d.path;
 
         bool open = true;
-        // Tab-Kreuze erst nach der Schleife auswerten: mitten im Zeichnen die
-        // Liste zu verkleinern, ueber die gerade iteriert wird, geht nicht gut.
-        // Der Tab waehlt nur aus; die Tabelle wird unten EINMAL gezeichnet.
+        // Evaluate tab close buttons only after the loop: shrinking the list
+        // that is currently being iterated in the middle of drawing doesn't
+        // end well. The tab only selects; the table is drawn ONCE below.
         //
-        // Innerhalb des Tabs haette die Tabelle je Tab eine eigene Kennung,
-        // und ImGui merkte sich die Spaltenbreiten dann zwanzigmal getrennt.
-        // Ausserhalb ist die Kennung stabil, und eine einmal eingestellte
-        // Breite gilt fuer alle Skripte und ueberlebt den Neustart.
-        // Von aussen gewaehlter Tab (Doppelklick auf eine .car, Wiederherstellen
-        // beim Start, Oeffnen eines schon offenen Skripts).
+        // Inside the tab, the table would have its own ID per tab, and ImGui
+        // would then remember the column widths twenty times separately.
+        // Outside, the ID is stable, and a width set once applies to all
+        // scripts and survives a restart.
+        // Tab selected from outside (double-click on a .car, restore at
+        // startup, opening an already open script).
         //
-        // Frueher wurde dafuer nur active_ gesetzt. ImGui wusste davon nichts,
-        // zeigte weiter seinen eigenen Tab — beim Start den ersten — und
-        // ueberschrieb active_ damit im selben Bild wieder. Wer eine .car
-        // doppelklickte, die im 24. Tab lag, landete im ersten.
+        // Previously only active_ was set for this. ImGui knew nothing about
+        // it, kept showing its own tab - at startup the first one - and
+        // overwrote active_ with it again in the same frame. Anyone who
+        // double-clicked a .car that was in the 24th tab ended up in the first.
         const bool soll = static_cast<int>(i) == selectTab_;
         if (ImGui::BeginTabItem(label.c_str(), &open,
                                 soll ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
-            // Solange die Auswahl noch aussteht, zeigt ImGui fuer ein Bild den
-            // alten Tab. Der darf active_ dann nicht zuruecksetzen.
+            // While the selection is still pending, ImGui shows the old tab for
+            // one frame. That one must not reset active_.
             if (selectTab_ < 0 || soll) {
                 active_ = static_cast<int>(i);
                 selectTab_ = -1;
@@ -3001,13 +3165,13 @@ void App::drawTabs() {
     }
     ImGui::EndTabBar();
 
-    // Erst nach der Tableiste schliessen — und mit Rueckfrage, wenn das
-    // Skript Aenderungen hat. Das Kreuz verwarf sie frueher ohne Warnung.
+    // Only close after the tab bar - and with a confirmation if the script
+    // has changes. The close button used to discard them without warning.
     if (!closeClicked.empty()) requestClose(closeClicked);
 
-    // Der Sequenzdialog gehoert zu einem Skript. Wird ein anderer Tab
-    // aktiv, schliesst er — sonst bearbeitete er dieselbe Zeilennummer im
-    // neuen Skript.
+    // The sequence dialog belongs to one script. If another tab becomes
+    // active, it closes - otherwise it would edit the same row number in the
+    // new script.
     if (editOpen_ && (active_ < 0 || active_ >= static_cast<int>(docs_.size()) ||
                       docs_[static_cast<std::size_t>(active_)].path != editDocPath_)) {
         editOpen_ = false;
@@ -3022,12 +3186,11 @@ void App::drawTabs() {
     }
 }
 
-// Skelettvorschau.
+// Skeleton preview.
 //
-// Gezeichnet wird mit ImGuis Zeichenliste, nicht mit DirectX. Ein Skelett
-// braucht keine Grafikschnittstelle: ein paar hundert Linien pro Bild
-// zeichnet ImGui ohne Muehe, und der Code bleibt damit in einer Datei, die
-// sich pruefen laesst.
+// Drawing is done with ImGui's draw list, not with DirectX. A skeleton needs
+// no graphics API: ImGui draws a few hundred lines per frame effortlessly,
+// and the code thus stays in one file that can be checked.
 void App::drawPreviewPanel() {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     auto& ex = extract_;
@@ -3037,9 +3200,9 @@ void App::drawPreviewPanel() {
         return;
     }
 
-    // Sequenzauswahl.
-    // Ohne Sequenz gibt es nichts abzuspielen. Der Zugriff auf seqs[0] lief
-    // frueher trotzdem — mit einer leeren Liste ausserhalb des Feldes.
+    // Sequence selection.
+    // Without a sequence there is nothing to play. The access to seqs[0] used
+    // to run anyway - with an empty list, out of bounds.
     if (ex.seqs.empty()) {
         ImGui::TextDisabled("%s", tr(S::PreviewNoGla));
         return;
@@ -3049,7 +3212,7 @@ void App::drawPreviewPanel() {
 
     ImGui::SetNextItemWidth(320 * k);
     if (ImGui::BeginCombo(tr(S::PreviewSeq), seq.name.c_str())) {
-        // Bei tausend Sequenzen nur die zeigen, die zum Filter passen.
+        // With a thousand sequences, show only those matching the filter.
         const std::string needle = extractFilter_;
         for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
             if (!needle.empty() && ex.seqs[i].name.find(needle) == std::string::npos) continue;
@@ -3067,7 +3230,7 @@ void App::drawPreviewPanel() {
     ImGui::InputTextWithHint("##pvfilter", tr(S::FilterHint), extractFilter_,
                              sizeof(extractFilter_));
 
-    // Steuerung.
+    // Controls.
     if (ImGui::Button(playback_.playing ? withIcon(ICON_CANCEL, tr(S::PreviewPause))
                                         : withIcon(ICON_BUILD, tr(S::PreviewPlay))))
         playback_.playing = !playback_.playing;
@@ -3083,9 +3246,9 @@ void App::drawPreviewPanel() {
     ImGui::SameLine();
     if (ImGui::SmallButton(tr(S::PreviewReset))) previewCam_ = PreviewCamera{};
 
-    // Zeit fortschreiben. Die Rate kommt aus der animation.cfg, nicht aus
-    // der Bildrate der Oberflaeche: eine Animation mit 20 Bildern je
-    // Sekunde soll auch bei 144 Hz mit 20 laufen.
+    // Advance time. The rate comes from the animation.cfg, not from the UI
+    // frame rate: an animation at 20 frames per second should run at 20 even
+    // at 144 Hz.
     const double now = ImGui::GetTime();
     const float dt = previewLastTime_ > 0.0
                          ? static_cast<float>(std::min(0.1, now - previewLastTime_))
@@ -3094,19 +3257,19 @@ void App::drawPreviewPanel() {
     advancePlayback(playback_, dt, seq.fps, seq.count);
     if (playback_.frame >= seq.count) playback_.frame = 0;
 
-    // Weltposen des aktuellen Frames.
+    // World poses of the current frame.
     const int glaFrame = seq.start + playback_.frame;
     const auto world = boneWorldMatrices(ex.gla, glaFrame);
     if (world.empty()) return;
 
-    // Zeichenflaeche.
+    // Canvas.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const ImVec2 size(avail.x, std::max(120.0f * k, avail.y));
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##pvcanvas", size,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 
-    // Beim ersten Bild und nach dem Zuruecksetzen alles ins Bild holen.
+    // On the first frame and after a reset, fit everything into view.
     if (previewCam_.distance <= 0.0f || previewCam_.distance == PreviewCamera{}.distance)
         frameAll(previewCam_, computeBounds(world));
 
@@ -3114,7 +3277,7 @@ void App::drawPreviewPanel() {
         const ImVec2 d = ImGui::GetIO().MouseDelta;
         previewCam_.yawDeg -= d.x * 0.4f;
         previewCam_.pitchDeg += d.y * 0.4f;
-        // Nicht ueber den Pol hinaus: sonst kippt das Bild.
+        // Not past the pole: otherwise the view flips over.
         previewCam_.pitchDeg = std::clamp(previewCam_.pitchDeg, -89.0f, 89.0f);
     }
     if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
@@ -3128,9 +3291,9 @@ void App::drawPreviewPanel() {
 
     const auto lines = buildBoneLines(ex.gla, world, previewCam_, size.x, size.y);
     for (const auto& l : lines) {
-        // Tiefe als Helligkeit: was weiter weg ist, wird dunkler. Ohne das
-        // ist bei einem Skelett von vorn nicht zu erkennen, welcher Arm
-        // vorn liegt.
+        // Depth as brightness: what's farther away gets darker. Without this,
+        // for a skeleton seen from the front you can't tell which arm is in
+        // front.
         const float t = std::clamp(l.depth / (previewCam_.distance * 1.6f), 0.0f, 1.0f);
         const int v = static_cast<int>(230.0f - 130.0f * t);
         dl->AddLine(ImVec2(origin.x + l.x0, origin.y + l.y0),
@@ -3142,7 +3305,7 @@ void App::drawPreviewPanel() {
         dl->AddCircleFilled(ImVec2(origin.x + l.x1, origin.y + l.y1), 2.0f * k,
                             IM_COL32(120, 190, 255, 255));
 
-    // Kopfzeile in der Ecke.
+    // Header line in the corner.
     char info[128];
     std::snprintf(info, sizeof(info), tr(S::PreviewBones), world.size());
     dl->AddText(ImVec2(origin.x + 8 * k, origin.y + 6 * k), IM_COL32(160, 160, 165, 255), info);
@@ -3150,15 +3313,15 @@ void App::drawPreviewPanel() {
                 tr(S::PreviewHint));
 }
 
-// Fehlerliste des aktiven Skripts.
+// Error list of the active script.
 //
-// "9 Fehler" allein ist wertlos — man muss sehen, WELCHE und wo. Ein Klick
-// springt in die Tabelle und hebt die Zeile hervor.
-// Modusleiste am linken Rand.
+// "9 errors" alone is worthless - you need to see WHICH ones and where. A
+// click jumps into the table and highlights the row.
+// Mode bar on the left edge.
 //
-// Zwei Knoepfe statt Reiter oben: die Umschaltung wechselt die GANZE
-// Oberflaeche, nicht nur einen Ausschnitt. Am Rand ist das sichtbar genug,
-// um nicht versehentlich im falschen Modus zu arbeiten.
+// Two buttons instead of tabs at the top: switching changes the WHOLE UI,
+// not just one section. On the edge it's visible enough that you don't
+// accidentally work in the wrong mode.
 void App::drawModeBar() {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
 
@@ -3174,12 +3337,11 @@ void App::drawModeBar() {
         {Mode::Preview, ICON_DOCUMENT, S::ModePreview, S::ModePreviewHint, kIconInfo},
     };
 
-    // Breite aus dem TEXT bestimmen, nicht raten.
+    // Determine the width from the TEXT, don't guess.
     //
-    // Eine feste Zahl passt bestenfalls fuer eine Sprache und eine
-    // Bildschirmaufloesung. "XSI -> GLA" war auf Englisch abgeschnitten,
-    // waehrend dieselbe Zahl fuer die kuerzeren chinesischen Beschriftungen
-    // zu breit gewesen waere.
+    // A fixed number fits at best one language and one screen resolution.
+    // "XSI -> GLA" was cut off in English, while the same number would have
+    // been too wide for the shorter Chinese labels.
     float textW = 0.0f;
     for (const auto& m : modes)
         textW = std::max(textW, ImGui::CalcTextSize(withIcon(m.icon, tr(m.label))).x);
@@ -3195,12 +3357,12 @@ void App::drawModeBar() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.42f, 0.68f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.48f, 0.76f, 1.0f));
         }
-        // Knopf leer zeichnen, Symbol und Text daraufsetzen — so bekommt
-        // das Symbol seine eigene Farbe.
+        // Draw the button empty, then put icon and text on top - that way
+        // the icon gets its own color.
         //
-        // Beim aktiven Modus bleibt es weiss: auf dem blauen Grund waere
-        // eine zweite Farbe unruhig, und welcher Modus laeuft, sagt schon
-        // der Hintergrund.
+        // For the active mode it stays white: on the blue background a second
+        // color would look busy, and the background already tells which mode
+        // is running.
         const ImVec2 bpos = ImGui::GetCursorScreenPos();
         ImGui::PushID(static_cast<int>(m.m));
         const bool hit = ImGui::Button("##mode", ImVec2(-1, 44 * k));
@@ -3233,7 +3395,7 @@ void App::drawModeBar() {
     ImGui::EndChild();
 }
 
-// Oberflaeche fuer die Gegenrichtung.
+// UI for the reverse direction.
 void App::drawExtractPanel() {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     auto& ex = extract_;
@@ -3243,8 +3405,8 @@ void App::drawExtractPanel() {
                                 "GLA (*.gla)\0*.gla\0Alle\0*.*\0", false);
         if (!f.empty()) loadGlaForExtract(f.front());
     }
-    // Die beiden Begleitdateien werden beim Oeffnen selbst gesucht. Die
-    // Schaltflaechen bleiben fuer den Fall, dass sie woanders liegen.
+    // The two companion files are searched for automatically on open. The
+    // buttons remain for the case that they live somewhere else.
     ImGui::SameLine();
     ImGui::BeginDisabled(!ex.loaded);
     if (ImGui::Button(withIcon(ICON_DOCUMENT, tr(S::OpenCfg)))) {
@@ -3281,8 +3443,8 @@ void App::drawExtractPanel() {
 
     ImGui::TextDisabled("%s", ex.glaPath.c_str());
     ImGui::Text(tr(S::GlaInfo), ex.gla.numFrames, ex.gla.skeleton.bones.size());
-    // Was gefunden wurde, sichtbar machen — sonst raetselt man, ob die
-    // Begleitdateien gegriffen haben.
+    // Make visible what was found - otherwise you're left wondering whether
+    // the companion files took effect.
     ImGui::SameLine();
     if (ex.cfgPath.empty())
         iconText(ICON_WARNING, kIconWarn, tr(S::NoCfgWarning));
@@ -3311,7 +3473,7 @@ void App::drawExtractPanel() {
     else
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::FramesLoaded), ex.withMotion);
 
-    // Zielordner.
+    // Target folder.
     ImGui::TextUnformatted(tr(S::ExportTarget));
     ImGui::SameLine();
     if (ex.outDir.empty())
@@ -3324,7 +3486,7 @@ void App::drawExtractPanel() {
         if (!p.empty()) ex.outDir = p;
     }
 
-    // Vergleichsstand.
+    // Comparison baseline.
     if (!ex.compareNames.empty()) {
         std::size_t fehlt = 0;
         for (const auto& q : ex.seqs)
@@ -3367,12 +3529,12 @@ void App::drawExtractPanel() {
     }
     ImGui::EndDisabled();
 
-    // Bindepose-Auswahl.
+    // Bind pose selection.
     //
-    // Steht bewusst hier bei den Exportknoepfen und nicht in den
-    // Einstellungen: sie betrifft nur den Export, und wer sie braucht,
-    // sucht sie hier.
-    // dotXSI-Fassung.
+    // Deliberately placed here next to the export buttons and not in the
+    // settings: it only affects the export, and whoever needs it looks for it
+    // here.
+    // dotXSI version.
     ImGui::SameLine();
     ImGui::TextDisabled("dotXSI");
     ImGui::SameLine();
@@ -3453,8 +3615,8 @@ void App::drawExtractPanel() {
                 std::size_t a = static_cast<std::size_t>(extractAnchor_), b = i;
                 if (a > b) std::swap(a, b);
                 if (!ctrl) std::fill(ex.selected.begin(), ex.selected.end(), char{0});
-                // Nur, was gerade zu sehen ist: Filter und "nur fehlende"
-                // blenden Zeilen aus, die sonst still mit exportiert wuerden.
+                // Only what's currently visible: filter and "missing only"
+                // hide rows that would otherwise be silently exported too.
                 for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j) {
                     const auto& q = ex.seqs[j];
                     if (!needle.empty() && q.name.find(needle) == std::string::npos) continue;
@@ -3482,8 +3644,8 @@ void App::drawExtractPanel() {
         ImGui::Text("%d", s.fps);
         if (!ex.compareNames.empty()) {
             ImGui::TableNextColumn();
-            // Symbol vor dem Wort: der Blick erfasst die Spalte, ohne zu
-            // lesen.
+            // Icon before the word: the eye takes in the column without
+            // reading.
             if (inOther) iconText(ICON_CHECK, kIconMuted, tr(S::PresentHere));
             else iconText(ICON_WARNING, kIconWarn, tr(S::MissingHere));
         }
@@ -3496,10 +3658,10 @@ void App::drawIssues() {
     if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return;
     Document& d = docs_[static_cast<std::size_t>(active_)];
 
-    // Doppelte Namen aus dem letzten Bauversuch als Meldungen uebernehmen.
+    // Take over duplicate names from the last build attempt as messages.
     //
-    // Damit landet der Fehler dort, wo man ihn anklicken kann — eine
-    // Protokollzeile allein springt nirgendwohin.
+    // That way the error ends up where you can click it - a log line alone
+    // doesn't jump anywhere.
     {
         std::lock_guard<std::mutex> lock(dupMutex_);
         if (!pendingDuplicates_.empty() && pendingDupDoc_ == d.title) {
@@ -3551,15 +3713,15 @@ void App::drawIssues() {
         const bool sel = (issueSelected_ == static_cast<int>(i));
         if (ImGui::Selectable("##row", sel, ImGuiSelectableFlags_SpanAllColumns)) {
             issueSelected_ = static_cast<int>(i);
-            // Zu den betroffenen Sequenzen springen.
+            // Jump to the affected sequences.
             //
-            // ALLE Treffer sammeln, nicht nur den ersten: bei einem
-            // doppelten Namen sind es zwei, und man will beide sehen, um zu
-            // entscheiden, welcher bleibt.
+            // Collect ALL matches, not just the first: with a duplicate name
+            // there are two, and you want to see both to decide which one
+            // stays.
             if (!is.sequence.empty()) {
-                // Beide Seiten gross schreiben. Die Pruefung meldet Namen in
-                // ihrer Originalschreibung ("BOTH_Walk1_galen"); verglichen
-                // mit der gross geschriebenen Zeile sprang der Klick nie.
+                // Uppercase both sides. The check reports names in their
+                // original spelling ("BOTH_Walk1_galen"); compared with the
+                // uppercased row, the click never jumped.
                 std::string want = is.sequence;
                 for (auto& c : want)
                     c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -3580,13 +3742,13 @@ void App::drawIssues() {
                 }
 
                 if (!treffer.empty()) {
-                    // Alle markieren, damit man sie in der Tabelle sieht.
+                    // Mark them all so they are visible in the table.
                     std::fill(d.selected.begin(), d.selected.end(), char{0});
                     for (const std::size_t g : treffer)
                         if (g < d.selected.size()) d.selected[g] = 1;
 
-                    // Und der Reihe nach anspringen: erneutes Klicken geht
-                    // zum naechsten Vorkommen, dann wieder zum ersten.
+                    // And jump to them in turn: clicking again goes to the
+                    // next occurrence, then back to the first.
                     if (issueCycleFor_ != static_cast<int>(i)) {
                         issueCycleFor_ = static_cast<int>(i);
                         issueCycleIdx_ = 0;
@@ -3615,12 +3777,12 @@ void App::drawIssues() {
     ImGui::EndTable();
 }
 
-// Auswahlliste der Enums.
+// Selection list of the enums.
 //
-// Der Name wird NICHT frei getippt. Ein Tippfehler erzeugt sonst eine
-// Sequenz, die es im Spielcode nicht gibt — und das faellt erst im Spiel
-// auf, als Animation, die nicht abspielt. Assimilate macht es genauso:
-// waehlen oder loeschen, nichts dazwischen.
+// The name is NOT typed freely. A typo would otherwise create a sequence
+// that doesn't exist in the game code - and that only shows up in the game,
+// as an animation that doesn't play. Assimilate does it the same way:
+// pick or delete, nothing in between.
 bool App::drawEnumChooser(const char* popupId, std::string& target) {
     bool chosen = false;
     if (!ImGui::BeginPopup(popupId)) return false;
@@ -3658,14 +3820,14 @@ bool App::drawEnumChooser(const char* popupId, std::string& target) {
     return chosen;
 }
 
-// Bearbeitungsdialog fuer eine Sequenz, wie in Assimilate per Doppelklick.
+// Edit dialog for a sequence, opened by double-click as in Assimilate.
 void App::drawSequenceDialog(Document& d) {
     if (!editOpen_) return;
     if (editRow_ < 0 || editRow_ >= static_cast<int>(d.script.grabs.size())) {
         editOpen_ = false;
         return;
     }
-    // Nur fuer das Skript, zu dem der Dialog geoeffnet wurde.
+    // Only for the script the dialog was opened for.
     if (d.path != editDocPath_) {
         editOpen_ = false;
         return;
@@ -3707,7 +3869,7 @@ void App::drawSequenceDialog(Document& d) {
 
     ImGui::SeparatorText(tr(S::DlgMaster));
     {
-        // Nur anzeigen, nicht tippen.
+        // Display only, no typing.
         ImGui::SetNextItemWidth(300 * settings_.dpiScale);
         char nb[128];
         std::snprintf(nb, sizeof(nb), "%s", name.c_str());
@@ -3810,23 +3972,23 @@ void App::drawSequenceDialog(Document& d) {
         }
     }
 
-    // Kommentar, der VOR dieser Sequenz steht.
+    // Comment that stands BEFORE this sequence.
     //
-    // Er wird im Skript gespeichert und landet in der erzeugten
-    // animation.cfg — damit laesst sich eine Liste mit tausend Eintraegen
-    // gliedern, statt eine Wand aus Zahlen zu hinterlassen.
+    // It is stored in the script and ends up in the generated animation.cfg -
+    // that way a list with a thousand entries can be structured instead of
+    // leaving behind a wall of numbers.
     ImGui::Separator();
     ImGui::TextUnformatted(tr(S::DlgComment));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::DlgCommentTip));
     {
-        // Die Zeilen als einen Text bearbeiten, eine je Zeile.
+        // Edit the lines as one text, one entry per line.
         std::string joined;
         for (const auto& c : g.commentsBefore) {
             if (!joined.empty()) joined += "\n";
             joined += c;
         }
-        // Puffer nach Inhalt bemessen, mit Luft zum Tippen. Mit festen 2048
-        // Zeichen schnitt der erste Tastendruck einen laengeren Block ab.
+        // Size the buffer by content, with room for typing. With a fixed 2048
+        // characters the first keystroke cut off a longer block.
         std::vector<char> buf(joined.size() + 4096, '\0');
         std::memcpy(buf.data(), joined.data(), joined.size());
         if (ImGui::InputTextMultiline("##comment", buf.data(), buf.size(),
@@ -3838,8 +4000,8 @@ void App::drawSequenceDialog(Document& d) {
                 if (!line.empty() && line.back() == '\r') line.pop_back();
                 g.commentsBefore.push_back(line);
             }
-            // Endende Leerzeilen wegnehmen: sie entstehen beim Tippen und
-            // haetten in der cfg keinen Zweck.
+            // Remove trailing empty lines: they come from typing and would
+            // serve no purpose in the cfg.
             while (!g.commentsBefore.empty() && g.commentsBefore.back().empty())
                 g.commentsBefore.pop_back();
             d.dirty = true;
@@ -3870,7 +4032,7 @@ void App::drawSequenceDialog(Document& d) {
 std::string App::logAsText() const {
     std::ostringstream o;
 
-    // Kopf mit dem, wonach sonst zurueckgefragt wird.
+    // Header with what would otherwise be asked for in follow-up questions.
     o << "g2c - Protokoll\n";
     o << "Gebaut: " << __DATE__ << " " << __TIME__ << ", " << (sizeof(void*) * 8) << " Bit, "
       << g2::defaultThreadCount() << " Kerne\n";
@@ -3882,8 +4044,8 @@ std::string App::logAsText() const {
 
     std::lock_guard<std::mutex> lock(logMutex_);
     for (const auto& l : log_) {
-        // Art voranstellen: die Farbe geht beim Kopieren verloren, und
-        // gerade sie unterscheidet Hinweis von Fehler.
+        // Prepend the kind: the color is lost when copying, and it's exactly
+        // what distinguishes a note from an error.
         const char* k = l.kind == LogLine::Kind::Bad    ? "[FEHLER]  "
                         : l.kind == LogLine::Kind::Warn ? "[WARNUNG] "
                         : l.kind == LogLine::Kind::Good ? "[OK]      "
@@ -3905,7 +4067,7 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
     const bool haveIcon = iconsAvailable() && icon && *icon;
     const ImGuiStyle& st = ImGui::GetStyle();
 
-    // Breite selbst ausrechnen: Symbol, Abstand, Text.
+    // Compute the width ourselves: icon, spacing, text.
     const ImVec2 tSize = ImGui::CalcTextSize(text);
     const ImVec2 iSize = haveIcon ? ImGui::CalcTextSize(icon) : ImVec2(0, 0);
     const float gap = haveIcon ? st.ItemInnerSpacing.x : 0.0f;
@@ -3932,7 +4094,7 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
 }
 
 void App::drawLog() {
-    // Knopfleiste ueber dem Protokoll.
+    // Button bar above the log.
     if (ImGui::SmallButton(withIcon(ICON_DOCUMENT, tr(S::CopyLog)))) {
         const std::string txt = logAsText();
         ImGui::SetClipboardText(txt.c_str());
@@ -3943,7 +4105,7 @@ void App::drawLog() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CopyLogTip));
 
-    // Ausgabeordner oeffnen — erst sinnvoll, wenn etwas gebaut wurde.
+    // Open the output folder - only makes sense once something was built.
     std::string outDir;
     {
         std::lock_guard<std::mutex> lock(outputDirMutex_);
@@ -3978,8 +4140,8 @@ void App::drawLog() {
             case LogLine::Kind::Bad: col = ImVec4(1.00f, 0.40f, 0.40f, 1.0f); break;
             default: break;
         }
-        // Symbol nach Art, dann der Text in derselben Farbe. Das Symbol
-        // allein sagt schon, worum es geht.
+        // Icon by kind, then the text in the same color. The icon alone
+        // already tells what it's about.
         const char* sym = l.kind == LogLine::Kind::Good   ? ICON_CHECK
                           : l.kind == LogLine::Kind::Warn ? ICON_WARNING
                           : l.kind == LogLine::Kind::Bad  ? ICON_CANCEL
@@ -4016,12 +4178,12 @@ void App::drawStatusBar() {
     }
 }
 
-// Tastenkuerzel — alle, die im Menue angeschrieben stehen.
+// Keyboard shortcuts - all of those labeled in the menu.
 //
-// Frueher waren nur Strg+N und Strg+S umgesetzt. Strg+O, Strg+Umschalt+O,
-// Strg+W, F5, Umschalt+F5 und F7 standen im Menue, taten aber nichts.
+// Previously only Ctrl+N and Ctrl+S were implemented. Ctrl+O, Ctrl+Shift+O,
+// Ctrl+W, F5, Shift+F5 and F7 were shown in the menu but did nothing.
 void App::handleShortcuts() {
-    // Waehrend eine Rueckfrage offen ist, keine weiteren Aktionen.
+    // While a confirmation prompt is open, no further actions.
     if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
 
     const ImGuiIO& io = ImGui::GetIO();
@@ -4060,17 +4222,19 @@ void App::draw() {
     if (ImGui::Begin("##main", nullptr, flags)) {
         drawMenuBar();
         if (mode_ == Mode::Build) drawToolbar();
+        drawUpdateBanner();
         ImGui::Separator();
 
-        // Hoehen ausrechnen statt zwei verschiedene nebeneinanderstellen.
+        // Compute the heights instead of placing two different ones side by
+        // side.
         //
-        // Vorher nahm die Einstellungsleiste die volle Resthoehe, waehrend
-        // die Tabelle daneben eine feste Hoehe bekam. Die beiden passten
-        // nicht zusammen: darunter blieb eine Leerflaeche stehen, und je
-        // nach Bildschirm musste man rollen, um das Protokoll zu sehen.
+        // Previously the settings panel took the full remaining height, while
+        // the table next to it got a fixed height. The two didn't match: an
+        // empty area remained below, and depending on the screen you had to
+        // scroll to see the log.
         //
-        // Jetzt teilen sich beide denselben Bereich, und der untere Teil
-        // haengt an der tatsaechlich verfuegbaren Hoehe.
+        // Now both share the same area, and the lower part depends on the
+        // actually available height.
         const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
         const float statusH = ImGui::GetFrameHeightWithSpacing();
         const float avail = ImGui::GetContentRegionAvail().y;
@@ -4121,21 +4285,24 @@ void App::draw() {
         if (active_ >= 0 && active_ < static_cast<int>(docs_.size()))
             drawSequenceDialog(docs_[static_cast<std::size_t>(active_)]);
 
-        // Auskunft ueber das Programm selbst.
+        // Information about the program itself.
         //
-        // Die wichtigste Zeile darin ist die Laufzeit: ohne fest eingebaute
-        // startet das Programm auf fremden Rechnern gar nicht, und der
-        // Empfaenger kann daran nichts aendern. Diese Frage soll man
-        // beantworten koennen, ohne Werkzeuge zu installieren.
+        // The most important line in it is the runtime: without it statically
+        // linked, the program doesn't start at all on other machines, and the
+        // recipient can't do anything about it. It should be possible to
+        // answer that question without installing tools.
         if (showAbout_) {
             ImGui::SetNextWindowSize(ImVec2(560 * settings_.dpiScale, 0), ImGuiCond_Appearing);
             if (ImGui::Begin(tr(S::About), &showAbout_, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text(tr(S::AboutVersion), update::displayName(platform_.build).c_str());
+                if (!platform_.build.commit.empty())
+                    ImGui::TextDisabled("%s %s", update::kRepo, platform_.build.commit.c_str());
                 ImGui::Text(tr(S::AboutBuilt), __DATE__, __TIME__);
                 ImGui::Text(tr(S::AboutBits), sizeof(void*) * 8, g2::defaultThreadCount());
 
-                // Wo das Startprotokoll liegt. Bei "startet nicht" ist das
-                // die erste Frage — hier steht die Antwort, statt dass man
-                // sie erfragen muss.
+                // Where the startup log lives. With "doesn't start" that's the
+                // first question - the answer is right here instead of having
+                // to ask for it.
                 if (!logPath_.empty()) {
                     ImGui::Text(tr(S::AboutLogPath), logPath_.c_str());
                     if (ImGui::IsItemClicked()) ImGui::SetClipboardText(logPath_.c_str());
@@ -4152,16 +4319,17 @@ void App::draw() {
             ImGui::End();
         }
 
-        // Loeschen bestaetigen. Rueckgaengig gibt es nicht, und ein
-        // verrutschter Rechtsklick soll keine Sequenz kosten.
+        // Confirm deletion. There is no undo, and a slipped right-click
+        // shouldn't cost a sequence.
         if (!pendingDelete_.empty()) ImGui::OpenPopup("confirmdel");
         if (ImGui::BeginPopupModal("confirmdel", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text(tr(S::ConfirmDelete), pendingDelete_.size());
             ImGui::Spacing();
             if (ImGui::Button(withIcon(ICON_DELETE, tr(S::DeleteSeq)))) {
-                // Im Skript, fuer das die Rueckfrage gestellt wurde — nicht im
-                // gerade aktiven. Ein zwischendurch aufs Fenster gezogenes
-                // Skript wird aktiv und haette sonst die Zeilen verloren.
+                // In the script the confirmation was asked for - not the one
+                // currently active. A script dragged onto the window in the
+                // meantime becomes active and would otherwise have lost the
+                // rows.
                 std::size_t n = 0;
                 for (std::size_t di = 0; di < docs_.size(); ++di)
                     if (docs_[di].path == pendingDeleteDocPath_)

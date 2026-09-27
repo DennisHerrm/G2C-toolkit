@@ -1,23 +1,23 @@
-// g2/animcache.h — Zwischenspeicher fuer geparste Animationsdateien.
+// g2/animcache.h - Cache for parsed animation files.
 //
-// Carcass macht dasselbe mit seiner CARPET-Datei. Im Build-Log des Originals
-// steht "( Reading 249.63MB CARPET file )" — die zehn Sekunden, in denen es
-// 1289 Dateien "verarbeitet", sind in Wahrheit das Einlesen dieses Caches.
-// Ohne ihn muesste auch Carcass jede .xsi neu parsen.
+// Carcass does the same thing with its CARPET file. The original's build log
+// says "( Reading 249.63MB CARPET file )" - the ten seconds in which it
+// "processes" 1289 files are really spent reading this cache. Without it,
+// Carcass would have to re-parse every .xsi as well.
 //
-// Gemessen entfallen rund 96 % der Bauzeit auf Lesen und Parsen der
-// Quelldateien (80 % Datei-I/O, 12 % Parser, 4 % FCurves einsammeln). Genau
-// dieses Ergebnis wird hier abgelegt.
+// Measured, about 96 % of build time goes to reading and parsing the source
+// files (80 % file I/O, 12 % parser, 4 % collecting FCurves). Exactly that
+// result is stored here.
 //
-// Unterschiede zu CARPET, bewusst:
+// Deliberate differences from CARPET:
 //
-//   - **Eine Datei je Quelle**, nicht ein Sammelarchiv. Ein beschaedigter
-//     Eintrag kostet eine Datei statt den ganzen Cache, und parallele Laeufe
-//     koennen sich nicht in die Quere kommen.
-//   - **Schluessel aus Pfad, Groesse und Aenderungszeit.** Wird eine .xsi
-//     angefasst, faellt ihr Eintrag automatisch weg. Kein manuelles Leeren.
-//   - **Versionsnummer im Kopf.** Aendert sich das Einleseverhalten, werden
-//     alte Eintraege verworfen statt still falsche Daten zu liefern.
+//   - **One file per source**, not one combined archive. A corrupt entry
+//     costs one file instead of the whole cache, and parallel runs cannot
+//     get in each other's way.
+//   - **Key from path, size and modification time.** Once a .xsi is
+//     touched, its entry drops out automatically. No manual clearing.
+//   - **Version number in the header.** If the reading behavior changes,
+//     old entries are discarded instead of silently returning wrong data.
 
 #pragma once
 
@@ -29,10 +29,10 @@
 
 namespace g2 {
 
-// Erhoehen, sobald sich aendert, WAS aus einer .xsi gelesen wird. Sonst
-// liefert der Cache Daten nach altem Verstaendnis zurueck — ein Fehler, der
-// sich als "der Fix wirkt nicht" tarnt und schwer zu finden ist.
-// 4: SI_Scene-Bereich mitgespeichert, fuer die Warnung bei Abweichung.
+// Bump this whenever WHAT is read from a .xsi changes. Otherwise the cache
+// returns data based on the old understanding - a bug that disguises itself
+// as "the fix doesn't work" and is hard to find.
+// 4: SI_Scene range stored as well, for the mismatch warning.
 inline constexpr std::uint32_t kAnimCacheVersion = 4;
 
 struct AnimCacheStats {
@@ -49,28 +49,27 @@ struct AnimCacheStats {
 
 class AnimCache {
 public:
-    // Ein leerer Ordner schaltet den Cache ab.
+    // An empty directory disables the cache.
     explicit AnimCache(std::string directory) : dir_(std::move(directory)) {}
 
     bool enabled() const { return !dir_.empty(); }
 
-    // Liefert den Eintrag, wenn Groesse und Aenderungszeit der Quelle passen.
+    // Returns the entry if the source's size and modification time match.
     std::optional<xsi::AnimFile> load(const std::string& sourcePath);
 
-    // Fehler beim Schreiben sind nie fatal: ein Cache ist eine Optimierung,
-    // kein Zustand. Voller Datentraeger oder fehlende Rechte duerfen keinen
-    // Bau abbrechen.
+    // Write errors are never fatal: a cache is an optimization, not state.
+    // A full disk or missing permissions must not abort a build.
     void store(const std::string& sourcePath, const xsi::AnimFile& anim);
 
-    // Laedt aus dem Cache oder parst und legt ab.
+    // Loads from the cache, or parses and stores.
     xsi::AnimFile loadOrParse(const std::string& sourcePath);
 
     const AnimCacheStats& stats() const { return stats_; }
 
-    // Alle Eintraege loeschen. Liefert die Anzahl.
+    // Deletes all entries. Returns the count.
     std::size_t clear();
 
-    // Gesamtgroesse des Caches in Bytes.
+    // Total size of the cache in bytes.
     std::uint64_t sizeOnDisk() const;
 
 private:

@@ -1,0 +1,42 @@
+# Release: pushing a tag like v1.0.0 builds, tests and publishes a release.
+#
+# Tags with a suffix (v1.1.0-beta) become pre-releases. If the release was
+# already created by hand on GitHub (Releases -> Draft a new release), the
+# files are attached to it instead of creating a second one.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ github.ref_name }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: g2c-dist
+          path: dist
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            flags=()
+            [[ "$TAG" == *-* ]] && flags+=(--prerelease)
+            gh release create "$TAG" dist/* --title "g2c $TAG" --generate-notes "${flags[@]}"
+          fi

@@ -1,0 +1,94 @@
+# Reusable build: configure, build, run every test suite, package.
+#
+# Called by snapshot.yml (every push to main) and release.yml (every tag).
+# Produces one artifact "g2c-dist" with the zip and the bare executables.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version string baked into the executables (empty = snapshot-<sha>)
+        type: string
+        default: ""
+    outputs:
+      version:
+        description: The version string that was used
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ inputs.version }}"
+          if (-not $v) { $v = "snapshot-" + "${{ github.sha }}".Substring(0, 7) }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $v"
+
+      # Quoted: PowerShell would split -DG2C_VERSION=v1.2.0 at the dots.
+      - name: Configure
+        shell: pwsh
+        run: >-
+          cmake -S g2c-toolkit -B build -A x64
+          "-DG2C_VERSION=${{ steps.ver.outputs.version }}"
+          "-DG2C_COMMIT=${{ github.sha }}"
+
+      - name: Build
+        run: cmake --build build --config Release -- -m
+
+      # The static checkers (Win32 layer, GUI wiring, build.bat, ImGui pairs)
+      # run as part of the build target "check_win32" above.
+
+      - name: Unit tests
+        run: build\Release\g2_tests.exe
+
+      - name: GUI logic tests
+        run: build\Release\g2_gui_tests.exe
+
+      # Without game data the driver runs the parts that need none: menus,
+      # views, settings panel, languages, dialogs.
+      - name: GUI driver
+        shell: pwsh
+        run: build\Release\g2_gui_driver.exe "$env:RUNNER_TEMP\gui_driver"
+
+      # g2c.exe, g2c-cli.exe and SHA256SUMS.txt are also published on their
+      # own: the built-in updater downloads exactly these and refuses an exe
+      # whose SHA-256 is not listed.
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Force dist, pkg | Out-Null
+          Copy-Item build\Release\g2c.exe, build\Release\g2c-cli.exe pkg\
+          Copy-Item README.md pkg\README.md
+          Copy-Item g2c-toolkit\ANLEITUNG.md, g2c-toolkit\docs\BUGS.md pkg\
+          Compress-Archive -Path pkg\* -DestinationPath "dist\g2c-$v-win64.zip"
+          Copy-Item build\Release\g2c.exe, build\Release\g2c-cli.exe dist\
+          $sums = Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          }
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", ($sums -join "`n") + "`n")
+          Get-Content dist\SHA256SUMS.txt
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Check the version stamp
+        shell: pwsh
+        run: |
+          $want = "${{ steps.ver.outputs.version }}" -replace '^[vV]', ''
+          $got = (Get-Item build\Release\g2c.exe).VersionInfo.ProductVersion
+          Write-Host "g2c.exe says: $got"
+          if ($got -ne $want) { throw "g2c.exe carries version '$got', expected '$want'" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g2c-dist
+          path: dist/
+          if-no-files-found: error

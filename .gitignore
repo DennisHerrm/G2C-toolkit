@@ -1,0 +1,25 @@
+# Build output - executables are published as GitHub Releases, not committed.
+# See .github/workflows (snapshot on every push to main, release on every tag).
+Toolkit/
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.obj
+*.zip
+
+# Build directories
+build/
+build_*/
+out/
+output/
+dist/
+CMakeCache.txt
+CMakeFiles/
+
+# Editors
+.vs/
+.vscode/
+*.user

@@ -11,16 +11,16 @@
 
 namespace g2 {
 
-// Erst in eine Nachbardatei schreiben, dann umbenennen.
+// Write to a neighboring file first, then rename.
 //
-// Direkt in die Zieldatei zu schreiben kuerzt sie als Erstes auf null. Geht
-// danach etwas schief — Platte voll, Netzlaufwerk weg, Datei vom Spiel
-// gesperrt —, ist die alte Fassung verloren und die neue unvollstaendig.
-// Gerade bei der _humanoid.gla, die meist auch die Referenz des naechsten
-// Baus ist, waere das der Verlust der Arbeit mehrerer Tage.
+// Writing directly to the target file truncates it to zero as the very first
+// step. If anything goes wrong after that - disk full, network drive gone,
+// file locked by the game - the old version is lost and the new one is
+// incomplete. Especially with _humanoid.gla, which is usually also the
+// reference for the next build, that would mean losing several days of work.
 //
-// Das Umbenennen ersetzt das Ziel in einem Schritt: danach liegt entweder
-// die alte oder die neue Datei vollstaendig da, nie etwas dazwischen.
+// The rename replaces the target in a single step: afterwards either the old
+// or the new file is there in full, never anything in between.
 void writeFileChecked(const std::string& path, const void* data, std::size_t size) {
     namespace fs = std::filesystem;
     const fs::path target(path);
@@ -41,8 +41,8 @@ void writeFileChecked(const std::string& path, const void* data, std::size_t siz
             }
         }
 
-        // Erst close() leert den Puffer. Ein Schreibfehler wird oft genau
-        // hier sichtbar und nicht schon beim write().
+        // Only close() flushes the buffer. A write error often shows up
+        // exactly here and not already at write().
         f.close();
         if (!f) {
             std::error_code ec;
@@ -65,23 +65,23 @@ void writeFileChecked(const std::string& path, const std::string& text) {
 }
 namespace {
 
-// Formatkonstanten. Nicht anfassen, die Engine dekodiert genau damit.
+// Format constants. Do not touch, the engine decodes with exactly these.
 constexpr float kQuatScale = 16383.0f;
 constexpr float kQuatBias  = 2.0f;
 constexpr float kXlatScale = 64.0f;
 constexpr float kXlatBias  = 512.0f;
 
-// Grenzen, die sich daraus ergeben.
+// Limits that follow from them.
 constexpr float kQuatMax = 2.0f;
-constexpr float kXlatMax = 511.0f;   // (511 + 512) * 64 = 65472, passt in uint16
+constexpr float kXlatMax = 511.0f;   // (511 + 512) * 64 = 65472, fits in uint16
 
 constexpr std::uint16_t kU16Max = 65535;
 
 inline std::uint16_t toU16(float scaled, Rounding r) {
-    // Legacy: das ist bitgenau was _ftol tut, naemlich Richtung Null schneiden.
-    // Nearest: std::lrintf mit Default-Rundungsmodus, also kaufmaennisch
-    // zur naechsten geraden Stufe. Das halbiert den Erwartungsfehler und
-    // beseitigt den einseitigen Bias.
+    // Legacy: this is bit-exactly what _ftol does, namely truncate toward zero.
+    // Nearest: std::lrintf with the default rounding mode, i.e. round to
+    // nearest, ties to even. That halves the expected error and removes the
+    // one-sided bias.
     long v = (r == Rounding::Legacy) ? static_cast<long>(scaled) : std::lrintf(scaled);
     if (v < 0) v = 0;
     if (v > kU16Max) v = kU16Max;
@@ -111,10 +111,10 @@ std::string CompressStats::summary() const {
 }
 
 std::uint16_t squashQuatComponent(float f, Rounding r, CompressStats& stats) {
-    if (!(f >= -kQuatMax && f <= kQuatMax)) {   // faengt auch NaN
+    if (!(f >= -kQuatMax && f <= kQuatMax)) {   // also catches NaN
         ++stats.quatClamped;
-        // Carcass gibt hier 0 zurueck, was zu -2.0 dekodiert. Wir klemmen
-        // stattdessen auf den naechstgelegenen gueltigen Wert.
+        // Carcass returns 0 here, which decodes to -2.0. We clamp to the
+        // nearest valid value instead.
         f = std::isnan(f) ? 0.0f : std::clamp(f, -kQuatMax, kQuatMax);
     }
     return toU16((f + kQuatBias) * kQuatScale, r);
@@ -151,7 +151,7 @@ Quat normalize(const Quat& q) {
 double angleBetweenDeg(const Quat& a, const Quat& b) {
     const Quat na = normalize(a);
     Quat nb = normalize(b);
-    // q und -q sind dieselbe Rotation; naeheres Vorzeichen waehlen.
+    // q and -q are the same rotation; pick the closer sign.
     if (dot(na, nb) < 0.0f) { nb.w = -nb.w; nb.x = -nb.x; nb.y = -nb.y; nb.z = -nb.z; }
 
     const double dw = double(na.w) - nb.w, dx = double(na.x) - nb.x;
@@ -217,10 +217,10 @@ void quatToMatrix(const Quat& q, Mat3x4& out) {
 fmt::CompQuatBone compressBone(const Mat3x4& mat, const CompressOptions& opt, CompressStats& stats) {
     Quat q = matrixToQuat(mat);
 
-    // matrixToQuat normiert bereits; hier nur noch protokollieren, ob die
-    // Eingangsmatrix ueberhaupt eine saubere Rotation war. Nicht-uniforme
-    // Skalierung im Skelett ist ein haeufiger Fehler in Quell-Assets, und
-    // Carcass meldet ihn zwar (0x430790), aber nur pro Bone.
+    // matrixToQuat already normalizes; here we only record whether the input
+    // matrix was a clean rotation in the first place. Non-uniform scaling in
+    // the skeleton is a common mistake in source assets, and Carcass does
+    // report it (0x430790), but only per bone.
     {
         const float c0 = std::sqrt(mat.m[0][0] * mat.m[0][0] + mat.m[1][0] * mat.m[1][0] +
                                    mat.m[2][0] * mat.m[2][0]);
@@ -242,7 +242,7 @@ fmt::CompQuatBone compressBone(const Mat3x4& mat, const CompressOptions& opt, Co
     };
 
     if (opt.optimizeQuat && r == Rounding::Nearest) {
-        // Zielmatrix aus dem exakt normierten Quaternion.
+        // Target matrix from the exactly normalized quaternion.
         Mat3x4 target;
         quatToMatrix(q, target);
 

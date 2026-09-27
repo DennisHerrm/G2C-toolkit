@@ -1,11 +1,11 @@
-// g2/readfile.h — Datei am Stueck einlesen.
+// g2/readfile.h - Reading a file in one piece.
 //
-// Das verbreitete Idiom
+// The common idiom
 //     std::string s{std::istreambuf_iterator<char>(f), {}};
-// liest zeichenweise ueber den Streampuffer und reallokiert dabei laufend.
-// Auf einer 1,7-MB-dotXSI kostet das etwa so viel wie das gesamte Parsen
-// danach, auf einer 10-MB-GLA entsprechend mehr. Einmal Groesse ermitteln,
-// einmal reservieren, einmal lesen.
+// reads character by character through the stream buffer and keeps
+// reallocating. On a 1.7 MB dotXSI this costs about as much as all the
+// parsing afterwards, on a 10 MB GLA correspondingly more. Determine the
+// size once, reserve once, read once.
 
 #pragma once
 
@@ -30,8 +30,8 @@ inline std::string readWholeFile(const std::string& path) {
     return out;
 }
 
-// Direkt in den Byte-Puffer lesen. Der Umweg ueber std::string kopierte eine
-// 22-MB-GLA ein zweites Mal und hielt kurzzeitig beide Fassungen im Speicher.
+// Reads directly into the byte buffer. The detour via std::string copied a
+// 22 MB GLA a second time and briefly held both copies in memory.
 inline std::vector<std::uint8_t> readWholeFileBytes(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht oeffnen");
@@ -44,11 +44,11 @@ inline std::vector<std::uint8_t> readWholeFileBytes(const std::string& path) {
     return out;
 }
 
-// Umgebungsvariable lesen; leer, wenn sie fehlt.
+// Reads an environment variable; empty if it is not set.
 //
-// Ueber _dupenv_s statt getenv: MSVC markiert getenv als unsicher, weil der
-// zurueckgegebene Zeiger von spaeteren Aenderungen der Umgebung ueberholt
-// werden kann. Die Kopie hat das Problem nicht.
+// Uses _dupenv_s instead of getenv: MSVC flags getenv as unsafe because the
+// returned pointer can be invalidated by later changes to the environment.
+// The copy does not have that problem.
 inline std::string envValue(const char* name) {
 #ifdef _MSC_VER
     char* v = nullptr;

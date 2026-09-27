@@ -196,3 +196,6 @@ Alle behoben; die Tests dazu stehen in `tests/`.
 | CLI | `-cache X -clearcache`, `-o` ohne Endung, `-o ordner/` | falscher Cache geleert, "C:\jka.frames", "players//x.xsi" |
 | Lesen | negative Offsets, ungueltige Parent-Indizes in GLA und Cache | Lesen/Schreiben ausserhalb des Speichers |
 | Lesen | GLM-Surfaces nach uebersprungenem Mesh | Elternbezuege um eins verrutscht |
+| GUI | Minimiertes Fenster | Hauptschleife lief leer weiter: 88 % eines Kerns, solange g2c in der Taskleiste lag. Jetzt Pause, gemessen 1 % |
+| GUI | Schliessen ueber die Taskleiste bei minimiertem Fenster mit ungespeicherten Aenderungen | Rueckfrage unsichtbar. Jetzt wird das Fenster dafuer wiederhergestellt |
+| Bauen (CMake) | `-DG2C_VERSION=v1.2.0` ungequotet aus PowerShell | PowerShell teilt am Punkt, die Exe hiess "1". Jetzt Abbruch mit Hinweis; Workflow quotet |

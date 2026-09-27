@@ -6,16 +6,16 @@ namespace g2::gui {
 namespace {
 
 struct Entry {
-    // Der Eintrag traegt seinen Namen selbst.
+    // The entry carries its own name.
     //
-    // Vorher war die Tabelle allein ueber die Position mit der Aufzaehlung
-    // verknuepft, und der static_assert prueft nur die LAENGE. Als ich zwei
-    // Bloecke in der .cpp an anderer Stelle einfuegte als in der .h,
-    // stimmte die Laenge weiterhin — aber ab dieser Stelle war jeder Text
-    // um mehrere Plaetze verschoben. Im Menue stand dann "Moved: %s" als
-    // Eintrag, und "Zeile ziehen" trug ein Papierkorb-Symbol.
+    // Previously the table was linked to the enum by position alone, and the
+    // static_assert only checks the LENGTH. When I inserted two blocks in the
+    // .cpp at a different place than in the .h, the length still matched -
+    // but from that point on every text was shifted by several slots. The
+    // menu then showed "Moved: %s" as an entry, and "Zeile ziehen" carried a
+    // trash-can icon.
     //
-    // Mit dem Namen im Eintrag wird daraus ein Uebersetzungsfehler.
+    // With the name in the entry, this becomes a compile error.
     S           id;
     const char* de;
     const char* en;
@@ -23,7 +23,7 @@ struct Entry {
     const char* ja;
 };
 
-// Reihenfolge MUSS der Aufzaehlung in i18n.h entsprechen.
+// The order MUST match the enum in i18n.h.
 constexpr Entry kTable[] = {
     {S::MenuFile, "Datei", "File", "文件", "ファイル"},
     {S::MenuBuild, "Bauen", "Build", "构建", "ビルド"},
@@ -368,10 +368,10 @@ constexpr Entry kTable[] = {
      "GLA の隣に animation.cfg がありません - これがないとシーケンス境界が分かりません。"},
     {S::LogEnumsLoaded, "anims.h: %zu Eintraege", "anims.h: %zu entries", "anims.h：%zu 个条目",
      "anims.h: %zu 件"},
-    // Platzhalter in JEDER Sprache in derselben Reihenfolge wie die
-    // Argumente (%zu, dann %s). snprintf kennt keine Positionsangaben; in
-    // der alten chinesischen und japanischen Fassung stand %s vorn, und die
-    // Zahl wurde als Zeiger gelesen — Absturz beim Hinzufuegen eines Ordners.
+    // Placeholders in EVERY language in the same order as the arguments
+    // (%zu, then %s). snprintf has no positional specifiers; in the old
+    // Chinese and Japanese versions %s came first, and the number was read
+    // as a pointer - a crash when adding a folder.
     {S::LogXsiInFolder, "%zu .xsi in %s", "%zu .xsi in %s", "%zu 个 .xsi（位于 %s）",
      "%zu 件の .xsi（%s）"},
     {S::LogNoXsiIn, "Keine .xsi in %s", "No .xsi in %s", "%s 中没有 .xsi",
@@ -698,12 +698,83 @@ constexpr Entry kTable[] = {
      "%s：写入失败——%s", "%s: 書き込みに失敗しました - %s"},
     {S::LogSeqsSkipped, ", %zu ausserhalb der GLA uebersprungen", ", %zu outside the GLA skipped",
      "，跳过 %zu 个超出 GLA 范围的序列", "、GLA の範囲外 %zu 件をスキップ"},
+
+    // Updates
+    {S::SecUpdates, "Updates", "Updates", "更新", "アップデート"},
+    {S::UpdAuto, "Beim Start nach Updates suchen", "Check for updates at startup",
+     "启动时检查更新", "起動時にアップデートを確認"},
+    {S::UpdAutoTip,
+     "Fragt beim Start bei GitHub nach, ob es eine neuere Version gibt. Installiert wird nur "
+     "nach einem Klick auf \"Jetzt aktualisieren\".",
+     "Asks GitHub at startup whether a newer version exists. Nothing is installed until you "
+     "click \"Update now\".",
+     "启动时向 GitHub 查询是否有新版本。只有点击“立即更新”后才会安装。",
+     "起動時に GitHub で新しいバージョンがあるか確認します。「今すぐ更新」を押すまでは何もインストールされません。"},
+    {S::UpdStable, "Stabile Versionen", "Stable releases", "稳定版", "安定版"},
+    {S::UpdSnapshot, "Snapshot (neuester Stand)", "Snapshot (latest changes)", "快照版（最新改动）",
+     "スナップショット（最新の変更）"},
+    {S::UpdChannelTip,
+     "Stabil: nur freigegebene Versionen.\nSnapshot: jeder neue Stand von main, sobald alle "
+     "Tests bestanden sind.",
+     "Stable: released versions only.\nSnapshot: every new state of main once all tests pass.",
+     "稳定版：仅正式发布的版本。\n快照版：main 分支的每次更新，全部测试通过后即发布。",
+     "安定版: 正式リリースのみ。\nスナップショット: すべてのテストに合格した main の最新状態。"},
+    {S::AboutVersion, "Version: %s", "Version: %s", "版本：%s", "バージョン: %s"},
+    {S::UpdCheckNow, "Nach Updates suchen", "Check for updates", "检查更新",
+     "アップデートを確認"},
+    {S::UpdChecking, "Suche nach Updates ...", "Checking for updates ...", "正在检查更新……",
+     "アップデートを確認しています..."},
+    {S::UpdUpToDate, "g2c ist aktuell (%s).", "g2c is up to date (%s).", "g2c 已是最新版本（%s）。",
+     "g2c は最新です (%s)。"},
+    {S::UpdAvailable, "Neue Version verfuegbar: %s (installiert: %s)",
+     "New version available: %s (installed: %s)", "有新版本：%s（当前：%s）",
+     "新しいバージョンがあります: %s (現在: %s)"},
+    {S::UpdInstall, "Jetzt aktualisieren", "Update now", "立即更新", "今すぐ更新"},
+    {S::UpdNotes, "Was ist neu?", "What's new?", "更新内容", "変更点"},
+    {S::UpdLater, "Spaeter", "Later", "稍后", "後で"},
+    {S::UpdSkip, "Diese Version ueberspringen", "Skip this version", "跳过此版本",
+     "このバージョンをスキップ"},
+    {S::UpdDownloading, "Lade %s herunter", "Downloading %s", "正在下载 %s", "%s をダウンロード中"},
+    {S::UpdInstalled, "Update auf %s installiert - wirksam nach einem Neustart.",
+     "Update to %s installed - takes effect after a restart.", "已安装 %s 更新——重启后生效。",
+     "%s へのアップデートをインストールしました。再起動すると有効になります。"},
+    {S::UpdRestart, "Jetzt neu starten", "Restart now", "立即重启", "今すぐ再起動"},
+    {S::UpdDone, "g2c wurde auf %s aktualisiert.", "g2c was updated to %s.", "g2c 已更新到 %s。",
+     "g2c を %s に更新しました。"},
+    {S::UpdOpenPage, "Download-Seite oeffnen", "Open download page", "打开下载页面",
+     "ダウンロードページを開く"},
+    {S::UpdCancelled, "Update abgebrochen.", "Update cancelled.", "更新已取消。",
+     "アップデートを中止しました。"},
+    {S::UpdErrNetwork, "Keine Verbindung zu GitHub: %s", "Could not reach GitHub: %s",
+     "无法连接 GitHub：%s", "GitHub に接続できません: %s"},
+    {S::UpdErrNoRelease, "Auf diesem Kanal ist noch keine Version veroeffentlicht.",
+     "No version has been published on this channel yet.", "此渠道尚未发布任何版本。",
+     "このチャンネルではまだバージョンが公開されていません。"},
+    {S::UpdErrBadAnswer, "Die Antwort von GitHub war nicht lesbar.",
+     "The answer from GitHub could not be read.", "无法解析 GitHub 的响应。",
+     "GitHub からの応答を読み取れませんでした。"},
+    {S::UpdErrNoAsset, "Die Version enthaelt %s nicht.", "The release does not contain %s.",
+     "该版本不包含 %s。", "このリリースには %s が含まれていません。"},
+    {S::UpdErrUntrusted, "Download-Adresse ausserhalb des g2c-Repositorys - abgelehnt.",
+     "Download address outside the g2c repository - refused.",
+     "下载地址不在 g2c 仓库内——已拒绝。", "ダウンロード先が g2c リポジトリの外です。拒否しました。"},
+    {S::UpdErrChecksum, "Download beschaedigt (%s) - verworfen, nichts wurde ersetzt.",
+     "Download damaged (%s) - discarded, nothing was replaced.",
+     "下载的文件已损坏（%s）——已丢弃，未替换任何文件。",
+     "ダウンロードが破損しています (%s)。破棄しました。何も置き換えていません。"},
+    {S::UpdErrWrite,
+     "Die Exe liess sich nicht ersetzen (%s). Liegt g2c in einem geschuetzten Ordner, die neue "
+     "Version bitte von Hand herunterladen.",
+     "Could not replace the exe (%s). If g2c sits in a protected folder, please download the "
+     "new version by hand.",
+     "无法替换程序文件（%s）。如果 g2c 位于受保护的文件夹中，请手动下载新版本。",
+     "exe を置き換えられませんでした (%s)。g2c が保護されたフォルダーにある場合は、新しいバージョンを手動でダウンロードしてください。"},
 };
 
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(S::Count),
               "Tabelle und Aufzaehlung sind unterschiedlich lang");
 
-// Und jetzt auch die REIHENFOLGE, nicht nur die Laenge.
+// And now the ORDER too, not just the length.
 consteval bool tableInOrder() {
     for (std::size_t i = 0; i < static_cast<std::size_t>(S::Count); ++i)
         if (kTable[i].id != static_cast<S>(i)) return false;
@@ -711,14 +782,12 @@ consteval bool tableInOrder() {
 }
 static_assert(tableInOrder(), "Ein Eintrag steht an der falschen Stelle in kTable");
 
-// Platzhalter muessen in allen Sprachen dieselben sein, in derselben
-// Reihenfolge.
+// Placeholders must be the same in all languages, in the same order.
 //
-// snprintf ordnet die Argumente allein nach ihrer Position zu. Stand in einer
-// Uebersetzung %s vor %zu, wurde die Zahl als Zeiger gelesen — in der
-// chinesischen und japanischen Oberflaeche stuerzte das Programm so beim
-// Hinzufuegen eines XSI-Ordners und beim Oeffnen einer GLA ab. Hier wird
-// daraus ein Uebersetzungsfehler.
+// snprintf matches arguments by position alone. If a translation had %s
+// before %zu, the number was read as a pointer - that is how the program
+// crashed in the Chinese and Japanese UI when adding an XSI folder and when
+// opening a GLA. Here, that becomes a compile error.
 struct FormatSpec {
     char len1 = 0;
     char len2 = 0;
@@ -775,12 +844,12 @@ Lang g_lang = Lang::De;
 
 }  // namespace
 
-// Sprachnamen in der GERADE aktiven Sprache.
+// Language names in the CURRENTLY active language.
 //
-// Frueher stand hier fest "中文" und "日本語". Solange Deutsch eingestellt
-// ist, sind diese Zeichen aber gar nicht im Zeichensatz gebacken - im Menue
-// standen zwei Reihen Fragezeichen. Wer Chinesisch sucht, muss es lesen
-// koennen, BEVOR er es einschaltet.
+// This used to be hard-coded as "中文" and "日本語". But as long as German
+// is selected, these characters aren't baked into the font atlas at all -
+// the menu showed two rows of question marks. Anyone looking for Chinese
+// has to be able to read it BEFORE switching it on.
 const char* langName(Lang l) {
     struct Names {
         const char* de;

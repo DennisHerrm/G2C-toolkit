@@ -1,19 +1,20 @@
-// gui/app.h — Oberflaeche fuer g2c.
+// gui/app.h - user interface for g2c.
 //
-// Bewusst getrennt von der Fensteranbindung: diese Datei kennt nur imgui.h
-// und die g2-Bibliothek, kein Win32 und kein DirectX. Alles, was das
-// Betriebssystem braucht — Dateidialoge, Ordnerauswahl — kommt ueber die
-// Platform-Struktur herein.
+// Deliberately separated from the window binding: this file only knows imgui.h
+// and the g2 library, no Win32 and no DirectX. Everything that needs the
+// operating system - file dialogs, folder selection - comes in through the
+// Platform struct.
 //
-// Der Grund ist nicht Portabilitaet um ihrer selbst willen, sondern
-// Pruefbarkeit: so laesst sich der weitaus groessere Teil der Oberflaeche
-// uebersetzen und testen, ohne ein Fenster zu oeffnen.
+// The reason is not portability for its own sake but testability: this way the
+// much larger part of the UI can be compiled and tested without opening a
+// window.
 
 #pragma once
 
 #include "gui/i18n.h"
 #include "gui/icons.h"
 #include "gui/preview.h"
+#include "gui/update.h"
 
 #include "g2/animenums.h"
 #include "g2/xsi_export.h"
@@ -35,69 +36,83 @@
 
 namespace g2::gui {
 
-// Was die Oberflaeche vom Betriebssystem braucht.
+// What the UI needs from the operating system.
 struct Platform {
-    // Mehrfachauswahl moeglich; leere Liste = abgebrochen.
+    // Multiple selection possible; empty list = cancelled.
     //
-    // startDir sagt, wo der Dialog aufgehen soll. Leer = Windows entscheidet.
+    // startDir says where the dialog should open. Empty = Windows decides.
     std::function<std::vector<std::string>(const char* title, const char* filter, bool multi,
                                            const std::string& startDir)>
         openFiles;
     std::function<std::string(const char* title, const std::string& startDir)> pickFolder;
 
-    // Mehrere Ordner auf einmal. Leer, wenn die Plattform es nicht kann —
-    // dann faellt die Oberflaeche auf pickFolder zurueck.
+    // Several folders at once. Empty if the platform can't do it - then the
+    // UI falls back to pickFolder.
     std::function<std::vector<std::string>(const char* title, const std::string& startDir)>
         pickFolders;
     std::function<void(const std::string& path)> revealInExplorer;
 
-    // Speichern-Dialog: ein Name, der noch nicht existieren muss. Leer =
-    // abgebrochen. Fehlt die Funktion, faellt die Oberflaeche auf openFiles
-    // zurueck (nur in Tests sinnvoll).
+    // Save dialog: a name that does not have to exist yet. Empty = cancelled.
+    // If the function is missing, the UI falls back to openFiles (only
+    // sensible in tests).
     //
-    // Fuer "Neue .car" war bisher der Oeffnen-Dialog im Einsatz. Der laesst
-    // nur vorhandene Dateien zu, newCar() lehnt vorhandene aber ab — neu
-    // anlegen ging damit ueberhaupt nicht.
+    // "New .car" used to use the open dialog. That only accepts existing
+    // files, but newCar() rejects existing ones - so creating a new file
+    // didn't work at all.
     std::function<std::string(const char* title, const char* filter, const std::string& startDir,
                               const char* defaultExt)>
         saveFile;
+
+    // --- Updates ------------------------------------------------------------
+    //
+    // Without network.get there is no update check at all - the tests run
+    // with a fake server here, the real one is WinHTTP in main_win32.cpp.
+    update::Network network;
+
+    // The running executable, the file an update replaces.
+    std::filesystem::path exePath;
+
+    // Version of this build. Tests pretend to be an older release.
+    update::BuildInfo build = update::thisBuild();
+
+    // Opens a web page in the browser: release notes, download page.
+    std::function<void(const std::string& url)> openUrl;
 };
 
-// Ein geoeffnetes Skript — ein Tab.
+// One open script - one tab.
 struct Document {
     std::string  path;
-    std::string  title;      // Dateiname, in der Tableiste
+    std::string  title;      // file name, shown in the tab bar
     car::Script  script;
     bool         dirty = false;
     bool         open = true;
     std::string  loadError;
 
-    // Ergebnis der letzten Pruefung, damit die Anzeige nicht bei jedem
-    // Bildaufbau neu rechnet.
+    // Result of the last validation, so the display doesn't recompute it on
+    // every frame.
     car::ValidateResult validation;
     bool                validated = false;
 
-    // Zeilenauswahl fuer Mehrfachaktionen.
+    // Row selection for multi-row actions.
     std::vector<char> selected;
 
-    // Ausgabeort dieses Skripts. MUSS gesetzt sein, sonst wird nicht gebaut.
+    // Output location of this script. MUST be set, otherwise nothing is built.
     //
-    // Es gibt bewusst keinen gemeinsamen Ordner fuer alle: in einem
-    // Modellbaum heissen saemtliche Ausgaben "_humanoid.gla", und ein
-    // gemeinsames Ziel liesse zwanzig Skripte dieselbe Datei ueberschreiben —
-    // ohne Fehlermeldung, mit dem Ergebnis, dass nur das letzte uebrig
-    // bleibt. Eine Einstellung, die in der Mehrzahl der Faelle Daten
-    // vernichtet, gehoert nicht ins Programm.
+    // There is deliberately no shared folder for all of them: in a model tree
+    // every output is called "_humanoid.gla", and a shared target would let
+    // twenty scripts overwrite the same file - without an error message, with
+    // the result that only the last one survives. A setting that destroys data
+    // in most cases does not belong in the program.
     std::string outputDir;
 
     void syncSelection() { selected.assign(script.grabs.size(), 0); }
 };
 
-// Einstellungen, die fuer alle Tabs gelten.
+// Settings that apply to all tabs.
 struct Settings {
     std::string enumPath;      // anims.h
-    std::string baseDir;       // Wurzel, unter der models/ liegt
-    std::string referenceGla;  // Skelettquelle
+    std::string baseDir;       // root under which models/ lives
+    std::string referenceGla;  // skeleton source
 
     bool writeFrames = true;
     bool writeMesh = true;
@@ -105,40 +120,51 @@ struct Settings {
     bool useCache = true;
     bool carcassCompat = false;
 
-    // Beim ersten Speichern eine .car.bak anlegen.
+    // Create a .car.bak on the first save.
     //
-    // Nur EINMAL je Datei — der urspruengliche Stand vor der ersten
-    // Bearbeitung ist das, was man zurueckhaben will, nicht der von vorhin.
-    // Wer das nicht braucht, schaltet es ab.
+    // Only ONCE per file - the original state before the first edit is what
+    // you want back, not the one from a moment ago. Anyone who doesn't need it
+    // switches it off.
     bool keepBackup = true;
     bool readFrameCounts = false;
 
-    // Immer alle Kerne. Bewusst keine Einstellung: die Ausgabe ist
-    // nachweislich unabhaengig von der Threadzahl bitgleich, und eine
-    // Einstellung, die man nur falsch stellen kann, ist keine.
+    // Always all cores. Deliberately not a setting: the output is provably
+    // bit-identical regardless of thread count, and a setting that can only be
+    // set wrong isn't a setting.
     static constexpr int threads = 0;
 
     bool darkMode = true;
 
-    // Sprache als Zahl, damit die Einstellungsdatei einfach bleibt.
+    // Ask GitHub for a newer version at startup. Only a check - installing
+    // always needs a click. A self-built "dev" version never checks by itself.
+    bool checkUpdates = true;
+
+    // -1 = the channel this build came from (release -> stable, snapshot ->
+    // snapshot), otherwise update::Channel.
+    int updateChannel = -1;
+
+    // "Skip this version": release id (tag or commit) not to offer again.
+    std::string skippedUpdate;
+
+    // Language as a number, so the settings file stays simple.
     int  language = 0;
 
-    // Bildpunkte je logischem Punkt, von der Fensteranbindung gesetzt.
+    // Pixels per logical point, set by the window binding.
     //
-    // Ohne das zeichnet ImGui in 96 dpi und Windows skaliert das fertige Bild
-    // hoch — das Ergebnis ist unscharf. Richtig ist, gleich groesser zu
-    // zeichnen: groessere Schrift, groessere Abstaende, scharfe Kanten.
+    // Without this ImGui draws at 96 dpi and Windows scales the finished image
+    // up - the result is blurry. The right way is to draw larger in the first
+    // place: larger font, larger spacing, sharp edges.
     float dpiScale = 1.0f;
 };
 
-// Eine Zeile im Protokoll.
+// One line in the log.
 struct LogLine {
     enum class Kind { Info, Good, Warn, Bad };
     Kind        kind = Kind::Info;
     std::string text;
 };
 
-// Zustand eines laufenden Stapelbaus.
+// State of a running batch build.
 struct BuildJob {
     std::atomic<bool>        running{false};
     std::atomic<bool>        cancel{false};
@@ -151,11 +177,11 @@ struct BuildJob {
     ~BuildJob();
     void join();
 
-    // Ausdruecklich unbeweglich und unkopierbar.
+    // Explicitly non-movable and non-copyable.
     //
-    // mutex und thread sind es ohnehin, der Uebersetzer erzeugt die
-    // Operationen also nicht. Es hinzuschreiben kostet nichts und macht die
-    // Absicht sichtbar, statt sie aus den Membertypen ableiten zu lassen.
+    // mutex and thread are anyway, so the compiler doesn't generate the
+    // operations. Writing it out costs nothing and makes the intent visible
+    // instead of leaving it to be inferred from the member types.
     BuildJob() = default;
     BuildJob(const BuildJob&) = delete;
     BuildJob& operator=(const BuildJob&) = delete;
@@ -163,36 +189,40 @@ struct BuildJob {
     BuildJob& operator=(BuildJob&&) = delete;
 };
 
+// Why an update failed, in the current language. Shared by the update bar
+// and "g2c update" on the command line.
+std::string describeUpdateError(const update::Status& st);
+
 class App {
 public:
     explicit App(Platform platform);
     ~App();
 
-    // App haelt einen BuildJob mit laufendem Thread — kopieren oder
-    // verschieben waere in jedem Fall falsch.
+    // App holds a BuildJob with a running thread - copying or moving would be
+    // wrong in every case.
     App(const App&) = delete;
     App& operator=(const App&) = delete;
     App(App&&) = delete;
     App& operator=(App&&) = delete;
 
-    // Ein Bildaufbau. Ruft ImGui auf und kehrt zurueck.
+    // One frame. Calls ImGui and returns.
     void draw();
 
-    // --- Auch ohne Fenster benutzbar, damit pruefbar -----------------------
+    // --- Usable without a window too, so it can be tested -----------------
 
     bool openCar(const std::string& path);
-    std::size_t openFolder(const std::string& root);   // liefert die Zahl der Funde
+    std::size_t openFolder(const std::string& root);   // returns the number of hits
 
-    // Datei oder Ordner, je nachdem was es ist. Fuer Ziehen auf das Fenster
-    // und fuer Argumente beim Start.
+    // File or folder, whichever it is. For dropping onto the window and for
+    // command-line arguments at startup.
     bool openPath(const std::string& path);
 
-    // --- Zweiter Modus: GLA zurueck nach dotXSI ---------------------------
+    // --- Second mode: GLA back to dotXSI ----------------------------------
     //
-    // Bewusst getrennt vom Bauen. Die beiden Richtungen teilen fast nichts:
-    // andere Eingaben, andere Ausgaben, andere Begriffe. In eine gemeinsame
-    // Oberflaeche gepresst muesste man staendig Felder ausgrauen, die im
-    // jeweiligen Modus keinen Sinn ergeben.
+    // Deliberately separate from building. The two directions share almost
+    // nothing: different inputs, different outputs, different terms. Squeezed
+    // into one shared UI you would constantly have to grey out fields that
+    // make no sense in the current mode.
     enum class Mode { Build, Extract, Preview };
 
     struct ExtractSeq {
@@ -207,35 +237,33 @@ public:
         std::string glaPath;
         std::string cfgPath;
 
-        // Pfad zur .frames der Quell-GLA. Ohne sie fehlt die
-        // Wurzelbewegung, und eine Laufanimation laeuft nach dem Neubauen
-        // auf der Stelle.
+        // Path to the .frames of the source GLA. Without it the root motion
+        // is missing, and a run animation runs in place after rebuilding.
         std::string framesPath;
 
-        // Versatz, mit dem die Quell-GLA gebaut wurde. Wird beim Oeffnen
-        // geschaetzt und angezeigt; er muss beim Export wieder eingesetzt
-        // werden, sonst zieht das Neubauen ihn ein zweites Mal ab.
+        // Offset the source GLA was built with. Estimated and displayed on
+        // opening; it must be re-applied on export, otherwise rebuilding
+        // subtracts it a second time.
         std::optional<std::array<float, 3>> origin;
 
-        // Welche Bindepose in den BASEPOSE-Block.
+        // Which bind pose goes into the BASEPOSE block.
         //
-        // Betrifft nur, wer die Dateien durch Ravens Carcass schickt; g2c
-        // selbst baut mit jeder Einstellung gleich, weil es die FCurves
-        // auswertet und den Block gar nicht ansieht.
+        // Only matters to anyone who sends the files through Raven's Carcass;
+        // g2c itself builds identically with every setting, because it
+        // evaluates the FCurves and doesn't look at the block at all.
         xsiexp::ExportOptions::BasePose basePose = xsiexp::ExportOptions::BasePose::World;
 
-        // dotXSI-Fassung der erzeugten Dateien.
+        // dotXSI version of the generated files.
         //
-        // v3.0 benennt die Templates wie Ravens root.xsi, v3.5 laesst sie
-        // namenlos wie Ravens Animationsdateien. Aeltere Werkzeuge erwarten
-        // teils 3.0.
+        // v3.0 names the templates like Raven's root.xsi, v3.5 leaves them
+        // unnamed like Raven's animation files. Some older tools expect 3.0.
         xsiexp::ExportOptions::Version xsiVersion = xsiexp::ExportOptions::Version::V30;
 
-        // --- Vergleich mit einem anderen Humanoid -------------------------
+        // --- Comparison with another humanoid -----------------------------
         //
-        // Sequenznamen der Gegenseite, klein geschrieben. Damit laesst sich
-        // beantworten: welche Animationen hat DIESE GLA, die jene nicht hat?
-        // Genau die will man uebernehmen.
+        // Sequence names of the other side, lower-cased. This answers: which
+        // animations does THIS GLA have that the other one doesn't? Exactly
+        // those are the ones you want to take over.
         std::string           comparePath;
         std::set<std::string> compareNames;
         bool                  onlyMissing = false;
@@ -258,40 +286,40 @@ public:
     bool        loadAnimationCfg(const std::string& path);
     bool        loadFramesFile(const std::string& path);
 
-    // Nur fuer Tests: aktiven Tab setzen, ohne die Oberflaeche zu zeichnen.
+    // Tests only: set the active tab without drawing the UI.
     void setActiveForTest(int i) { active_ = i; }
 
-    // Tab von aussen waehlen: setzt active_ UND sagt ImGui beim naechsten
-    // Zeichnen, welchen Tab es zeigen soll.
+    // Select a tab from outside: sets active_ AND tells ImGui on the next draw
+    // which tab to show.
     void activate(int i) {
         active_ = i;
         selectTab_ = i;
     }
 
-    // Sucht animation.cfg und .frames neben der GLA.
+    // Looks for animation.cfg and .frames next to the GLA.
     //
-    // Sie liegen praktisch immer im selben Ordner; sie einzeln auswaehlen zu
-    // lassen ist Arbeit, die das Programm selbst erledigen kann. Die
-    // Schaltflaechen bleiben fuer die Ausnahme.
+    // They are practically always in the same folder; making the user pick
+    // them one by one is work the program can do itself. The buttons remain
+    // for the exception.
     void        findCompanionFiles(const std::string& glaPath);
 
-    // Zweite animation.cfg laden, um Sequenznamen zu vergleichen.
+    // Load a second animation.cfg to compare sequence names.
     bool        loadCompareCfg(const std::string& path);
 
-    // Ist die Sequenz auf der Gegenseite vorhanden?
+    // Does the sequence exist on the other side?
     bool        existsInCompare(const std::string& name) const;
 
-    // Alle auswaehlen, die drueben fehlen. Liefert die Anzahl.
+    // Select all that are missing over there. Returns the count.
     std::size_t selectMissing();
     std::size_t exportSequences(const std::vector<std::size_t>& rows, const std::string& dir);
 
-    // Alles exportieren UND ein .car dazu schreiben, mit dem sich die GLA
-    // sofort wieder bauen laesst. Liefert die Zahl der geschriebenen .xsi.
+    // Export everything AND write a .car alongside, with which the GLA can be
+    // rebuilt right away. Returns the number of .xsi files written.
     std::size_t exportAllWithScript(const std::string& dir, const std::string& carPath,
                                     const std::string& xsiPrefix);
     void closeDocument(std::size_t index);
 
-    // Haengt Dateien als $aseanimgrab an. `toAll` verteilt sie auf alle Tabs.
+    // Appends files as $aseanimgrab. `toAll` distributes them to all tabs.
     std::size_t addXsiFiles(const std::vector<std::string>& files, bool toAll);
 
     void validateDocument(std::size_t index);
@@ -299,55 +327,53 @@ public:
 
     bool loadEnums(const std::string& path);
 
-    // Jedem Skript den Ordner seiner eigenen .car zuweisen. Bequemlichkeit
-    // ohne die Gefahr eines gemeinsamen Ziels: die Pfade sind verschieden.
+    // Assign each script the folder of its own .car. Convenience without the
+    // danger of a shared target: the paths are all different.
     std::size_t assignDefaultOutputs(bool onlyEmpty = true);
 
-    // --- Sequenzen umordnen und loeschen ----------------------------------
+    // --- Reordering and deleting sequences --------------------------------
     //
-    // Reine Datenoperationen, damit sie ohne Fenster pruefbar sind.
+    // Pure data operations, so they can be tested without a window.
 
-    // Verschiebt EINE Sequenz von from nach to. Die Auswahlmarkierungen
-    // wandern mit, sonst zeigt die Auswahl nach dem Verschieben auf die
-    // falsche Zeile.
+    // Moves ONE sequence from `from` to `to`. The selection marks move along,
+    // otherwise the selection points at the wrong row after the move.
     bool moveGrab(std::size_t docIndex, std::size_t from, std::size_t to);
 
-    // Verschiebt MEHRERE Zeilen als Block vor die Zeile "before".
-    // Die Auswahl bleibt auf denselben Sequenzen.
+    // Moves SEVERAL rows as a block in front of the row "before".
+    // The selection stays on the same sequences.
     std::size_t moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
                           std::size_t before);
 
-    // ROOT ans Ende.
+    // ROOT to the end.
     //
-    // root.xsi liefert die Basispose; in Ravens Skripten steht der Grab
-    // immer zuletzt. Neue Animationen davor einzureihen ist deshalb kein
-    // Schoenheitsfehler, sondern haelt die Datei so, wie Carcass und
-    // Assimilate sie erwarten.
+    // root.xsi provides the base pose; in Raven's scripts that grab always
+    // comes last. Inserting new animations before it is therefore not
+    // cosmetic, it keeps the file the way Carcass and Assimilate expect it.
     bool keepRootLast(std::size_t docIndex);
 
-    // Ist das der ROOT-Grab?
+    // Is this the ROOT grab?
     static bool isRootGrab(const car::GrabDirective& g);
 
-    // Loescht die uebergebenen Zeilen. Absteigend sortiert abgearbeitet,
-    // damit sich die Indizes nicht unter der Schleife verschieben.
+    // Deletes the given rows. Processed in descending order so the indices
+    // don't shift under the loop.
     //
-    // keepComments: Trenner und Kommentarzeilen ueber den geloeschten
-    // Sequenzen bleiben stehen und gehoeren danach zur naechsten. Beim
-    // Ausschneiden false — dort wandern sie mit in die Ablage.
+    // keepComments: separators and comment lines above the deleted sequences
+    // stay in place and then belong to the next one. False when cutting -
+    // there they move into the clipboard too.
     std::size_t deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
                             bool keepComments = true);
 
-    // Legt ein leeres, gueltiges Skript an und oeffnet es als Tab.
+    // Creates an empty, valid script and opens it as a tab.
     bool newCar(const std::string& path);
 
-    // --- Kopieren und Einfuegen -------------------------------------------
+    // --- Copy and paste ---------------------------------------------------
     //
-    // Die Zwischenablage haelt vollstaendige Grabs, samt -additional, Loop
-    // und Rate. Sie gilt tab-uebergreifend: aus einem Skript kopieren, in
-    // einem anderen einfuegen ist der eigentliche Zweck.
+    // The clipboard holds complete grabs, including -additional, loop and
+    // rate. It works across tabs: copying from one script and pasting into
+    // another is the actual purpose.
     //
-    // Kopiert werden Kopien, keine Verweise. Wird die Quelle danach
-    // geloescht, bleibt die Ablage gueltig.
+    // What is copied are copies, not references. If the source is deleted
+    // afterwards, the clipboard stays valid.
     std::size_t copyGrabs(std::size_t docIndex, const std::vector<std::size_t>& rows);
     std::size_t cutGrabs(std::size_t docIndex, const std::vector<std::size_t>& rows);
     std::size_t pasteGrabs(std::size_t docIndex, std::size_t before);
@@ -355,47 +381,46 @@ public:
 
     void setLogPath(std::string p) { logPath_ = std::move(p); }
 
-    // Das ganze Protokoll als Text.
+    // The whole log as text.
     //
-    // Fuer die Zwischenablage. Mit Zeitstempel und Programmangaben im Kopf:
-    // ein Fehlerbericht ohne Fassung und Systemangaben kostet immer eine
-    // Rueckfrage.
+    // For the clipboard. With a timestamp and program info in the header: a
+    // bug report without version and system info always costs a follow-up
+    // question.
     std::string logAsText() const;
 
-    // Alle .xsi eines Ordners anhaengen — rekursiv, sortiert.
+    // Append all .xsi files of a folder - recursively, sorted.
     std::size_t addXsiFolder(const std::string& folder, bool toAll);
 
-    // Framezahl einer Quelldatei, sofern schon bekannt. -1 = noch nicht
-    // gelesen, -2 = nicht auffindbar.
+    // Frame count of a source file, if already known. -1 = not read yet,
+    // -2 = not found.
     int frameCountOf(const std::string& relPath) const;
 
-    // Einstellungen ueber Sitzungen hinweg merken.
-    // Ordner fuer Einstellungen und Fensterzustand.
+    // Remember settings across sessions.
+    // Folder for settings and window state.
     //
-    // Statisch, weil die Fensteranbindung ihn braucht, bevor die App
-    // ueberhaupt gebaut ist: der Pfad der imgui-Datei muss stehen, bevor
-    // ImGui den ersten Bildaufbau macht.
+    // Static, because the window binding needs it before the App is even
+    // constructed: the path of the imgui file must be set before ImGui draws
+    // the first frame.
     static std::string configDir();
 
-    // Auswahldialoge mit eigenem Gedaechtnis.
+    // File/folder dialogs with their own memory.
     //
-    // Jeder Zweck merkt sich SEINEN Ordner: die anims.h liegt woanders als
-    // die .xsi, und die wieder woanders als der Ausgabeordner. Ein
-    // gemeinsamer "zuletzt benutzt"-Ordner heisst, sich bei jedem zweiten
-    // Dialog neu durch den Baum zu klicken.
+    // Each purpose remembers ITS folder: anims.h lives somewhere else than the
+    // .xsi files, and those somewhere else than the output folder. A single
+    // shared "last used" folder means clicking through the tree again on
+    // every second dialog.
     std::vector<std::string> askFiles(const char* purpose, const char* title,
                                       const char* filter, bool multi);
     std::string              askFolder(const char* purpose, const char* title);
 
-    // Mehrere Ordner. Faellt auf askFolder zurueck, wenn die Plattform
-    // keine Mehrfachauswahl kann — dann kommt hoechstens einer zurueck,
-    // aber nie nichts.
+    // Several folders. Falls back to askFolder if the platform can't do
+    // multiple selection - then at most one comes back, but never none.
     std::vector<std::string> askFolders(const char* purpose, const char* title);
     std::string settingsPath() const;
     void        saveSettings() const;
     void        loadSettings();
 
-    // Skript zurueckschreiben. Legt vorher eine Sicherung an.
+    // Write the script back. Creates a backup first.
     bool saveDocument(std::size_t index);
     std::size_t saveAllDocuments();
 
@@ -410,23 +435,32 @@ public:
 
     bool buildRunning() const { return job_.running.load(); }
 
-    // --- Schliessen mit ungespeicherten Aenderungen -----------------------
+    // --- Closing with unsaved changes -------------------------------------
     //
-    // Tab-Kreuz, Strg+W, "Alle schliessen" und das Fensterkreuz verwarfen
-    // Aenderungen bisher ohne Rueckfrage. Jetzt fragt ein Dialog: speichern,
-    // verwerfen oder abbrechen.
+    // The tab close button, Ctrl+W, "Close all" and the window close button
+    // used to discard changes without asking. Now a dialog asks: save,
+    // discard or cancel.
 
-    // Schliesst die Tabs sofort, wenn keiner geaendert ist, sonst fragt der
-    // Dialog beim naechsten Bildaufbau.
+    // Closes the tabs immediately if none is modified, otherwise the dialog
+    // asks on the next frame.
     void requestClose(std::vector<std::size_t> indices);
 
-    // Fuer das Fensterkreuz. true = darf sofort beendet werden. Sonst
-    // erscheint der Dialog, und quitApproved() meldet spaeter die Antwort.
+    // For the window close button. true = may quit immediately. Otherwise the
+    // dialog appears, and quitApproved() reports the answer later.
     bool requestQuit();
     bool quitApproved() const { return quitApproved_; }
 
-    // Die Fensteranbindung fragt das ab: bei Chinesisch oder Japanisch muss
-    // der Zeichensatz mit anderen Glyphenbereichen neu aufgebaut werden.
+    // "Restart now" after an update: quit like the close button (unsaved
+    // changes are asked about), then the window binding starts the new exe.
+    bool restartRequested() const { return restartRequested_ && quitApproved_; }
+
+    // Null if the platform has no network access.
+    update::Updater* updater() { return updater_.get(); }
+    update::Channel  updateChannel() const;
+    void             checkForUpdates(bool manual);
+
+    // The window binding polls this: for Chinese or Japanese the font atlas
+    // must be rebuilt with different glyph ranges.
     bool fontsDirty() const { return fontsDirty_; }
     void clearFontsDirty() { fontsDirty_ = false; }
 
@@ -441,30 +475,28 @@ private:
     void drawPreviewPanel();
     void drawIssues();
     void drawSequenceDialog(Document& d);
-    // Auswahlliste fuer Enums. Liefert true, wenn etwas gewaehlt wurde.
+    // Selection list for enums. Returns true if something was chosen.
     bool drawEnumChooser(const char* popupId, std::string& target);
     void drawLog();
 
-    // Farbiges Symbol, dann Text - beides in einer Zeile.
+    // Colored icon, then text - both on one line.
     //
-    // ImGui zeichnet Text einfarbig, also auch Symbole innerhalb eines
-    // Labels. Getrennt gezeichnet laesst sich das Symbol einfaerben, und
-    // das hilft beim Erfassen: gruen heisst fertig, rot heisst Fehler, ohne
-    // dass man den Text lesen muss.
+    // ImGui draws text in a single color, including icons inside a label.
+    // Drawn separately, the icon can be colored, and that helps at a glance:
+    // green means done, red means error, without having to read the text.
     //
-    // Ohne Symbolschrift wird nur der Text gezeichnet.
+    // Without an icon font only the text is drawn.
     static void iconText(const char* icon, const IconColor& col, const char* text);
 
-    // Knopf mit FARBIGEM Symbol.
+    // Button with a COLORED icon.
     //
-    // ImGui zeichnet den Text eines Knopfes einfarbig, also auch ein Symbol
-    // darin. Hier wird der Knopf zuerst leer gezeichnet und Symbol und Text
-    // anschliessend mit der Zeichenliste daraufgesetzt — so bekommt das
-    // Symbol seine eigene Farbe, waehrend Rahmen und Hover-Verhalten die
-    // von ImGui bleiben.
+    // ImGui draws a button's text in a single color, including any icon in
+    // it. Here the button is first drawn empty and then icon and text are
+    // placed on top via the draw list - that way the icon gets its own color
+    // while the frame and hover behavior stay ImGui's.
     //
-    // Ohne Symbolschrift wird nur der Text gezeichnet, und der Knopf ist
-    // entsprechend schmaler.
+    // Without an icon font only the text is drawn, and the button is
+    // correspondingly narrower.
     static bool iconButton(const char* icon, const IconColor& col, const char* text,
                            bool small = false);
     void drawStatusBar();
@@ -473,12 +505,14 @@ private:
 
     void startBuild(bool allTabs);
 
-    // Laeuft im Arbeitsthread. Bekommt Kopien von Dokument UND Einstellungen:
-    // die Oberflaeche bleibt waehrend des Baus bedienbar, und ein Feld, das
-    // gerade getippt wird, darf nicht gleichzeitig vom Thread gelesen werden.
+    // Runs in the worker thread. Gets copies of the document AND the settings:
+    // the UI stays usable during the build, and a field being typed into must
+    // not be read by the thread at the same time.
     void buildOne(const Document& d, const Settings& st);
 
     void drawCloseDialog();
+    void drawUpdateBanner();
+    void drawUpdateSettings();
     void drawOverwriteDialog();
     void closeEditorOf(std::size_t docIndex);
     void newCarDialog();
@@ -486,15 +520,15 @@ private:
     void openFolderDialog();
     void handleShortcuts();
 
-    // Datei schreiben und bei Erfolg true. Schlaegt es fehl, steht der Grund
-    // im Protokoll — die Ausgabe gilt dann nicht als gebaut.
+    // Write the file, true on success. If it fails, the reason is in the log -
+    // the output then does not count as built.
     bool writeOutput(const std::string& title, const std::string& path, const std::string& data);
 
-    // Export mit Rueckfrage, wenn Dateien ueberschrieben wuerden.
+    // Export with confirmation if files would be overwritten.
     void exportWithConfirm(std::vector<std::size_t> rows, bool withCar);
     void runExport(const std::vector<std::size_t>& rows, bool withCar);
 
-    // Tabellenzeilen, die der Filter gerade zeigt.
+    // Table rows the filter currently shows.
     bool rowVisible(const Document& d, std::size_t i) const;
     std::string askSaveFile(const char* purpose, const char* title, const char* filter,
                             const char* defaultExt);
@@ -504,20 +538,19 @@ private:
     std::vector<Document> docs_;
     anim::EnumTable      enums_;
     std::deque<LogLine>  log_;
-    // mutable, damit logAsText() const sein kann: Sperren aendert nichts am
-    // sichtbaren Zustand.
+    // mutable so that logAsText() can be const: locking doesn't change the
+    // visible state.
     mutable std::mutex   logMutex_;
     int                  active_ = 0;
-    // Tab, den ImGui beim naechsten Zeichnen auswaehlen soll; -1 = keiner.
+    // Tab that ImGui should select on the next draw; -1 = none.
     int                  selectTab_ = -1;
     bool                 showSettings_ = true;
     Mode                 mode_ = Mode::Build;
 
-    // --- Vorschau ----------------------------------------------------------
+    // --- Preview -----------------------------------------------------------
     //
-    // Nutzt die GLA, die im Modus GLA -> XSI geladen ist. Sie ein zweites
-    // Mal zu laden waere Verschwendung: die Datei ist 15 MB gross und liegt
-    // bereits im Speicher.
+    // Uses the GLA loaded in GLA -> XSI mode. Loading it a second time would
+    // be wasteful: the file is 15 MB and is already in memory.
     PreviewCamera        previewCam_;
     Playback             playback_;
     int                  previewSeq_ = -1;
@@ -528,25 +561,31 @@ private:
 
     bool                 showAbout_ = false;
 
-    // Pfad des Startprotokolls, von der Plattformschicht gesetzt.
+    // Path of the startup log, set by the platform layer.
     //
-    // Die Oberflaeche ermittelt ihn nicht selbst: wo die Exe liegt, weiss
-    // nur main_win32.cpp, und die Auskunft muss mit der Datei
-    // uebereinstimmen, die dort auch wirklich beschrieben wird.
+    // The UI doesn't determine it itself: only main_win32.cpp knows where the
+    // exe lives, and the information must match the file that is actually
+    // written there.
     std::string          logPath_;
 
-    // Zuletzt beschriebener Ausgabeordner, fuer den Knopf im Protokoll.
-    // Der Bau-Thread schreibt ihn, die Oberflaeche liest ihn: nur unter
-    // outputDirMutex_ anfassen.
+    // Output folder written last, for the button in the log.
+    // The build thread writes it, the UI reads it: only touch it under
+    // outputDirMutex_.
     std::string          lastOutputDir_;
     mutable std::mutex   outputDirMutex_;
 
-    // Rueckfrage beim Schliessen: Pfade der betroffenen Tabs.
+    // Confirmation on close: paths of the affected tabs.
     std::vector<std::string> pendingClose_;
     bool                     quitRequested_ = false;
     bool                     quitApproved_ = false;
+    bool                     restartRequested_ = false;
 
-    // Rueckfrage vor dem Ueberschreiben beim Export.
+    // Created in the constructor when the platform offers network access.
+    std::unique_ptr<update::Updater> updater_;
+    // "Later": no banner for the rest of this session.
+    bool                             updateBannerHidden_ = false;
+
+    // Confirmation before overwriting on export.
     struct PendingExport {
         std::vector<std::size_t> rows;
         bool                     withCar = false;
@@ -555,10 +594,9 @@ private:
     };
     PendingExport pendingExport_;
 
-    // Zu welchem Skript gehoeren der offene Sequenzdialog und die
-    // Loeschrueckfrage? Beides bezog sich frueher auf den aktiven Tab — wer
-    // dazwischen den Tab wechselte, bearbeitete oder loeschte im falschen
-    // Skript.
+    // Which script do the open sequence dialog and the delete confirmation
+    // belong to? Both used to refer to the active tab - anyone who switched
+    // tabs in between edited or deleted in the wrong script.
     std::string editDocPath_;
     std::string pendingDeleteDocPath_;
     bool        pendingDeleteIsCut_ = false;
@@ -567,65 +605,63 @@ private:
     char                 filter_[128] = {0};
     BuildJob             job_;
 
-    // Ausgewaehlte Meldung -> Sprung in die Tabelle.
+    // Selected message -> jump into the table.
     int  jumpToRow_ = -1;
     int  issueSelected_ = -1;
 
-    // Offener Bearbeitungsdialog: Index des Grabs, -1 = keiner.
-    // Aufgeschobenes Einfuegen: erst nach der Tabelle ausfuehren.
+    // Open edit dialog: index of the grab, -1 = none.
+    // Deferred paste: only executed after the table.
     long pendingPaste_ = -1;
 
-    // Zwischenablage fuer Sequenzen, tab-uebergreifend.
+    // Clipboard for sequences, across tabs.
     std::vector<car::GrabDirective> clipboard_;
 
-    // Ankerzeile fuer die Bereichsauswahl.
+    // Anchor row for range selection.
     int  selAnchor_ = -1;
 
-    // Aufziehen einer Auswahl mit gehaltener Maustaste, wie im Explorer.
+    // Drag-selecting with the mouse button held, like in Explorer.
     //
-    // Der Unterschied zwischen "Auswahl aufziehen" und "Zeilen verschieben"
-    // entscheidet sich beim Druecken: auf einer BEREITS ausgewaehlten Zeile
-    // beginnt ein Verschieben, auf einer anderen eine neue Auswahl. Genau so
-    // verhaelt sich der Explorer, und deshalb muss man es niemandem
-    // erklaeren.
+    // Whether it's "drag a selection" or "move rows" is decided on press: on
+    // an ALREADY selected row a move starts, on any other row a new
+    // selection. That's exactly how Explorer behaves, which is why nobody has
+    // to have it explained.
     bool rangeSelecting_ = false;
 
-    // Aufgeschobenes Umordnen: erst nach der Tabelle ausfuehren.
+    // Deferred reordering: only executed after the table.
     //
-    // splitAt: so viele Kommentarzeilen des Grabs, vor dem eingefuegt wird
-    // (von oben gezaehlt), wandern an die eingefuegte Sequenz. Wer eine
-    // Sequenz unter eine Ueberschrift zieht — die Linie zwischen
-    // Ueberschrift und Zeile —, will sie unter der Ueberschrift haben, nicht
-    // darueber.
+    // splitAt: this many comment lines of the grab being inserted before
+    // (counted from the top) move over to the inserted sequence. Anyone who
+    // drags a sequence under a heading - onto the line between heading and
+    // row - wants it below the heading, not above it.
     struct PendingBlock {
         std::vector<std::size_t> rows;
         std::size_t              before = 0;
         std::size_t              splitAt = 0;
     };
     PendingBlock pendingBlock_;
-    // Zeilen, deren Loeschung noch bestaetigt werden muss.
+    // Rows whose deletion still has to be confirmed.
     std::vector<std::size_t> pendingDelete_;
 
     int  editRow_ = -1;
 
-    // Welche Kommentarzeile gerade bearbeitet wird.
+    // Which comment line is currently being edited.
     //
-    // Zwei Zahlen, weil eine Sequenz mehrere Kommentarzeilen haben kann:
-    // welcher Grab, und welche Zeile darin. -1 heisst: keine.
+    // Two numbers, because a sequence can have several comment lines: which
+    // grab, and which line within it. -1 means: none.
     int  editCommentGrab_ = -1;
     int  editCommentLine_ = -1;
     char editCommentBuf_[512] = {};
 
-    // Welcher Zeilenkommentar gerade bearbeitet wird. -1 heisst: keiner.
-    // Ein Trenner, der gerade abgelegt wurde: von wo, wohin.
+    // Which trailing line comment is currently being edited. -1 means: none.
+    // A separator that was just dropped: from where, to where.
     //
-    // Wie bei den Sequenzen wird die Verschiebung NACH der Tabelle
-    // ausgefuehrt. Mitten im Zeichnen die Liste zu aendern, ueber die
-    // gerade iteriert wird, ist der klassische Weg zum Absturz.
+    // As with sequences, the move is executed AFTER the table. Modifying the
+    // list that is being iterated over in the middle of drawing is the
+    // classic road to a crash.
     //
-    // Ziel ist eine Stelle in einer Kommentarliste: zuGrab == Anzahl der
-    // Grabs meint die Zeilen hinter der letzten Animation, zuZeile ==
-    // kAnhaengen das Ende der Liste.
+    // The target is a position in a comment list: zuGrab == number of grabs
+    // means the lines after the last animation, zuZeile == kAnhaengen means
+    // the end of the list.
     static constexpr std::size_t kAnhaengen = static_cast<std::size_t>(-1);
     struct PendingCommentMove {
         std::size_t vonGrab = 0;
@@ -636,16 +672,15 @@ private:
     };
     PendingCommentMove pendingCommentMove_;
 
-    // Welche Meldung gerade durchgeklickt wird, und das wievielte
-    // Vorkommen. Bei einem doppelten Namen springt jeder Klick zum
-    // naechsten.
-    // Doppelte Namen aus dem letzten Bauversuch.
+    // Which message is currently being clicked through, and which occurrence.
+    // For a duplicate name each click jumps to the next one.
+    // Duplicate names from the last build attempt.
     //
-    // buildOne bekommt das Dokument nur lesend — die Meldungen traegt
-    // deshalb der Aufrufer ein, der es aendern darf.
-    // Der Bau laeuft in einem Thread mit Kopien der Dokumente; Meldungen
-    // traegt deshalb der Hauptthread beim Zeichnen ein. Der Mutex schuetzt
-    // die Uebergabe.
+    // buildOne gets the document read-only - so the messages are entered by
+    // the caller, which is allowed to modify it.
+    // The build runs in a thread with copies of the documents; so the main
+    // thread enters the messages while drawing. The mutex protects the
+    // hand-over.
     std::mutex               dupMutex_;
     std::vector<std::string> pendingDuplicates_;
     std::string              pendingDupDoc_;
@@ -654,49 +689,48 @@ private:
     int  issueCycleIdx_ = 0;
 
     int  editTrailGrab_ = -1;
-    // Das Eingabefeld eines gerade begonnenen Bearbeitens soll den Fokus
-    // bekommen — einmal, beim naechsten Zeichnen.
+    // The input field of an edit that was just started should get focus -
+    // once, on the next draw.
     bool focusEditField_ = false;
     char editTrailBuf_[256] = {};
 
 public:
-    // Eine Kommentarzeile an eine andere Stelle haengen.
+    // Move a comment line to a different position.
     //
-    // Kommentare stehen technisch als "commentsBefore" am folgenden Grab —
-    // so verlangt es das Dateiformat, und so landet der Text beim Bauen an
-    // der richtigen Stelle in der animation.cfg.
+    // Technically, comments are stored as "commentsBefore" on the following
+    // grab - that's what the file format requires, and that way the text ends
+    // up in the right place in animation.cfg when building.
     //
-    // Fuer den Nutzer soll sich ein Trenner aber wie ein eigenes Element
-    // verhalten, das sich unabhaengig von den Animationen verschieben
-    // laesst. Diese Funktion loest ihn beim einen Grab und haengt ihn beim
-    // anderen ein.
+    // For the user, though, a separator should behave like an element of its
+    // own that can be moved independently of the animations. This function
+    // detaches it from one grab and attaches it to the other.
     //
-    // "nachOben" verschiebt ihn um eine Zeile in der Anzeige: innerhalb
-    // desselben Grabs, oder ans Ende des Kommentarblocks davor.
+    // "nachOben" (upwards) moves it up one row in the display: within the same
+    // grab, or to the end of the comment block before it.
     bool moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool nachOben);
 
 private:
     bool editOpen_ = false;
     char enumFilter_[128] = {0};
 
-    // Gemerkte Ausgabeorte je .car-Pfad, aus den Einstellungen geladen.
+    // Remembered output locations per .car path, loaded from the settings.
     std::map<std::string, std::string> savedOutputs_;
 
-    // Zuletzt offene Tabs, beim Start wiederhergestellt.
-    // Zuletzt benutzter Ordner je Zweck.
+    // Tabs open last time, restored at startup.
+    // Last used folder per purpose.
     std::map<std::string, std::string> lastDirs_;
 
     std::vector<std::string> savedTabs_;
     int                      savedActive_ = 0;
 
-    // --- Framezahlen im Hintergrund ---------------------------------------
+    // --- Frame counts in the background -----------------------------------
     //
-    // 1289 Dateien im Vordergrund zu lesen wuerde das Fenster fuer Sekunden
-    // einfrieren. Deshalb laeuft das nebenher und die Spalte fuellt sich
-    // nach und nach. Ein Knopf dafuer waere unnoetige Arbeit fuer den
-    // Nutzer — die Zahl will man immer sehen.
+    // Reading 1289 files in the foreground would freeze the window for
+    // seconds. So it runs alongside and the column fills in bit by bit. A
+    // button for it would be needless work for the user - you always want to
+    // see the number.
     mutable std::mutex          frameMutex_;
-    std::map<std::string, int>  frameCounts_;      // relativer Pfad -> Frames
+    std::map<std::string, int>  frameCounts_;      // relative path -> frames
     std::atomic<bool>           frameWorkerRunning_{false};
     std::atomic<bool>           frameWorkerStop_{false};
     std::thread                 frameWorker_;

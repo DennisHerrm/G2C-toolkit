@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!--
-  Pfade mit Umlauten.
+  Paths with umlauts.
 
-  Die Oberflaeche bekommt Pfade von Windows als UTF-16 und reicht sie als
-  UTF-8 weiter; die Bibliothek oeffnet Dateien ueber std::string. Ohne diese
-  Angabe deutet Windows solche Zeichenketten in der ANSI-Codepage, und
-  "Schuesse Blocken" mit Umlaut wurde zu "SchÃ¼sse" - Datei nicht gefunden,
-  oder schlimmer: beim Bauen entstand ein zweiter, falsch benannter Ordner.
+  The UI receives paths from Windows as UTF-16 and passes them on as UTF-8;
+  the library opens files via std::string. Without this setting, Windows
+  interprets such strings in the ANSI code page, and "Schuesse Blocken"
+  spelled with an umlaut turned into "SchÃ¼sse" - file not found, or worse:
+  the build created a second, wrongly named folder.
 
-  Mit activeCodePage UTF-8 (ab Windows 10 1903) sind alle schmalen
-  Windows-Schnittstellen des Prozesses UTF-8: fopen, CreateFileA,
-  std::filesystem::path aus std::string, argv.
+  With activeCodePage UTF-8 (Windows 10 1903 and later), all narrow Windows
+  APIs of the process are UTF-8: fopen, CreateFileA, std::filesystem::path
+  from std::string, argv.
 -->
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <application xmlns="urn:schemas-microsoft-com:asm.v3">

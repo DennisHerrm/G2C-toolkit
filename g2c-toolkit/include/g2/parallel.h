@@ -1,10 +1,10 @@
-// g2/parallel.h — Minimaler paralleler for-Loop.
+// g2/parallel.h - Minimal parallel for loop.
 //
-// Bewusst mit std::thread statt std::execution::par: die Parallel-Algorithmen
-// der Standardbibliothek verlangen auf GCC und Clang zwingend Intel TBB und
-// funktionieren nur unter MSVC ohne Zusatzbibliothek. Fuer ein Werkzeug, das
-// mit nichts als einem C++20-Compiler bauen soll, ist das ein zu hoher Preis
-// fuer ein paar Zeilen Ersparnis.
+// Deliberately uses std::thread instead of std::execution::par: the standard
+// library's parallel algorithms strictly require Intel TBB on GCC and Clang
+// and only work without an extra library under MSVC. For a tool that should
+// build with nothing but a C++20 compiler, that is too high a price for
+// saving a few lines.
 
 #pragma once
 
@@ -23,23 +23,22 @@ inline unsigned defaultThreadCount() {
     return n ? n : 4u;
 }
 
-// Ruft body(i, worker) fuer i in [0, count) auf, verteilt auf mehrere Threads.
+// Calls body(i, worker) for i in [0, count), spread across multiple threads.
 //
-// "worker" ist eine Nummer von 0 bis threads-1 und bleibt fuer einen Thread
-// gleich. Damit laesst sich je Thread ein eigener Zaehler fuehren, ohne
-// Sperre und ohne Datenrennen.
+// "worker" is a number from 0 to threads-1 and stays the same for a given
+// thread. This allows keeping a separate counter per thread, without a lock
+// and without data races.
 //
-// WARUM ALS PARAMETER und nicht ueber thread_local:
+// WHY AS A PARAMETER and not via thread_local:
 //
-// Ein thread_local ueberlebt den Aufruf. Laeuft parallelFor seriell — bei
-// einem Kern oder threads=1 —, ist der ausfuehrende Thread der Hauptthread,
-// und dessen Wert steht beim naechsten Aufruf noch da. Wird dann mit weniger
-// Threads gearbeitet, zeigt der gespeicherte Index hinter das Ende des
-// Zaehlerfeldes. Das faellt in keinem Test auf, weil es nur bei wechselnder
-// Threadzahl zuschlaegt.
+// A thread_local outlives the call. If parallelFor runs serially - on a
+// single core or with threads=1 - the executing thread is the main thread,
+// and its value is still there on the next call. If fewer threads are then
+// used, the stored index points past the end of the counter array. No test
+// catches this, because it only strikes when the thread count changes.
 //
-// Ausnahmen aus body werden aufgefangen und nach dem Join erneut geworfen,
-// damit ein Fehler in einer Datei nicht das ganze Programm mitreisst.
+// Exceptions from body are caught and rethrown after the join, so that an
+// error in one file doesn't take the whole program down with it.
 template <typename F>
 void parallelForWorker(std::size_t count, F&& body, unsigned threads = 0) {
     if (count == 0) return;
@@ -51,14 +50,13 @@ void parallelForWorker(std::size_t count, F&& body, unsigned threads = 0) {
         return;
     }
 
-    // Arbeit blockweise vergeben statt einzeln.
+    // Hand out work in chunks rather than one item at a time.
     //
-    // Ein fetch_add je Element ist bei kurzen Aufgaben der Engpass: bei
-    // 30384 Frames zu je wenigen Mikrosekunden schlagen sich acht Threads
-    // um dieselbe Cachezeile. Bloecke von etwa 64 Elementen verteilen die
-    // Last immer noch fein genug — die Aufgaben sind ungleich lang, eine
-    // feste Aufteilung waere schlechter —, kosten aber ein Vierundsechzigstel
-    // der Synchronisation.
+    // One fetch_add per element is the bottleneck for short tasks: with
+    // 30384 frames of a few microseconds each, eight threads fight over the
+    // same cache line. Chunks of about 64 elements still spread the load
+    // finely enough - the tasks vary in length, a fixed split would be
+    // worse - but cost only a sixty-fourth of the synchronization.
     const std::size_t chunk = std::max<std::size_t>(1, std::min<std::size_t>(64, count / (threads * 8) + 1));
 
     std::atomic<std::size_t> next{0};
@@ -87,7 +85,7 @@ void parallelForWorker(std::size_t count, F&& body, unsigned threads = 0) {
     if (firstError) std::rethrow_exception(firstError);
 }
 
-// Ohne Threadnummer, fuer Schleifen, die keine brauchen.
+// Without a thread number, for loops that don't need one.
 template <typename F>
 void parallelFor(std::size_t count, F&& body, unsigned threads = 0) {
     parallelForWorker(

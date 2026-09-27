@@ -1,8 +1,8 @@
-// Nur fuer tests/gui_driver.cpp: ImGui-Zusicherungen abfangen statt abbrechen.
+// Only for tests/gui_driver.cpp: catch ImGui assertions instead of aborting.
 //
-// Der Treiber klickt sich durch jedes Fenster. Eine fehlgeschlagene
-// Zusicherung soll dort als Fehler im Protokoll landen, mit Datei und Zeile,
-// statt den Lauf ohne Hinweis zu beenden.
+// The driver clicks its way through every window. A failed assertion should
+// end up in the log as an error, with file and line, instead of ending the
+// run without any notice.
 #pragma once
 
 void g2DriverAssert(const char* expr, const char* file, int line);

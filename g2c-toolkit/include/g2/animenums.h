@@ -1,14 +1,14 @@
-// g2/animenums.h — Die Enumtabelle aus anims.h.
+// g2/animenums.h - The enum table from anims.h.
 //
-// Assimilate laedt genau eine solche Datei und prueft die Sequenznamen der
-// .car dagegen. Welche Datei das ist, gehoert in die Einstellungen: Ravens
-// Tabelle passt fuer Ravens Datenbestand, ein Mod erweitert sie.
+// Assimilate loads exactly one such file and checks the .car's sequence
+// names against it. Which file that is belongs in the settings: Raven's
+// table fits Raven's data set, a mod extends it.
 //
-// An Movie Duels gemessen: die OpenJK-anims.h kennt 1603 Enums, die dortige
-// animation.cfg fuehrt 1683 Sequenzen — 266 davon (BOTH_MD_*, BOTH_BOLT_*,
-// BOTH_BLOCK_*) sind eigene Animationen des Mods. Wer unbekannte Namen als
-// Fehler behandelt, blockiert damit die gesamte Arbeit an einem Mod. Sie
-// gehoeren als Warnung gemeldet, nicht als Abbruch.
+// Measured on Movie Duels: the OpenJK anims.h knows 1603 enums, the mod's
+// animation.cfg lists 1683 sequences - 266 of them (BOTH_MD_*, BOTH_BOLT_*,
+// BOTH_BLOCK_*) are the mod's own animations. Treating unknown names as
+// errors blocks all work on a mod. They should be reported as warnings,
+// not as an abort.
 
 #pragma once
 
@@ -21,7 +21,7 @@ namespace g2::anim {
 
 struct EnumTable {
     std::string              sourcePath;
-    std::vector<std::string> names;   // in Deklarationsreihenfolge
+    std::vector<std::string> names;   // in declaration order
     std::map<std::string, int> index;
 
     bool empty() const { return names.empty(); }
@@ -29,22 +29,22 @@ struct EnumTable {
 
     bool contains(const std::string& name) const { return index.count(name) != 0; }
 
-    // -1, wenn unbekannt.
+    // -1 if unknown.
     int indexOf(const std::string& name) const {
         const auto it = index.find(name);
         return it == index.end() ? -1 : it->second;
     }
 };
 
-// Liest die Enums aus einem C-Header.
+// Reads the enums from a C header.
 //
-// Erkannt wird der erste `typedef enum`-Block; darin jeder Bezeichner aus
-// Grossbuchstaben, Ziffern und Unterstrichen, der von einem Komma gefolgt
-// wird. Zuweisungen (`FOO = 3,`) sind erlaubt, Kommentare werden ignoriert.
+// The first `typedef enum` block is recognized; within it, every identifier
+// made of uppercase letters, digits and underscores that is followed by a
+// comma. Assignments (`FOO = 3,`) are allowed, comments are ignored.
 //
-// Bewusst nachsichtig: die Datei ist Quellcode eines fremden Projekts und
-// aendert sich. Ein Parser, der an einem unerwarteten Makro scheitert, waere
-// hier schlechter als einer, der ein paar Zeilen ueberspringt.
+// Deliberately lenient: the file is source code from another project and
+// changes over time. A parser that fails on an unexpected macro would be
+// worse here than one that skips a few lines.
 EnumTable parseEnumHeader(const std::string& text, const std::string& sourcePath = {});
 EnumTable parseEnumHeaderFile(const std::string& path);
 
