@@ -47,7 +47,7 @@ App::App(Platform platform) : platform_(std::move(platform)) {
     }
     if (restored) {
         if (savedActive_ >= 0 && savedActive_ < static_cast<int>(docs_.size()))
-            active_ = savedActive_;
+            activate(savedActive_);
         log(LogLine::Kind::Good, trf(S::LogRestored, restored));
     } else {
         log(LogLine::Kind::Info, tr(S::LogReady));
@@ -351,7 +351,7 @@ void App::log(LogLine::Kind kind, std::string text) {
 bool App::openCar(const std::string& path) {
     for (std::size_t i = 0; i < docs_.size(); ++i) {
         if (docs_[i].path == path) {
-            active_ = static_cast<int>(i);
+            activate(static_cast<int>(i));
             log(LogLine::Kind::Info, trf(S::LogAlreadyOpen, path.c_str()));
             return true;
         }
@@ -370,7 +370,7 @@ bool App::openCar(const std::string& path) {
         d.loadError = e.what();
         log(LogLine::Kind::Bad, d.title + ": " + d.loadError);
         docs_.push_back(std::move(d));
-        active_ = static_cast<int>(docs_.size()) - 1;
+        activate(static_cast<int>(docs_.size()) - 1);
         return false;
     }
     d.syncSelection();
@@ -398,7 +398,7 @@ bool App::openCar(const std::string& path) {
     }
     log(LogLine::Kind::Good, trf(S::LogOpened, d.title.c_str(), d.script.grabs.size()));
     docs_.push_back(std::move(d));
-    active_ = static_cast<int>(docs_.size()) - 1;
+    activate(static_cast<int>(docs_.size()) - 1);
     refreshTabTitles();
     return true;
 }
@@ -888,6 +888,9 @@ void App::closeDocument(std::size_t index) {
     docs_.erase(docs_.begin() + static_cast<long>(index));
     if (active_ >= static_cast<int>(docs_.size())) active_ = static_cast<int>(docs_.size()) - 1;
     if (active_ < 0) active_ = 0;
+    // ImGui waehlt nach dem Schliessen selbst einen Nachbarn. Den hier
+    // bestimmten durchsetzen, damit Anzeige und Programm dasselbe meinen.
+    if (!docs_.empty()) activate(active_);
     refreshTabTitles();
 }
 
@@ -2957,6 +2960,7 @@ void App::drawTabs() {
         return;
 
     std::vector<std::size_t> closeClicked;
+    if (selectTab_ >= static_cast<int>(docs_.size())) selectTab_ = -1;
     for (std::size_t i = 0; i < docs_.size();) {
         Document& d = docs_[i];
         std::string label = d.title;
@@ -2972,8 +2976,22 @@ void App::drawTabs() {
         // und ImGui merkte sich die Spaltenbreiten dann zwanzigmal getrennt.
         // Ausserhalb ist die Kennung stabil, und eine einmal eingestellte
         // Breite gilt fuer alle Skripte und ueberlebt den Neustart.
-        if (ImGui::BeginTabItem(label.c_str(), &open)) {
-            active_ = static_cast<int>(i);
+        // Von aussen gewaehlter Tab (Doppelklick auf eine .car, Wiederherstellen
+        // beim Start, Oeffnen eines schon offenen Skripts).
+        //
+        // Frueher wurde dafuer nur active_ gesetzt. ImGui wusste davon nichts,
+        // zeigte weiter seinen eigenen Tab — beim Start den ersten — und
+        // ueberschrieb active_ damit im selben Bild wieder. Wer eine .car
+        // doppelklickte, die im 24. Tab lag, landete im ersten.
+        const bool soll = static_cast<int>(i) == selectTab_;
+        if (ImGui::BeginTabItem(label.c_str(), &open,
+                                soll ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
+            // Solange die Auswahl noch aussteht, zeigt ImGui fuer ein Bild den
+            // alten Tab. Der darf active_ dann nicht zuruecksetzen.
+            if (selectTab_ < 0 || soll) {
+                active_ = static_cast<int>(i);
+                selectTab_ = -1;
+            }
             ImGui::EndTabItem();
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))

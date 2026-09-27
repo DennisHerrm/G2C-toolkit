@@ -456,6 +456,23 @@ struct Driver {
         return nullptr;
     }
 
+    // Name des Tabs, den ImGui in der Skript-Tableiste gerade zeigt.
+    std::string shownTab(const std::string& anyPathInBar) const {
+        ImGuiContext& g = *GImGui;
+        for (int n = 0; n < g.TabBars.GetMapSize(); ++n) {
+            ImGuiTabBar* tb = g.TabBars.TryGetMapData(n);
+            if (!tb) continue;
+            bool mine = false;
+            for (ImGuiTabItem& t : tb->Tabs)
+                if (std::string(ImGui::TabBarGetTabName(tb, &t)).find(anyPathInBar) != std::string::npos)
+                    mine = true;
+            if (!mine) continue;
+            for (ImGuiTabItem& t : tb->Tabs)
+                if (t.ID == tb->SelectedTabId) return ImGui::TabBarGetTabName(tb, &t);
+        }
+        return {};
+    }
+
     // Knoepfe der Modusleiste: drei "##mode" in dieser Reihenfolge.
     const Item* modeButton(int n) const {
         int k = 0;
@@ -825,6 +842,30 @@ int main(int argc, char** argv) {
         D.click(t0);
         D.frames(2);
         check(app->activeTab() == 0, "Klick auf ersten Tab aktiviert ihn");
+
+        // Eine schon offene .car erneut oeffnen (Doppelklick im Explorer):
+        // ihr Tab muss erscheinen, nicht der gerade sichtbare.
+        const std::string p1 = app->documents()[1].path;
+        app->openPath(p1);
+        D.frames(3);
+        check(app->activeTab() == 1 && D.shownTab(p1).find(p1) != std::string::npos,
+              "erneut geoeffnete .car springt auf ihren Tab (ImGui zeigt: " + D.shownTab(p1) + ")");
+
+        // Neustart: der zuletzt aktive Tab muss wieder gewaehlt sein, nicht
+        // der erste.
+        {
+            const float dpi = app->settings().dpiScale;
+            app.reset();
+            app = std::make_unique<g2::gui::App>(plat);
+            D.app = app.get();
+            app->settings().dpiScale = dpi;
+            D.frames(3);
+            check(app->documents().size() == 2 && app->activeTab() == 1 &&
+                      D.shownTab(p1).find(p1) != std::string::npos,
+                  "nach dem Neustart ist der zuletzt aktive Tab gewaehlt");
+            D.click(D.findTab("###" + app->documents()[0].path));
+            D.frames(2);
+        }
     });
 
     // =====================================================================
