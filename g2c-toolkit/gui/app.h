@@ -44,7 +44,23 @@ struct Platform {
                                            const std::string& startDir)>
         openFiles;
     std::function<std::string(const char* title, const std::string& startDir)> pickFolder;
+
+    // Mehrere Ordner auf einmal. Leer, wenn die Plattform es nicht kann —
+    // dann faellt die Oberflaeche auf pickFolder zurueck.
+    std::function<std::vector<std::string>(const char* title, const std::string& startDir)>
+        pickFolders;
     std::function<void(const std::string& path)> revealInExplorer;
+
+    // Speichern-Dialog: ein Name, der noch nicht existieren muss. Leer =
+    // abgebrochen. Fehlt die Funktion, faellt die Oberflaeche auf openFiles
+    // zurueck (nur in Tests sinnvoll).
+    //
+    // Fuer "Neue .car" war bisher der Oeffnen-Dialog im Einsatz. Der laesst
+    // nur vorhandene Dateien zu, newCar() lehnt vorhandene aber ab — neu
+    // anlegen ging damit ueberhaupt nicht.
+    std::function<std::string(const char* title, const char* filter, const std::string& startDir,
+                              const char* defaultExt)>
+        saveFile;
 };
 
 // Ein geoeffnetes Skript — ein Tab.
@@ -307,7 +323,12 @@ public:
 
     // Loescht die uebergebenen Zeilen. Absteigend sortiert abgearbeitet,
     // damit sich die Indizes nicht unter der Schleife verschieben.
-    std::size_t deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows);
+    //
+    // keepComments: Trenner und Kommentarzeilen ueber den geloeschten
+    // Sequenzen bleiben stehen und gehoeren danach zur naechsten. Beim
+    // Ausschneiden false — dort wandern sie mit in die Ablage.
+    std::size_t deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
+                            bool keepComments = true);
 
     // Legt ein leeres, gueltiges Skript an und oeffnet es als Tab.
     bool newCar(const std::string& path);
@@ -358,6 +379,11 @@ public:
     std::vector<std::string> askFiles(const char* purpose, const char* title,
                                       const char* filter, bool multi);
     std::string              askFolder(const char* purpose, const char* title);
+
+    // Mehrere Ordner. Faellt auf askFolder zurueck, wenn die Plattform
+    // keine Mehrfachauswahl kann — dann kommt hoechstens einer zurueck,
+    // aber nie nichts.
+    std::vector<std::string> askFolders(const char* purpose, const char* title);
     std::string settingsPath() const;
     void        saveSettings() const;
     void        loadSettings();
@@ -376,6 +402,21 @@ public:
     int                            activeTab() const { return active_; }
 
     bool buildRunning() const { return job_.running.load(); }
+
+    // --- Schliessen mit ungespeicherten Aenderungen -----------------------
+    //
+    // Tab-Kreuz, Strg+W, "Alle schliessen" und das Fensterkreuz verwarfen
+    // Aenderungen bisher ohne Rueckfrage. Jetzt fragt ein Dialog: speichern,
+    // verwerfen oder abbrechen.
+
+    // Schliesst die Tabs sofort, wenn keiner geaendert ist, sonst fragt der
+    // Dialog beim naechsten Bildaufbau.
+    void requestClose(std::vector<std::size_t> indices);
+
+    // Fuer das Fensterkreuz. true = darf sofort beendet werden. Sonst
+    // erscheint der Dialog, und quitApproved() meldet spaeter die Antwort.
+    bool requestQuit();
+    bool quitApproved() const { return quitApproved_; }
 
     // Die Fensteranbindung fragt das ab: bei Chinesisch oder Japanisch muss
     // der Zeichensatz mit anderen Glyphenbereichen neu aufgebaut werden.
@@ -424,7 +465,32 @@ private:
     void refreshTabTitles();
 
     void startBuild(bool allTabs);
-    void buildOne(const Document& d);
+
+    // Laeuft im Arbeitsthread. Bekommt Kopien von Dokument UND Einstellungen:
+    // die Oberflaeche bleibt waehrend des Baus bedienbar, und ein Feld, das
+    // gerade getippt wird, darf nicht gleichzeitig vom Thread gelesen werden.
+    void buildOne(const Document& d, const Settings& st);
+
+    void drawCloseDialog();
+    void drawOverwriteDialog();
+    void closeEditorOf(std::size_t docIndex);
+    void newCarDialog();
+    void openScriptDialog();
+    void openFolderDialog();
+    void handleShortcuts();
+
+    // Datei schreiben und bei Erfolg true. Schlaegt es fehl, steht der Grund
+    // im Protokoll — die Ausgabe gilt dann nicht als gebaut.
+    bool writeOutput(const std::string& title, const std::string& path, const std::string& data);
+
+    // Export mit Rueckfrage, wenn Dateien ueberschrieben wuerden.
+    void exportWithConfirm(std::vector<std::size_t> rows, bool withCar);
+    void runExport(const std::vector<std::size_t>& rows, bool withCar);
+
+    // Tabellenzeilen, die der Filter gerade zeigt.
+    bool rowVisible(const Document& d, std::size_t i) const;
+    std::string askSaveFile(const char* purpose, const char* title, const char* filter,
+                            const char* defaultExt);
 
     Platform             platform_;
     Settings             settings_;
@@ -459,6 +525,34 @@ private:
     // nur main_win32.cpp, und die Auskunft muss mit der Datei
     // uebereinstimmen, die dort auch wirklich beschrieben wird.
     std::string          logPath_;
+
+    // Zuletzt beschriebener Ausgabeordner, fuer den Knopf im Protokoll.
+    // Der Bau-Thread schreibt ihn, die Oberflaeche liest ihn: nur unter
+    // outputDirMutex_ anfassen.
+    std::string          lastOutputDir_;
+    mutable std::mutex   outputDirMutex_;
+
+    // Rueckfrage beim Schliessen: Pfade der betroffenen Tabs.
+    std::vector<std::string> pendingClose_;
+    bool                     quitRequested_ = false;
+    bool                     quitApproved_ = false;
+
+    // Rueckfrage vor dem Ueberschreiben beim Export.
+    struct PendingExport {
+        std::vector<std::size_t> rows;
+        bool                     withCar = false;
+        std::vector<std::string> existing;
+        bool                     active = false;
+    };
+    PendingExport pendingExport_;
+
+    // Zu welchem Skript gehoeren der offene Sequenzdialog und die
+    // Loeschrueckfrage? Beides bezog sich frueher auf den aktiven Tab — wer
+    // dazwischen den Tab wechselte, bearbeitete oder loeschte im falschen
+    // Skript.
+    std::string editDocPath_;
+    std::string pendingDeleteDocPath_;
+    bool        pendingDeleteIsCut_ = false;
     bool                 styleApplied_ = false;
     bool                 fontsDirty_ = false;
     char                 filter_[128] = {0};
@@ -493,6 +587,70 @@ private:
     std::vector<std::size_t> pendingDelete_;
 
     int  editRow_ = -1;
+
+    // Welche Kommentarzeile gerade bearbeitet wird.
+    //
+    // Zwei Zahlen, weil eine Sequenz mehrere Kommentarzeilen haben kann:
+    // welcher Grab, und welche Zeile darin. -1 heisst: keine.
+    int  editCommentGrab_ = -1;
+    int  editCommentLine_ = -1;
+    char editCommentBuf_[512] = {};
+
+    // Welcher Zeilenkommentar gerade bearbeitet wird. -1 heisst: keiner.
+    // Ein Trenner, der gerade abgelegt wurde: von wo, wohin.
+    //
+    // Wie bei den Sequenzen wird die Verschiebung NACH der Tabelle
+    // ausgefuehrt. Mitten im Zeichnen die Liste zu aendern, ueber die
+    // gerade iteriert wird, ist der klassische Weg zum Absturz.
+    struct PendingCommentMove {
+        std::size_t vonGrab = 0;
+        std::size_t vonZeile = 0;
+        std::size_t zuGrab = 0;
+        bool        ansEnde = false;   // hinter die letzte Animation
+        bool        aktiv = false;
+    };
+    PendingCommentMove pendingCommentMove_;
+
+    // Welche Meldung gerade durchgeklickt wird, und das wievielte
+    // Vorkommen. Bei einem doppelten Namen springt jeder Klick zum
+    // naechsten.
+    // Doppelte Namen aus dem letzten Bauversuch.
+    //
+    // buildOne bekommt das Dokument nur lesend — die Meldungen traegt
+    // deshalb der Aufrufer ein, der es aendern darf.
+    // Der Bau laeuft in einem Thread mit Kopien der Dokumente; Meldungen
+    // traegt deshalb der Hauptthread beim Zeichnen ein. Der Mutex schuetzt
+    // die Uebergabe.
+    std::mutex               dupMutex_;
+    std::vector<std::string> pendingDuplicates_;
+    std::string              pendingDupDoc_;
+
+    int  issueCycleFor_ = -1;
+    int  issueCycleIdx_ = 0;
+
+    int  editTrailGrab_ = -1;
+    // Das Eingabefeld eines gerade begonnenen Bearbeitens soll den Fokus
+    // bekommen — einmal, beim naechsten Zeichnen.
+    bool focusEditField_ = false;
+    char editTrailBuf_[256] = {};
+
+public:
+    // Eine Kommentarzeile an eine andere Stelle haengen.
+    //
+    // Kommentare stehen technisch als "commentsBefore" am folgenden Grab —
+    // so verlangt es das Dateiformat, und so landet der Text beim Bauen an
+    // der richtigen Stelle in der animation.cfg.
+    //
+    // Fuer den Nutzer soll sich ein Trenner aber wie ein eigenes Element
+    // verhalten, das sich unabhaengig von den Animationen verschieben
+    // laesst. Diese Funktion loest ihn beim einen Grab und haengt ihn beim
+    // anderen ein.
+    //
+    // "nachOben" verschiebt ihn um eine Zeile in der Anzeige: innerhalb
+    // desselben Grabs, oder ans Ende des Kommentarblocks davor.
+    bool moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool nachOben);
+
+private:
     bool editOpen_ = false;
     char enumFilter_[128] = {0};
 

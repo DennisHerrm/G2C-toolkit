@@ -368,8 +368,12 @@ constexpr Entry kTable[] = {
      "GLA の隣に animation.cfg がありません - これがないとシーケンス境界が分かりません。"},
     {S::LogEnumsLoaded, "anims.h: %zu Eintraege", "anims.h: %zu entries", "anims.h：%zu 个条目",
      "anims.h: %zu 件"},
-    {S::LogXsiInFolder, "%zu .xsi in %s", "%zu .xsi in %s", "%s 中有 %zu 个 .xsi",
-     "%s に %zu 件の .xsi"},
+    // Platzhalter in JEDER Sprache in derselben Reihenfolge wie die
+    // Argumente (%zu, dann %s). snprintf kennt keine Positionsangaben; in
+    // der alten chinesischen und japanischen Fassung stand %s vorn, und die
+    // Zahl wurde als Zeiger gelesen — Absturz beim Hinzufuegen eines Ordners.
+    {S::LogXsiInFolder, "%zu .xsi in %s", "%zu .xsi in %s", "%zu 个 .xsi（位于 %s）",
+     "%zu 件の .xsi（%s）"},
     {S::LogNoXsiIn, "Keine .xsi in %s", "No .xsi in %s", "%s 中没有 .xsi",
      "%s に .xsi がありません"},
     {S::LogAddedTo, "%zu Datei(en) zu %zu Skript(en) hinzugefuegt",
@@ -424,8 +428,8 @@ constexpr Entry kTable[] = {
     {S::LogGlaOpened, "%s: %d Frames, %zu Bones", "%s: %d frames, %zu bones",
      "%s：%d 帧，%zu 个骨骼", "%s: %d フレーム、%zu ボーン"},
     {S::LogFramesLoaded, "%zu Sequenzen mit Wurzelbewegung aus %s",
-     "%zu sequences with root motion from %s", "从 %s 读取到 %zu 个带根运动的序列",
-     "%s から %zu 件のルートモーション付きシーケンス"},
+     "%zu sequences with root motion from %s", "%zu 个带根运动的序列（来自 %s）",
+     "%zu 件のルートモーション付きシーケンス（%s から）"},
     {S::LogDeleted, "%zu Sequenz(en) geloescht", "%zu sequence(s) deleted", "已删除 %zu 个序列",
      "%zu 件のシーケンスを削除しました"},
     {S::LogMoved, "%zu verschoben", "%zu moved", "已移动 %zu 个", "%zu 件を移動しました"},
@@ -549,6 +553,74 @@ constexpr Entry kTable[] = {
      "3.5 不命名，与 Raven 的动画文件一致。\n\n内容相同。部分旧工具需要 3.0。",
      "生成する .xsi のバージョン。\n\n3.0 は Raven の root.xsi と同様にテンプレートに名前を付けます。\n"
      "3.5 は名前を付けません。\n\n内容は同じです。古いツールでは 3.0 が必要な場合があります。"},
+    {S::FoldersAdded, "%zu Ordner durchsucht, %zu Datei(en) hinzugefuegt",
+     "%zu folders scanned, %zu file(s) added", "已扫描 %zu 个文件夹，添加 %zu 个文件",
+     "%zu 個のフォルダーを検索し、%zu 件のファイルを追加しました"},
+    {S::OpenOutputDir, "Ausgabeordner oeffnen", "Open output folder", "打开输出文件夹",
+     "出力フォルダーを開く"},
+    {S::RefIsTarget,
+     "%s: Die Referenz-GLA liegt im Ausgabeordner und wuerde ueberschrieben. "
+     "Sie wird gelesen und gleichzeitig beschrieben - Windows sperrt die Datei. "
+     "Anderen Ausgabeordner waehlen oder die Referenz woanders hinlegen.",
+     "%s: The reference GLA sits in the output folder and would be overwritten. "
+     "It is read and written at the same time - Windows locks the file. "
+     "Choose a different output folder, or move the reference elsewhere.",
+     "%s：参考 GLA 位于输出文件夹中并会被覆盖。读写同时进行会导致 Windows 锁定该文件。"
+     "请选择其他输出文件夹，或将参考文件移至别处。",
+     "%s: 参照 GLA が出力フォルダーにあり、上書きされます。読み書きが同時に行われ "
+     "Windows がファイルをロックします。別の出力フォルダーを選ぶか、参照を移動してください。"},
+    {S::RefMissing,
+     "Die Referenz-GLA \"%s\" gibt es nicht. Sie liefert das SKELETT - Bonenamen, "
+     "Hierarchie, Bindeposen, Skalierung. Die .xsi-Dateien enthalten nur "
+     "Animationsdaten; ohne Skelett laesst sich keine GLA schreiben. Eine "
+     "vorhandene GLA mit demselben Skelett auswaehlen.",
+     "The reference GLA \"%s\" does not exist. It provides the SKELETON - bone "
+     "names, hierarchy, base poses, scale. The .xsi files hold animation data "
+     "only; without a skeleton no GLA can be written. Pick any existing GLA with "
+     "the same skeleton.",
+     "\u53c2\u8003 GLA \"%s\" \u4e0d\u5b58\u5728\u3002\u5b83\u63d0\u4f9b\u9aa8\u67b6\u3002"
+     "\u8bf7\u9009\u62e9\u5177\u6709\u76f8\u540c\u9aa8\u67b6\u7684\u73b0\u6709 GLA\u3002",
+     "\u53c2\u7167 GLA \"%s\" \u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002"
+     "\u540c\u3058\u30b9\u30b1\u30eb\u30c8\u30f3\u306e\u65e2\u5b58 GLA \u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002"},
+    {S::BuildStoppedDup,
+     "Bau abgebrochen: %zu Sequenzname(n) kommen mehrfach vor. Unter \"Issues\" "
+     "anklicken - der Sprung geht der Reihe nach zu jedem Vorkommen.",
+     "Build stopped: %zu sequence name(s) appear more than once. Click them under "
+     "\"Issues\" - each click jumps to the next occurrence.",
+     "\u6784\u5efa\u5df2\u505c\u6b62\uff1a%zu \u4e2a\u5e8f\u5217\u540d\u91cd\u590d\u3002",
+     "\u30d3\u30eb\u30c9\u4e2d\u6b62: %zu \u4ef6\u306e\u30b7\u30fc\u30b1\u30f3\u30b9\u540d\u304c\u91cd\u8907\u3057\u3066\u3044\u307e\u3059\u3002"},
+    {S::DlgComment, "Kommentar davor", "Comment above", "上方注释", "上のコメント"},
+    {S::DlgCommentTip,
+     "Steht im Skript VOR dieser Sequenz und landet so auch in der\n"
+     "erzeugten animation.cfg.\n\n"
+     "Eine Zeile je Zeile. \"//\" wird vorangestellt, falls es fehlt.\n"
+     "Damit laesst sich eine lange Liste gliedern, statt eine Wand aus\n"
+     "Zahlen zu hinterlassen.",
+     "Goes into the script ABOVE this sequence, and from there into the\n"
+     "generated animation.cfg.\n\n"
+     "One line per line. \"//\" is prepended if missing.\n"
+     "Use it to break up a long list instead of leaving a wall of numbers.",
+     "写在脚本中该序列的上方，并会出现在生成的 animation.cfg 中。\n\n"
+     "每行一条。若缺少 \"//\" 会自动添加。",
+     "スクリプト内でこのシーケンスの上に置かれ、生成される animation.cfg にも反映されます。\n\n"
+     "1 行につき 1 件。\"//\" が無ければ自動で付きます。"},
+    {S::AddDivider, "Trennlinie davor", "Divider above", "在上方添加分隔线",
+     "上に区切り線"},
+    {S::AddComment, "Kommentar davor...", "Comment above...", "在上方添加注释...",
+     "上にコメント..."},
+    {S::ColComment, "Kommentar", "Comment", "注释", "コメント"},
+    {S::CommentEditHint,
+     "Doppelklick zum Bearbeiten, Rechtsklick zum Loeschen.\nLeer lassen loescht die Zeile.",
+     "Double-click to edit, right-click to delete.\nLeaving it empty removes the line.",
+     "双击编辑，右键删除。\n留空则删除该行。",
+     "ダブルクリックで編集、右クリックで削除。\n空にすると行が消えます。"},
+    {S::TrailCommentTip,
+     "Hinweis zu dieser Animation. Steht in der .car hinter der Zeile und\n"
+     "landet in der animation.cfg an derselben Stelle.\n\nDoppelklick zum Bearbeiten.",
+     "A note about this animation. Sits after the line in the .car and ends up\n"
+     "in the same place in animation.cfg.\n\nDouble-click to edit.",
+     "关于此动画的说明。位于 .car 行尾，并出现在 animation.cfg 的相同位置。\n\n双击编辑。",
+     "このアニメーションへの注記。.car の行末に置かれ、animation.cfg の同じ位置に出力されます。\n\nダブルクリックで編集。"},
     {S::ModePreview, "Vorschau", "Preview", "预览", "プレビュー"},
     {S::ModePreviewHint, "Skelett einer Sequenz abspielen",
      "Play back a sequence's skeleton", "播放某个序列的骨架",
@@ -586,6 +658,46 @@ constexpr Entry kTable[] = {
     {S::DlgStart, "Start", "Start", "起始", "開始"},
     {S::SpeedAuto, "auto", "auto", "自动", "自動"},
     {S::BuildProgress, "%zu/%zu  %s", "%zu/%zu  %s", "%zu/%zu  %s", "%zu/%zu  %s"},
+
+    {S::UnsavedHead, "%zu Skript(e) mit ungespeicherten Aenderungen:",
+     "%zu script(s) with unsaved changes:", "%zu 个脚本有未保存的更改：",
+     "%zu 件のスクリプトに未保存の変更があります:"},
+    {S::Discard, "Verwerfen", "Discard", "放弃", "破棄"},
+    {S::OverwriteHead, "%zu Datei(en) gibt es im Zielordner schon; sie wuerden ueberschrieben:",
+     "%zu file(s) already exist in the target folder and would be overwritten:",
+     "目标文件夹中已有 %zu 个文件，将被覆盖：", "出力先に %zu 件のファイルが既にあり、上書きされます:"},
+    {S::Overwrite, "Ueberschreiben", "Overwrite", "覆盖", "上書き"},
+    {S::LogBackedUp, "Vorhandene Datei gesichert: %s", "Existing file backed up: %s",
+     "已备份现有文件：%s", "既存ファイルをバックアップしました: %s"},
+    {S::DragOtherTab,
+     "Zeilen lassen sich nicht in ein anderes Skript ziehen - dafuer Kopieren und Einfuegen "
+     "benutzen",
+     "Rows cannot be dragged into another script - use Copy and Paste instead",
+     "不能把行拖到另一个脚本中——请使用复制和粘贴",
+     "行を別のスクリプトへドラッグすることはできません。コピーと貼り付けを使ってください"},
+    {S::NErrors, "%zu Fehler", "%zu errors", "%zu 个错误", "エラー %zu 件"},
+    {S::NWarnings, "%zu Warnungen", "%zu warnings", "%zu 个警告", "警告 %zu 件"},
+    {S::Validated, "geprueft", "validated", "已检查", "検証済み"},
+    {S::DlgSeqTitle, "Sequenz: %s", "Sequence: %s", "序列：%s", "シーケンス: %s"},
+    {S::LogCarsUnder, "%zu .car-Dateien unter %s", "%zu .car files under %s",
+     "%zu 个 .car 文件（位于 %s）", "%zu 件の .car（%s）"},
+    {S::DupInCfg,
+     "%s: %s steht %dx in der animation.cfg - die Engine nimmt den letzten, die uebrigen sind "
+     "unerreichbar.",
+     "%s: %s appears %dx in animation.cfg - the engine uses the last one, the others are "
+     "unreachable.",
+     "%s：%s 在 animation.cfg 中出现 %d 次——引擎只使用最后一个，其余无法访问。",
+     "%s: %s は animation.cfg に %d 回あります。エンジンは最後のものだけを使い、残りは使われません。"},
+    {S::DupIssue,
+     "%s kommt mehrfach vor - umbenennen oder eine Fassung loeschen. Jeder Klick springt zum "
+     "naechsten Vorkommen.",
+     "%s occurs more than once - rename or delete one. Each click jumps to the next occurrence.",
+     "%s 出现多次——请重命名或删除其中一个。每次点击跳到下一处。",
+     "%s が複数あります。名前を変えるか一方を削除してください。クリックするたびに次の箇所へ移動します。"},
+    {S::LogWriteFailed, "%s: Schreiben fehlgeschlagen - %s", "%s: writing failed - %s",
+     "%s：写入失败——%s", "%s: 書き込みに失敗しました - %s"},
+    {S::LogSeqsSkipped, ", %zu ausserhalb der GLA uebersprungen", ", %zu outside the GLA skipped",
+     "，跳过 %zu 个超出 GLA 范围的序列", "、GLA の範囲外 %zu 件をスキップ"},
 };
 
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(S::Count),
@@ -598,6 +710,66 @@ consteval bool tableInOrder() {
     return true;
 }
 static_assert(tableInOrder(), "Ein Eintrag steht an der falschen Stelle in kTable");
+
+// Platzhalter muessen in allen Sprachen dieselben sein, in derselben
+// Reihenfolge.
+//
+// snprintf ordnet die Argumente allein nach ihrer Position zu. Stand in einer
+// Uebersetzung %s vor %zu, wurde die Zahl als Zeiger gelesen — in der
+// chinesischen und japanischen Oberflaeche stuerzte das Programm so beim
+// Hinzufuegen eines XSI-Ordners und beim Oeffnen einer GLA ab. Hier wird
+// daraus ein Uebersetzungsfehler.
+struct FormatSpec {
+    char len1 = 0;
+    char len2 = 0;
+    char conv = 0;
+};
+
+consteval FormatSpec nextFormatSpec(const char*& p) {
+    while (*p) {
+        if (*p != '%') {
+            ++p;
+            continue;
+        }
+        ++p;
+        if (*p == '%') {
+            ++p;
+            continue;
+        }
+        while (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0') ++p;
+        while ((*p >= '0' && *p <= '9') || *p == '*') ++p;
+        if (*p == '.') {
+            ++p;
+            while ((*p >= '0' && *p <= '9') || *p == '*') ++p;
+        }
+        FormatSpec s;
+        if (*p == 'h' || *p == 'l' || *p == 'z' || *p == 'j' || *p == 't' || *p == 'L') {
+            s.len1 = *p++;
+            if (*p == 'h' || *p == 'l') s.len2 = *p++;
+        }
+        s.conv = *p;
+        if (*p) ++p;
+        return s;
+    }
+    return {};
+}
+
+consteval bool sameFormat(const char* a, const char* b) {
+    for (;;) {
+        const FormatSpec x = nextFormatSpec(a);
+        const FormatSpec y = nextFormatSpec(b);
+        if (x.len1 != y.len1 || x.len2 != y.len2 || x.conv != y.conv) return false;
+        if (x.conv == 0) return true;
+    }
+}
+
+consteval bool formatsMatch() {
+    for (const Entry& e : kTable)
+        if (!sameFormat(e.de, e.en) || !sameFormat(e.de, e.zh) || !sameFormat(e.de, e.ja))
+            return false;
+    return true;
+}
+static_assert(formatsMatch(), "Platzhalter (%...) stimmen zwischen den Sprachen nicht ueberein");
 
 Lang g_lang = Lang::De;
 

@@ -67,7 +67,7 @@ cmake --build build
 build\g2_tests.exe
 ```
 
-Erwartete Ausgabe am Ende: `268/268 Pruefungen bestanden`.
+Erwartete Ausgabe am Ende: `448/448 Pruefungen bestanden`.
 
 Es entstehen `libg2` (statische Bibliothek), `g2c` (Kommandozeilenwerkzeug)
 und `g2_tests`.
@@ -1716,15 +1716,34 @@ zwei von 53 Bones ueberhaupt ein Flag, und das sind `Motion` und `face`.
 uebernehmen.** Fuer die GLA selbst ist er ohne Belang — das Bauen benutzt
 ihn nicht —, aber die Engine braucht ihn.
 
-### $keepmotion wurde bisher nicht beachtet
+### $keepmotion — korrigiert (September 2026)
 
-Gelesen wurde es, verwendet nie: bei einem Skript mit `$keepmotion` hat das
-Werkzeug die Wurzelbewegung trotzdem herausgerechnet. Ravens
-`_humanoid_yoda.car` benutzt es.
+Eine fruehere Fassung schaltete bei `$keepmotion` das Herausrechnen der
+Wurzelbewegung ab. **Das war falsch** und ist zurueckgenommen.
 
-Jetzt gemessen: derselbe Bau ergibt beim Wurzelbone **64 Einheiten Versatz
-ohne** `$keepmotion` und **0 mit** — die Bewegung bleibt also in der
-Animation, wie es soll.
+`$keepmotion` behaelt nur den "Motion"-Bone im Skelett. Die Wurzelbewegung
+wird in beiden Faellen als Gegenrampe auf `model_root` gelegt:
+
+- Carcass v2.2 gibt bei `$keepmotion` "Keeping motion bone" **und** danach
+  "Compensating for motion bone" aus.
+- Ravens eigene `_humanoid.car` enthaelt `$keepmotion`, und Ravens
+  ausgelieferte `_humanoid.gla` (assets1.pk3) traegt trotzdem bei jeder
+  Sequenz mit Nettobewegung die Rampe.
+- Nachgemessen an 1400 gemeinsamen Sequenzen: mit Rampe stimmt `model_root`
+  bei 1396 mit Ravens Datei ueberein, ohne bei nur 1144. Bei
+  `BOTH_RUNSTRAFE_LEFT1/RIGHT1` lagen 96 Einheiten dazwischen, bei
+  `BOTH_LAND2` 64.
+
+Mit der falschen Fassung gebaute GLAs lassen die Figur waehrend solcher
+Animationen aus ihrer Mitte laufen und beim naechsten Durchlauf
+zurueckspringen. **Neu bauen.** Geaendert wird dabei ausschliesslich
+`model_root` (an der Movie-Duels-`_humanoid.car` nachgeprueft: 2661 von
+47422 Frames, alle anderen 52 Bones, GLM, Skin und animation.cfg
+bitgleich).
+
+Nebenbefund: die Rampe von Carcass v2.2 ist um den Faktor 1/`$scale` (bei
+0.64 also 1,5625) zu gross; Ravens ausgelieferte Datei und g2c skalieren
+sie. g2c folgt Ravens Datei.
 
 `$scale` aus dem Skript hat ausserdem Vorrang vor dem Wert der Referenz-GLA.
 Normalerweise sind beide gleich; steht im Skript ein anderer, ist das eine
@@ -3070,3 +3089,631 @@ bei kaputter Ausgabe geschwiegen.
 
 Beide pruefen jetzt gegen den tatsaechlichen Zustand statt gegen einen
 erwarteten Text.
+
+---
+
+## 60. Mehrere Ordner auf einmal
+
+**XSI-Ordner** und **XSI-Ordner zu allen** nehmen jetzt mehrere Ordner
+gleichzeitig. Im Dialog werden sie mit Strg und Umschalt ausgewaehlt wie
+Dateien.
+
+Bei einem Modell mit Animationen aus zehn Quellen war zehnmal klicken die
+eigentliche Arbeit.
+
+Technisch: `IFileOpenDialog` mit `FOS_ALLOWMULTISELECT`. Die Auswahl kommt
+dann ueber `GetResults` als `IShellItemArray` — `GetResult` (Einzahl)
+schlaegt in dem Fall fehl, deshalb braucht es eine eigene Funktion und nicht
+nur ein zusaetzliches Flag.
+
+**Mit Rueckfall.** Kann die Plattform keine Mehrfachauswahl, wird der
+Einzeldialog benutzt: dann kommt hoechstens ein Ordner zurueck, aber nie
+nichts. Ein Test prueft beide Wege und den Fall ganz ohne Dialog.
+
+Das Ziehen mehrerer Ordner auf das Fenster funktionierte bereits.
+
+### Drei Tests, die an fremden Dateien haengen
+
+Beim Pruefen mit dem Cutscene-Humanoid (`_humanoid_academy1`, 26 Sequenzen)
+fielen drei Pruefungen auf, die stillschweigend von JKAs 1683 Sequenzen
+ausgingen:
+
+- zwei erwarteten „mehr als 50 Sequenzen"
+- eine ging in Schritten von 97 durch die Liste und fand bei 26 Eintraegen
+  nur den ersten
+
+Alle drei melden jetzt gegen den tatsaechlichen Inhalt statt gegen eine
+angenommene Groesse. Und ein `directory_iterator` ohne Existenzpruefung warf
+eine Ausnahme, die die ganze Suite mitriss, statt eine Zeile zu melden.
+
+### Warum es zunaechst nicht ging
+
+Zwei Fehler auf einmal, beide unsichtbar:
+
+**Die Knoepfe riefen den alten Dialog.** `askFolders` war da, der
+Mehrfachdialog war da — aber die Knoepfe benutzten weiter `askFolder`. Eine
+frueher eingefuegte Ersetzung war ins Leere gelaufen.
+
+**`FOS_FORCEFILESYSTEM` verhindert die Mehrfachauswahl.** Zusammen mit
+`FOS_ALLOWMULTISELECT` laesst der Dialog nur einen Ordner markieren, ohne
+eine Meldung. Das Flag ist jetzt weg; dass echte Pfade herauskommen, wird
+beim Auslesen geprueft — `GetDisplayName(SIGDN_FILESYSPATH)` scheitert bei
+allem, was kein Ordner im Dateisystem ist.
+
+### Eine neue Pruefung
+
+`tools/check_wiring.py` prueft jetzt, dass **jeder Platform-Rueckruf gesetzt
+UND benutzt** wird. Ein Dialog, den niemand aufruft, ist toter Code — und
+genau so sah dieser Fehler aus.
+
+Sie hat sofort einen zweiten gefunden: **`revealInExplorer`** war seit jeher
+gesetzt und wurde nie aufgerufen. Jetzt haengt ein Knopf **Ausgabeordner
+oeffnen** daran, der nach dem Bauen im Protokollbereich erscheint.
+
+---
+
+## 61. Kommentare in der animation.cfg
+
+Ravens `animation.cfg` gliedert ihre 1683 Sequenzen mit Trennern und
+Ueberschriften:
+
+    //////////////////////////////////////////
+    //  NEW KATA ANIMS FOR ANIMATION SYSTEM
+    //////////////////////////////////////////
+    BOTH_SMASHDOWN_DUAL     18278   55   -1   20
+
+Ohne sie ist die Datei eine Wand aus Zahlen. Beim Bauen gingen sie verloren,
+weil die `animation.cfg` vollstaendig neu entsteht.
+
+**Kommentare im `.car`-Skript wandern jetzt in die erzeugte
+`animation.cfg`.** Was vor einem `$aseanimgrab` steht, landet vor der
+zugehoerigen Sequenz — mit denselben Trennlinien, in derselben Reihenfolge.
+
+Zwei Entscheidungen dabei:
+
+**Kommentare vor einem ANDEREN Befehl wandern nicht mit.** Sonst landete die
+Kopfzeile des Skripts vor der ersten Animation.
+
+**Nur beim Hauptgrab, nicht bei `-additional`.** Die stehen in derselben
+Zeile und haetten denselben Kommentar wiederholt.
+
+Leerzeilen bleiben erhalten, wenn sie zwischen Kommentaren stehen — eine
+Leerzeile direkt nach `$aseanimgrabinit` dagegen nicht.
+
+### Nebenbei
+
+Zwei Stellen initialisierten `Sequence` mit einer Klammerliste in fester
+Reihenfolge. Das bricht bei jeder Erweiterung der Struktur — hier beim
+Hinzufuegen der Kommentarfelder. Beide schreiben die Felder jetzt einzeln.
+
+### In der Oberflaeche
+
+Drei Wege, je nachdem was schneller geht:
+
+**Rechtsklick -> Trennlinie davor** setzt sofort eine Linie aus Schraegstrichen.
+
+**Rechtsklick -> Kommentar davor...** oeffnet den Sequenzdialog beim
+Eingabefeld.
+
+**Doppelklick auf die Sequenz** — im Dialog steht unten **Kommentar davor**,
+ein mehrzeiliges Feld. Eine Zeile je Zeile; `//` wird vorangestellt, falls
+es fehlt. Daneben ein Knopf fuer die Trennlinie.
+
+Die Kommentarzeilen erscheinen **in der Tabelle** ueber ihrer Sequenz, in
+Blau. Ohne das saehe man die Gliederung erst in der fertigen
+`animation.cfg` — also zu spaet zum Nachbessern.
+
+### Der Weg, den ein Kommentar nimmt
+
+    Oberflaeche  ->  .car  ->  wieder eingelesen  ->  animation.cfg
+
+Ein Test faehrt genau diese vier Stufen ab. Das war noetig: `writeScript`
+gab die Kommentare zunaechst **nicht** aus — sie waren beim Einlesen da und
+beim Speichern weg. Jede Stufe einzeln zu pruefen haette das nicht
+gefunden.
+
+---
+
+## 62. Codequalitaet: was geprueft wurde
+
+Nicht nur nachgelesen, sondern gemessen.
+
+### Statische Analyse
+
+**cppcheck 2.13** ueber den gesamten eigenen Code, alle Kategorien:
+
+    Fehler:      0
+    Warnungen:   0
+    Portabilitaet: 0
+
+Die Stilhinweise betreffen durchweg „nimm std::accumulate statt der
+Schleife" — Geschmacksfragen, keine Fehler.
+
+### Schaerfste Warnstufe
+
+Uebersetzt mit `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion
+-Wold-style-cast -Wuseless-cast -Wdouble-promotion -Wformat=2`:
+
+    Warnungen in unserem Code: 0
+
+`-Wconversion` und `-Wsign-conversion` sind dabei die strengen: sie melden
+jede stillschweigende Umwandlung, die einen Wert veraendern koennte. Eine
+einzige fand sich in der Vorschau und ist behoben.
+
+### Gefaehrliche Muster
+
+| | |
+|---|---|
+| `strcpy`, `sprintf`, `gets`, `strcat` | **0** |
+| rohe `new` / `delete` | **0** |
+| C-Casts | **0** |
+| `memcpy` | 5, alle mit vorheriger Grenzpruefung |
+| offene TODO/FIXME | 2 |
+
+Die fuenf `memcpy` lesen aus Dateien. Jedes ist abgesichert: `requireSize`
+prueft vor dem Lesen gegen die Dateigroesse, der Cache-Leser gegen die
+verbleibende Laenge. Genau deshalb ueberstehen 150 verstuemmelte Dateien den
+Fuzzer ohne Absturz.
+
+### ImGui: die Paarungsregel
+
+Aus der offiziellen Beschreibung:
+
+> Always call a matching End() for each Begin() call, regardless of its
+> return value! ... this is inconsistent with most other BeginXXX functions.
+
+Das ist der haeufigste ImGui-Fehler, und er zeigt sich erst zur Laufzeit —
+oft nur, wenn ein Fenster minimiert oder ein Reiter zugeklappt wird.
+
+**`tools/check_imgui.py`** prueft beim Bauen alle elf Paare: `Begin`/`End`,
+`BeginChild`/`EndChild`, `PushID`/`PopID`, Tabellen, Menues, Popups,
+Kombinationsfelder, Reiter, `BeginDisabled`. Dazu `PushStyleColor` und
+`PushStyleVar` mit ihren Zaehlern, weil `PopStyleColor(2)` zwei freigibt.
+
+Die Regel ist nicht „gleich oft": ein frueher Ausstieg ergibt korrekt MEHR
+`End` als `Begin`. Zu wenige sind der Fehler. Die erste Fassung der Pruefung
+meldete genau deshalb zwei falsche Alarme.
+
+### COM-Zeiger
+
+Die Dateidialoge gaben ihre Objekte von Hand frei. Richtig, solange nichts
+dazwischen wirft — aber `toUtf8` und `std::string` koennen bei
+Speichermangel werfen, und dann bleibt das Objekt liegen.
+
+Ein `ComPtr`-Halter mit Destruktor kostet drei Zeilen und nimmt der Sache
+jede Bedingung.
+
+### Was die Sanitizer sagen
+
+Adress-, Verhaltens- und Threadsanitizer ueber die gesamte Testsuite und
+ueber echte Daten: **keine Beanstandung**. Keine Datenrennen, keine Lecks,
+kein undefiniertes Verhalten.
+
+### Kommentarzeilen direkt in der Tabelle bearbeiten
+
+Die blauen Zeilen sind jetzt anklickbar:
+
+| | |
+|---|---|
+| **Doppelklick** | bearbeiten, direkt in der Zeile |
+| **Enter** | uebernehmen |
+| **leer lassen** | Zeile loeschen |
+| **Rechtsklick** | loeschen |
+
+Beim Anlegen ueber **Rechtsklick -> Kommentar davor...** entsteht sofort eine
+leere Zeile im Bearbeitungsmodus — ohne Umweg ueber den Dialog.
+
+Zwei Dinge, die dabei wichtig waren:
+
+**Uebernehmen auch beim Fokusverlust**, nicht nur bei Enter. Wer nach dem
+Tippen danebenklickt, haette seine Eingabe sonst verloren — und das faellt
+erst auf, wenn die Zeile wieder alt aussieht.
+
+**Leer heisst loeschen.** Eine leere Kommentarzeile haette in der
+`animation.cfg` keinen Zweck, und ein zusaetzlicher Loeschknopf fuer den
+Fall waere Aufwand fuer nichts.
+
+Das Feld im Sequenzdialog bleibt: fuer mehrere Zeilen auf einmal ist es
+immer noch der schnellere Weg.
+
+---
+
+## 63. Zwei Fehler, die nur MSVC sah
+
+Beide entstanden beim Einbau von `ComPtr` und fielen hier nicht auf, weil
+`gui/main_win32.cpp` ohne Windows-SDK nicht uebersetzt werden kann.
+
+### C7568: Vorlage nach ihrer Verwendung definiert
+
+    error C7568: Nach der angenommenen Funktionsvorlage "ComPtr"
+                 fehlt die Argumentliste
+
+Die Meldung klingt nach fehlenden Vorlagenargumenten, aber die waren da.
+Tatsaechlich stand `class ComPtr` in Zeile 282 und wurde ab Zeile 232
+benutzt. Ohne sichtbare Deklaration haelt MSVC den Namen fuer eine
+Funktionsvorlage — daher der Wortlaut.
+
+Der Block steht jetzt vor seiner ersten Verwendung.
+
+### C4456: gleichnamiger Puffer
+
+Zwei `wchar_t msg[512]` in derselben Datei, einer davon in der
+Fensterprozedur neben `MSG msg`. Harmlos, solange man es merkt — aber in
+einer langen Prozedur greift man leicht zum falschen. Der innere heisst
+jetzt `text`.
+
+### Zwei neue Pruefungen
+
+`tools/check_win32.py` prueft jetzt beim Bauen:
+
+- **Vorlagen und Typen stehen vor ihrer ersten Verwendung** — genau der
+  C7568-Fall
+- **kein Bezeichner mehrfach als lokaler `wchar_t`-Puffer** — der
+  C4456-Fall
+
+Gegenprobe bei beiden gemacht. Das ist noetig, weil diese Datei die einzige
+ist, die sich in der Entwicklungsumgebung nicht uebersetzen laesst: ohne
+solche Pruefungen faellt ein Fehler darin erst auf dem Zielrechner auf.
+
+### C2664: ComPtr ohne .get() weitergereicht
+
+    error C2664: Konvertierung von "ComPtr<IFileOpenDialog>" in
+                 "IFileDialog *" nicht moeglich
+
+Der Halter wandelt sich **bewusst nicht** stillschweigend in einen Zeiger
+um. Bequem waere das, aber dann liesse er sich versehentlich an `Release()`
+oder `delete` uebergeben — und genau davor soll er schuetzen. Beim
+Weiterreichen gehoert `.get()` hin.
+
+`tools/check_win32.py` prueft das jetzt. Die erste Fassung suchte die Namen
+**dateiweit** und meldete zwei Fehler, die es nicht gab: `dlg` und `item`
+bezeichnen in den aelteren Dialogen rohe Zeiger. Geprueft wird jetzt nur
+innerhalb der Funktion, in der der Halter deklariert ist.
+
+Das ist die dritte Pruefung fuer `main_win32.cpp` in Folge — und der Grund
+ist immer derselbe: die Datei laesst sich in der Entwicklungsumgebung nicht
+uebersetzen, also muss alles, was dort schiefgehen kann, anders abgefangen
+werden.
+
+### Luft um die Ueberschriften
+
+Kommentarbloecke bekommen in der erzeugten `animation.cfg` jetzt eine
+Leerzeile davor und danach:
+
+    BOTH_STAND_BLOCKING_ON_STAFF_LEFT   30195   2   -1  30
+
+    ///////////////////// Run animations all humanoids /////////////////////
+
+    BOTH_RUN1                           30197  24    0  30
+
+Das ist kein Zierrat. Eine Ueberschrift, die direkt an der Zeile darueber
+klebt, wirkt wie ein Nachtrag zur vorigen Sequenz statt wie der Anfang eines
+neuen Blocks — genau der Unterschied zwischen den beiden Bildschirmfotos, die
+den Anstoss gaben.
+
+**Ausnahme: der erste Block.** Er folgt direkt auf den Dateikopf, dort waere
+die Leerzeile ueberfluessig.
+
+Der zugehoerige Test pruefte zunaechst genau diesen ersten Block und schlug
+deshalb an — er misst jetzt den zweiten, der mitten in der Liste steht.
+
+### Trenner sind eigenstaendig
+
+Im Dateiformat haengt ein Kommentar am folgenden Grab — anders laesst sich
+"steht vor dieser Zeile" nicht ausdruecken. Fuer die Bedienung soll er sich
+aber wie ein eigenes Element verhalten.
+
+**Rechtsklick auf die blaue Zeile -> Nach oben / Nach unten.** Der Trenner
+wandert eine Zeile weit, ueber Sequenzgrenzen hinweg: am Anfang eines Blocks
+haengt er sich an die vorige Animation, am Ende an die naechste.
+
+**Auch hinter die letzte Animation.** Dort gibt es keinen Grab mehr, an dem
+er haengen koennte — dafuer hat das Skript jetzt `trailingComments`. Ohne
+das liesse sich ein Trenner ans Listenende weder schieben noch dort anlegen,
+und genau das will man, wenn der letzte Block eine Ueberschrift bekommen
+soll.
+
+Ein Test schiebt einen Trenner durch die ganze Liste und wieder zurueck,
+prueft die Raender und dass alles das Speichern und Wiedereinlesen
+uebersteht.
+
+### Ein Fehlalarm beim Pruefen
+
+Die Testsuite meldete zwischendurch 285 statt 423 Pruefungen und einen
+Abbruch in `testCarBuild`. Ursache war keine Aenderung am Code, sondern eine
+**veraltete Bibliothek**: ich hatte nur einzelne Objektdateien neu uebersetzt
+und die alten mitgebunden.
+
+Beim naechsten vollstaendigen Bau war alles in Ordnung. Lehre: nach einer
+Aenderung an mehreren Dateien vollstaendig neu bauen, sonst sucht man einen
+Fehler, den es nicht gibt.
+
+### Spalten richten sich am Inhalt aus
+
+Carcass fuellt den Namen fest auf **20 Zeichen** auf. Das reicht fuer
+`BOTH_STAND1`, aber nicht fuer die langen Namen aus Charaktersaetzen:
+
+    BOTH_BOLT_BLOCK_TWO_HAND_BOTTOM_LEFT_ANAKIN 36789   20  0   30
+    BOTH_FLIP_F_ANAKIN      36929   30  0   30
+
+Die Zahlen rutschen aus der Spalte, und die Datei laesst sich nicht mehr
+ueberfliegen.
+
+Jetzt wird die Breite **aus dem tatsaechlichen Inhalt** bestimmt: einmal
+durch die Liste, je Spalte die breiteste Angabe merken, dann alles danach
+ausrichten. Namen linksbuendig, Zahlen **rechtsbuendig** — so stehen die
+Ziffern untereinander und lassen sich vergleichen.
+
+    BOTH_WALK9                                   36113   28   0  20
+    BOTH_BOLT_BLOCK_TWO_HAND_BOTTOM_LEFT_ANAKIN  36789   20   0  30
+    BOTH_SPRINT_STAFF_LIGHTSABER_ANAKIN          36695   16   0  20
+    ROOT                                         37578    2  -1  30
+
+Der Engine ist die Ausrichtung gleichgueltig — sie trennt an Leerraum. Die
+Formatierung ist fuer den Menschen da, der die Datei aufmacht. Ein Test
+prueft beides: dass die Spalten buendig sind **und** dass jede Zeile
+weiterhin als Name plus vier Zahlen lesbar bleibt.
+
+Gegengeprueft am Cutscene-Humanoid: 26 von 26 Eintraegen identisch
+eingelesen.
+
+### Kommentare hinter der Animationszeile
+
+Ravens `animation.cfg` setzt Hinweise je Animation ans Zeilenende:
+
+    BOTH_WALK1_ANI  36698  24  0  30  // nur mit Anakins Schwert
+
+Das geht jetzt auch: in der Tabelle ganz **rechts eine Spalte
+„Kommentar"**, Doppelklick zum Bearbeiten. Der Text steht in der `.car`
+hinter der Grab-Zeile und landet in der erzeugten `animation.cfg` an
+derselben Stelle.
+
+Ein fehlendes `//` wird ergaenzt — ohne das waere es in der Datei kein
+Kommentar, sondern Unsinn hinter den Zahlen.
+
+Die Spalte steht rechts, weil ein Hinweis nichts ist, was man beim
+Ueberfliegen braucht. Leer zeigt sie ein blasses „...", damit man sieht,
+dass dort etwas hinkann.
+
+**Der Parser musste dafuer umgebaut werden.** `tokenize()` wirft alles ab
+`//` weg — richtig fuer die Auswertung, aber der Text war damit verloren.
+Er wird jetzt vorher abgetrennt und am Grab gemerkt. Ein Test prueft, dass
+`-enum` trotz Kommentar in derselben Zeile noch erkannt wird.
+
+### Zur Erinnerung: Trenner verschieben
+
+Die `////`-Zeilen sind bereits eigenstaendig: **Rechtsklick -> Nach oben /
+Nach unten**. Sie wandern ueber Sequenzgrenzen hinweg, bis hinter die
+letzte Animation.
+
+### Trenner mit der Maus ziehen
+
+Die blauen Zeilen lassen sich jetzt **anfassen und verschieben wie
+Sequenzen** — anklicken, ziehen, loslassen. Das Rechtsklickmenue mit
+„Nach oben / Nach unten" bleibt fuer die feine Korrektur.
+
+Drei Dinge waren dabei zu bedenken:
+
+**Eigene Kennung.** Der Ablagevorgang benutzt `g2c_cmt` statt `g2c_row`.
+Sonst liesse sich ein Trenner mit einer Sequenz vertauschen — und
+umgekehrt —, was in beiden Faellen Unsinn ergaebe.
+
+**Ausfuehrung nach der Tabelle.** Die Verschiebung wird gemerkt und erst
+nach `EndTable()` ausgefuehrt. Mitten im Zeichnen die Liste zu aendern, ueber
+die gerade iteriert wird, ist der klassische Weg zum Absturz — dasselbe
+Muster wie beim Verschieben von Sequenzen.
+
+**Eine Ablagezeile ganz unten.** Ohne sie liesse sich ein Trenner nur dann
+hinter die letzte Animation ziehen, wenn dort schon einer liegt — also
+genau dann nicht, wenn man den ersten hinsetzen will.
+
+Nur ohne aktiven Filter, wie beim Umordnen der Sequenzen auch: mit Filter
+waere „hierhin" mehrdeutig, weil dazwischen ausgeblendete Zeilen liegen.
+
+### TableSetupColumn() too many times
+
+Beim Einbau der Kommentarspalte habe ich `TableSetupColumn` ergaenzt, aber
+die Spaltenzahl in `BeginTable` nicht mitgezaehlt: **7 angemeldet, 8
+aufgesetzt**.
+
+ImGui meldet das zur Laufzeit in einem roten Kasten — und die ueberzaehlige
+Spalte rutscht sichtbar in eine eigene Zeile. Genau die leeren „..."-Zeilen
+zwischen den Sequenzen, die im Bildschirmfoto zu sehen waren.
+
+Beim Uebersetzen faellt davon nichts auf. `tools/check_imgui.py` zaehlt
+deshalb jetzt beides und vergleicht: fuer jede `BeginTable` die
+`TableSetupColumn`-Aufrufe bis zur `TableHeadersRow`.
+
+Gegenprobe gemacht. Das ist die zweite Pruefung, die aus einem Fehler in
+derselben Sitzung entstanden ist — und beide Male war die Ursache dieselbe:
+eine Aenderung an zwei Stellen, von denen ich nur eine angefasst habe.
+
+---
+
+## 64. Doppelte Sequenznamen
+
+Aus einem echten Fall: in einer `animation.cfg` mit 2463 Eintraegen standen
+**zwei Namen doppelt**.
+
+    BOTH_RUN_DUAL_ANAKIN    36582  24  0  30
+    BOTH_RUN_DUAL_ANAKIN    37220  24  0  30
+
+Die Engine schlaegt nach dem **Namen** nach. Steht einer zweimal drin,
+gewinnt der letzte Eintrag — die erste Animation ist unerreichbar, obwohl
+ihre Frames in der GLA liegen und Platz belegen.
+
+Im Spiel sieht das aus, als tue die Animation nichts. Niemand sucht die
+Ursache in der `animation.cfg`, und beim Zusammenfuehren mehrerer Quellen
+passiert es leicht.
+
+**Validieren meldet das jetzt als Fehler**, mit allen Zeilennummern:
+
+    BOTH_RUN_DUAL_ANAKIN steht 2x im Skript (Zeilen 1894, 1918).
+    Die Engine nimmt den letzten - die uebrigen sind unerreichbar.
+
+`-additional`-Namen zaehlen mit: sie landen genauso in der cfg, und ein
+Unterbereich kann denselben Namen tragen wie ein Hauptgrab.
+
+### Was an der gemeldeten Datei sonst geprueft wurde
+
+| | |
+|---|---|
+| Zeilen, die weder Kommentar noch gueltige Sequenz sind | **0** |
+| Sequenzen, die ueber das Dateiende hinauszeigen | **0** |
+| Sequenzen mit 0 Frames | **0** |
+| Namen mit ungewoehnlichen Zeichen | **0** |
+| Frames in der cfg gegen die GLA | 58100 = 58100 |
+
+Die Trennlinien und Leerzeilen sind unauffaellig: 45 Kommentarzeilen und 82
+Leerzeilen, alle korrekt als solche erkennbar. Der `TaskManager.cpp`-Abbruch
+kommt aus ICARUS, dem Skriptsystem — nicht aus dem Laden der Animationen.
+
+---
+
+## 65. Groessengrenze der animation.cfg
+
+    UI_ParseAnimationFile: File models/players/_humanoid/animation.cfg
+                           too long (172308 > 159999)
+
+Die Engine hat einen **festen Puffer**. Und die Ursache war die Ausrichtung
+aus Abschnitt 63 — also meine.
+
+Die Spaltenbreite richtete sich am **laengsten** Namen aus. Bei 2463
+Sequenzen und einem Namen mit 46 Zeichen fuellt das JEDE Zeile auf 46 auf:
+rund **70000 Byte allein an Leerzeichen**. Genug, um eine Datei ueber die
+Grenze zu heben, die vorher hineinpasste.
+
+**Jetzt wird erst gerechnet, dann ausgerichtet.** Passt es nicht, geht die
+Namensspalte auf Ravens Mass von 20 zurueck und lange Namen stehen ueber.
+Unschoener — aber Schoenheit, die das Laden verhindert, ist keine.
+
+Dieselbe Datei neu geschrieben: **109111 statt 172308 Byte.**
+
+### Und eine Warnung beim Validieren
+
+Weil die Meldung der Engine keine Sequenz nennt und man dann in einer 2463
+Zeilen langen Datei nach etwas sucht, das gar kein einzelner Eintrag ist:
+
+    Die animation.cfg wird etwa 172308 Byte gross - die Engine liest
+    hoechstens 159999. Weniger Sequenzen oder kuerzere Namen sind noetig.
+
+Ab 90 % der Grenze als Warnung, darueber als Fehler. Geschaetzt wird
+grosszuegig, damit die Warnung eher zu frueh als zu spaet kommt.
+
+### Was ich daraus mitnehme
+
+Die Ausrichtung war eine reine Verschoenerung, und sie hat ein funktionales
+Limit gerissen, von dem ich nichts wusste. Bei einem Format ohne
+Spezifikation heisst das: jede Aenderung an der Ausgabe kann etwas brechen,
+das nirgends dokumentiert ist — auch eine, die nur huebscher aussehen soll.
+
+---
+
+## 66. Referenz-GLA im Ausgabeordner
+
+    _humanoid.car: Kann "...\models/players/_humanoid/_humanoid.gla"
+                   nicht oeffnen
+
+Zwoelfmal hintereinander, bei jedem Grab. Die Ursache steht nicht in der
+Meldung: **die Referenz-GLA liegt im Ausgabeordner und heisst genauso.**
+
+Sie wird also gelesen und gleichzeitig beschrieben. Windows sperrt die Datei
+waehrend des Schreibens, und jeder Lesezugriff schlaegt fehl.
+
+Man sucht dann nach fehlenden Rechten oder einem Virenscanner — dabei ist es
+eine Ueberschneidung, die sich in zwei Sekunden aufloest: anderen
+Ausgabeordner waehlen, oder die Referenz woanders hinlegen.
+
+Das wird jetzt **vor dem Bauen** gemeldet, mit dem Grund.
+
+## 67. Doppelte Namen auch beim Bauen
+
+Die Pruefung aus Abschnitt 64 lief nur beim **Validieren**. Wer ohne
+Validieren baut, bekam eine `animation.cfg`, in der eine Animation
+unerreichbar ist — und merkte es erst im Spiel, wo nichts darauf hindeutet.
+
+Jetzt meldet auch der Bau:
+
+    BOTH_RUN_DUAL_ANAKIN steht 2x in der animation.cfg - die Engine nimmt
+    den letzten, die uebrigen sind unerreichbar.
+
+Geprueft wird dabei das **Ergebnis**, nicht das Skript: `-additional`-Namen
+und abgeleitete Namen sind dann schon aufgeloest, also faellt auch eine
+Doppelung auf, die im Skript nicht sichtbar ist.
+
+---
+
+## 68. "Warum muss er die GLA ueberhaupt oeffnen?"
+
+Eine berechtigte Frage aus der Praxis: die Referenz-GLA war geloescht, und
+g2c meldete zwoelfmal "Kann ... nicht oeffnen" — fuer eine Datei, die doch
+gerade **neu geschrieben** werden soll.
+
+### Die Antwort
+
+Eine `.xsi` enthaelt **Animationsdaten fuer Bones**, aber nicht das
+Zielskelett: welche Bones es gibt, in welcher Reihenfolge, mit welchen
+Bindeposen und welcher Skalierung. Das muss von irgendwo kommen.
+
+Carcass nimmt es aus der `root.xsi` ueber `-makeskel`. g2c nimmt es aus
+einer **vorhandenen GLA** — das ist genauer, weil die Bindeposen dort schon
+quantisiert vorliegen und beim Neubauen kein zweiter Rundungsfehler
+entsteht.
+
+Ohne Referenz kann also keine GLA geschrieben werden. Aus dem Nichts geht es
+nicht.
+
+### Die Meldung taugte nichts
+
+Sie nannte den Pfad, aber nicht wozu er gebraucht wird — und sie kam
+**zwoelfmal**, einmal je Grab, weil der Bau erst anlief und dann bei jedem
+Zugriff scheiterte.
+
+Jetzt wird vorher geprueft, und es steht einmal da, mit Begruendung:
+
+    Die Referenz-GLA "..." gibt es nicht.
+    Sie liefert das SKELETT - Bonenamen, Hierarchie, Bindeposen,
+    Skalierung. Die .xsi-Dateien enthalten nur Animationsdaten;
+    ohne Skelett laesst sich keine GLA schreiben.
+    Eine vorhandene GLA mit demselben Skelett angeben.
+
+In der Oberflaeche und auf der Kommandozeile. Dort lag der Ladevorgang
+dreimal im Code — jetzt in einer Funktion, damit die Meldung nicht an zwei
+Stellen auseinanderlaeuft.
+
+---
+
+## 69. Doppelte Namen brechen den Bau ab
+
+Bisher wurde nur gewarnt. Das reicht nicht: eine GLA mit unerreichbaren
+Animationen sieht fertig aus und faellt erst im Spiel auf, wo nichts auf die
+Ursache deutet.
+
+**Jetzt wird gar nicht erst geschrieben.**
+
+    Bau abgebrochen: 2 Sequenzname(n) kommen mehrfach vor.
+    Unter "Issues" anklicken - der Sprung geht der Reihe nach
+    zu jedem Vorkommen.
+
+### Anklicken und hinspringen
+
+Die Doppelungen erscheinen unter **Issues**, nicht nur im Protokoll — eine
+Protokollzeile springt nirgendwohin.
+
+Ein Klick darauf:
+
+- **markiert alle Vorkommen** in der Tabelle, damit man sieht, wo sie sind
+- **springt zum ersten**
+- **jeder weitere Klick geht zum naechsten**, dann wieder zum ersten
+
+So laesst sich entscheiden, welche Fassung bleibt und welche umbenannt oder
+geloescht wird.
+
+### Zwei technische Punkte
+
+**Der Vergleich ist ohne Gross-/Kleinschreibung.** Die Engine unterscheidet
+nicht, und `BOTH_WALK1` neben `both_walk1` waere derselbe Eintrag.
+
+**Die Meldungen traegt der Hauptthread ein.** Der Bau laeuft mit Kopien der
+Dokumente in einem eigenen Thread und darf sie nicht aendern; die Namen
+werden uebergeben und beim Zeichnen eingetragen.

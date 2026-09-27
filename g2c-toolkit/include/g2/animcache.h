@@ -32,7 +32,8 @@ namespace g2 {
 // Erhoehen, sobald sich aendert, WAS aus einer .xsi gelesen wird. Sonst
 // liefert der Cache Daten nach altem Verstaendnis zurueck — ein Fehler, der
 // sich als "der Fix wirkt nicht" tarnt und schwer zu finden ist.
-inline constexpr std::uint32_t kAnimCacheVersion = 3;
+// 4: SI_Scene-Bereich mitgespeichert, fuer die Warnung bei Abweichung.
+inline constexpr std::uint32_t kAnimCacheVersion = 4;
 
 struct AnimCacheStats {
     std::uint64_t hits = 0;
