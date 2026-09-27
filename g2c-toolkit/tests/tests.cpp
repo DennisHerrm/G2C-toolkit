@@ -1,4 +1,4 @@
-// Minimaler Testrunner ohne externe Abhaengigkeiten.
+// Minimal test runner without external dependencies.
 
 #include "g2/mdxa.h"
 #include "g2/parallel.h"
@@ -39,20 +39,19 @@ namespace {
 
 int g_failures = 0;
 
-// Ein eigener Ordner je Lauf. Bleibt ein Testlauf haengen, haelt der Prozess
-// seine Dateien offen; ein neuer Lauf im selben Ordner liefe unter Windows in
-// die Sperren des alten. Mit Prozesskennung und Zeitstempel im Namen kann das
-// nicht passieren.
+// A separate folder per run. If a test run hangs, the process keeps its files
+// open; a new run in the same folder would, on Windows, run into the old one's
+// locks. With a process ID and timestamp in the name that can't happen.
 std::string uniqueTestDir(const char* what) {
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     return std::string("g2c_") + what + "_" +
            std::to_string(static_cast<unsigned long long>(now) & 0xffffffull);
 }
 
-// Feinschritt-Markierung. Sichtbar nur, wenn G2C_TRACE gesetzt ist — im
-// Normalfall stoert sie, beim Suchen eines Haengers ist sie das Einzige, was
-// hilft.
-// Wo steckt der Lauf gerade? Der Wachhund liest das aus.
+// Fine-grained step marker. Visible only when G2C_TRACE is set - normally it
+// gets in the way, but when hunting down a hang it is the only thing that
+// helps.
+// Where is the run right now? The watchdog reads this.
 std::atomic<const char*> g_currentTest{"(Start)"};
 std::atomic<const char*> g_currentStep{"(noch nichts)"};
 std::atomic<bool>        g_watchdogStop{false};
@@ -64,12 +63,11 @@ void step(const char* what) {
     if (g_trace) std::printf("    [%s]\n", what);
 }
 
-// Meldet sich, wenn ein Abschnitt haengt, und bricht danach ab.
+// Reports when a section hangs, and aborts afterwards.
 //
-// Ein haengender Test ist schlimmer als ein abstuerzender: er sagt gar
-// nichts. Vorher musste man raten, welcher Schritt stehengeblieben ist —
-// jetzt sagt es das Programm von selbst, ohne Schalter und ohne zweiten
-// Lauf.
+// A hanging test is worse than a crashing one: it says nothing at all.
+// Previously you had to guess which step had stalled - now the program says
+// so on its own, without a switch and without a second run.
 void watchdogMain() {
     using namespace std::chrono;
     const auto start = steady_clock::now();
@@ -179,19 +177,19 @@ void testOutOfRangeClamping() {
 
     g2::CompressStats stats;
 
-    // Carcass gibt hier 0 zurueck, was zu -2.0 dekodiert.
+    // Carcass returns 0 here, which decodes to -2.0.
     const float backQuat = g2::unsquashQuatComponent(
         g2::squashQuatComponent(5.0f, g2::Rounding::Nearest, stats));
     checkNear(backQuat, 2.0, 1e-3, "Quaternion 5.0 wird auf +2.0 geklemmt, nicht auf -2.0");
     check(stats.quatClamped == 1, "Klemmung wird gezaehlt");
 
-    // Und hier: -512 Einheiten Translationssprung im Original.
+    // And here: a -512 unit translation jump in the original.
     const float backXlat = g2::unsquashXlatComponent(
         g2::squashXlatComponent(9000.0f, g2::Rounding::Nearest, stats));
     checkNear(backXlat, 511.0, 1e-2, "Translation 9000 wird auf +511 geklemmt, nicht auf -512");
     check(stats.xlatClamped == 1, "Translationsklemmung wird gezaehlt");
 
-    // NaN darf nicht durchrutschen.
+    // NaN must not slip through.
     const float backNan = g2::unsquashQuatComponent(
         g2::squashQuatComponent(std::nanf(""), g2::Rounding::Nearest, stats));
     check(std::isfinite(backNan), "NaN erzeugt einen endlichen Wert");
@@ -202,7 +200,7 @@ void testOutOfRangeClamping() {
 void testQuatMatrixRoundTrip() {
     section("Matrix <-> Quaternion");
 
-    // Auch nahe 180 Grad, wo die naive Trace-Formel zusammenbricht.
+    // Also near 180 degrees, where the naive trace formula breaks down.
     const float angles[] = {0.0f, 0.1f, 1.0f, 3.0f, 3.14159f, -3.14159f, 2.5f};
     for (float a : angles) {
         const g2::Mat3x4 m = rotationZ(a);
@@ -307,7 +305,7 @@ void testMdxaRoundTrip() {
     check(worstPos < 0.01, "Positionsfehler unter 0.01 Einheiten");
     check(worstRot < 0.02, "Rotationsfehler unter 0.02 Grad");
 
-    // Dieselben Daten im Carcass-Modus zum Vergleich.
+    // The same data in Carcass mode for comparison.
     g2::MdxaWriteOptions legacy;
     legacy.compress.rounding = g2::Rounding::Legacy;
     legacy.compress.canonicalizeSign = false;
@@ -336,7 +334,7 @@ void testMdxaRoundTrip() {
 void testAffineInverse() {
     section("Basispose-Inverse mit Skalierung");
 
-    // Nachbau des echten Falls: $scale 0.64 in die Basispose eingebacken.
+    // Reproduction of the real case: $scale 0.64 baked into the base pose.
     g2::Mat3x4 m = rotationZ(0.6f);
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c) m.m[r][c] *= 0.64f;
@@ -344,7 +342,7 @@ void testAffineInverse() {
 
     const g2::Mat3x4 inv = g2::affineInverse(m);
 
-    // M * MInv muss die Einheitsmatrix ergeben.
+    // M * MInv must yield the identity matrix.
     double worst = 0;
     for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
@@ -359,8 +357,8 @@ void testAffineInverse() {
     std::printf("  M * MInv Abweichung von der Einheitsmatrix: %.2e\n", worst);
     check(worst < 1e-5, "Inverse ist korrekt");
 
-    // Die Transponierte waere hier deutlich falsch — genau der Fehler,
-    // den die echte _humanoid.gla aufgedeckt hat.
+    // The transpose would be clearly wrong here - exactly the bug that the
+    // real _humanoid.gla uncovered.
     double transposeErr = 0;
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c)
@@ -368,7 +366,7 @@ void testAffineInverse() {
     std::printf("  Abweichung Transponierte vs. echte Inverse: %.4f\n", transposeErr);
     check(transposeErr > 0.5, "Transponierte waere bei Scale 0.64 grob falsch");
 
-    // Und einmal durch den echten Schreibweg.
+    // And once through the real write path.
     g2::Skeleton skel;
     skel.name = "test";
     skel.bones.push_back({"root", -1, m, 0});
@@ -386,7 +384,7 @@ void testDedupe() {
     const int nBones = 8, nFrames = 100;
     const g2::Skeleton skel = makeSkeleton(nBones);
 
-    // Statische Pose ueber alle Frames: alles muss auf einen Eintrag fallen.
+    // Static pose across all frames: everything must collapse into one entry.
     g2::AnimationFrames frames;
     frames.resize(nFrames, nBones);
 
@@ -464,21 +462,21 @@ void testMdxmWrite() {
 
     check(w.data.size() > sizeof(g2::fmt::MdxmHeader), "Datei ist nicht leer");
 
-    // Header zurueckparsen
+    // Parse the header back
     const auto rd32 = [&](std::size_t o) {
         return static_cast<std::int32_t>(w.data[o] | (w.data[o + 1] << 8) | (w.data[o + 2] << 16) |
                                          (std::uint32_t(w.data[o + 3]) << 24));
     };
     check(static_cast<std::uint32_t>(rd32(0)) == g2::fmt::kMdxmIdent, "Ident ist \"2LGM\"");
     check(rd32(4) == g2::fmt::kMdxmVersion, "Version ist 6");
-    // Header-Offsets: numBones=140, numLODs=144, ofsLODs=148,
+    // Header offsets: numBones=140, numLODs=144, ofsLODs=148,
     // numSurfaces=152, ofsSurfHierarchy=156, ofsEnd=160
     check(rd32(140) == 6, "numBones ist 6");
     check(rd32(144) == 1, "numLODs ist 1");
     check(rd32(152) == 1, "numSurfaces ist 1");
     check(static_cast<std::size_t>(rd32(160)) == w.data.size(), "ofsEnd entspricht der Dateigroesse");
 
-    // Vertex-Weight-Packing pruefen
+    // Check the vertex weight packing
     const std::int32_t ofsLODs = rd32(148);
     const std::int32_t lodSurfOfs = rd32(static_cast<std::size_t>(ofsLODs) + 4);
     const std::size_t surfStart =
@@ -492,9 +490,9 @@ void testMdxmWrite() {
     std::memcpy(&mv, w.data.data() + v0, sizeof(mv));
     check(g2::fmt::getVertWeightCount(mv) == 2, "erster Vertex hat 2 Gewichte");
 
-    // Offsetbasis der LOD-Surface-Tabelle: an der echten _humanoid.glm
-    // verifiziert. offsets[0] muss numSurfaces*4 sein, weil die erste Surface
-    // direkt hinter der Tabelle liegt.
+    // Offset base of the LOD surface table: verified against the real
+    // _humanoid.glm. offsets[0] must be numSurfaces*4 because the first surface
+    // sits directly after the table.
     check(lodSurfOfs == 1 * 4, "LOD-Surface-Offset ist relativ zur Offsettabelle");
     check(rd32(surfStart + 8) == -static_cast<std::int32_t>(surfStart),
           "ofsHeader zeigt korrekt zum Dateianfang zurueck");
@@ -508,9 +506,9 @@ void testMdxmWrite() {
 void testMdxmMultiLod() {
     section("GLM mit mehreren LODs");
 
-    // Struktur an Ravens model.glm abgelesen: 4 LODs, 80 Surfaces,
-    // offsets[0] = numSurfaces*4, und jeder LOD-Block endet dort, wo der
-    // naechste beginnt.
+    // Structure read off Raven's model.glm: 4 LODs, 80 surfaces,
+    // offsets[0] = numSurfaces*4, and each LOD block ends where the next
+    // one begins.
     g2::Mesh m;
     m.name = "model.glm";
     m.animName = "models/players/_humanoid/_humanoid";
@@ -553,8 +551,8 @@ void testMdxmMultiLod() {
     int lod = ofsL;
     bool allOk = true;
     for (int L = 0; L < nl; ++L) {
-        // offsets[0] muss numSurfaces*4 sein: die erste Surface liegt direkt
-        // hinter der Offsettabelle, und die Werte zaehlen ab deren Anfang.
+        // offsets[0] must be numSurfaces*4: the first surface sits directly
+        // after the offset table, and the values count from its start.
         if (rd(static_cast<std::size_t>(lod) + 4) != nS * 4) allOk = false;
         for (int s = 0; s < nS; ++s) {
             const int o = lod + 4 + rd(static_cast<std::size_t>(lod + 4 + s * 4));
@@ -581,7 +579,7 @@ void testMdxmLimits() {
     surf.name = "toomany";
     surf.shader = "shader";
 
-    // 40 verschiedene Bones referenzieren -> muss scheitern, nicht still kuerzen.
+    // Referencing 40 different bones -> must fail, not silently truncate.
     for (int i = 0; i < 40; ++i) {
         g2::Vertex v;
         v.normal[2] = 1.0f;
@@ -600,7 +598,7 @@ void testMdxmLimits() {
     }
     check(threw, "mehr als 32 Bone-Referenzen werden abgelehnt statt still gekuerzt");
 
-    // Ungueltiger Dreiecksindex
+    // Invalid triangle index
     g2::Mesh bad;
     bad.name = "models/test.glm";
     bad.animName = "x";
@@ -668,7 +666,7 @@ SI_Model MDL-root {
     const auto* bpm = root ? root->find("SI_FrameBasePoseMatrix") : nullptr;
     check(bpm && bpm->values.size() == 16, "Basispose-Matrix hat 16 Werte");
 
-    // Der interessante Fall: POSITION ist ein Wert, SI_Mesh ein Template.
+    // The interesting case: POSITION is a value, SI_Mesh a template.
     const auto* shape = doc.findDeep("SI_Shape");
     check(shape != nullptr, "SI_Shape tief gefunden");
     if (shape) {
@@ -688,7 +686,7 @@ SI_Model MDL-root {
     std::printf("  %zu Templates, %zu verschiedene Typen\n", doc.templateCount(),
                 g2::xsi::summarize(doc).size());
 
-    // Fehlerfaelle
+    // Error cases
     bool threw = false;
     try { g2::xsi::parse("nicht mal ein xsi header"); } catch (const std::exception&) { threw = true; }
     check(threw, "fehlender xsi-Header wird abgelehnt");
@@ -708,7 +706,7 @@ SI_Model MDL-root {
 void testAnimEval() {
     section("Animation gegen Referenzskelett");
 
-    // Referenzskelett: root -> a -> b
+    // Reference skeleton: root -> a -> b
     g2::Skeleton ref;
     ref.name = "ref";
     ref.scale = 1.0f;
@@ -719,7 +717,7 @@ void testAnimEval() {
     ref.bones.push_back({"a",     0, ba, 0});
     ref.bones.push_back({"b",     1, bb, 0});
 
-    // Animationsdatei: nur "a" ist animiert, "b" fehlt ganz.
+    // Animation file: only "a" is animated, "b" is missing entirely.
     const std::string src = R"(xsi 0350txt 0032
 SI_Model MDL-rig.root {
     SI_Model MDL-rig.a {
@@ -732,10 +730,10 @@ SI_Model MDL-rig.root {
     check(anim.nodes.size() == 2, "zwei Knoten gelesen");
     check(anim.frameCount() == 2, "zwei Frames");
 
-    // Framenummern mit Nachkommastellen. 3ds Max schreibt "1.000000", Raven
-    // schreibt "1". Wer die Nummer als Ganzzahl liest, verliert bei
-    // Max-Exporten JEDEN Keyframe — die Kanaele existieren dann zwar, sind
-    // aber leer, und alle Bones bleiben stumm in der Ruhepose.
+    // Frame numbers with decimals. 3ds Max writes "1.000000", Raven writes
+    // "1". Reading the number as an integer loses EVERY keyframe of Max
+    // exports - the channels then exist but are empty, and all bones
+    // silently stay in the rest pose.
     const std::string maxStyle = R"(xsi 0300txt 0032
 SI_Scene s { "FRAMES", 1.000000, 3.000000, 30.000000, }
 SI_Model MDL-root {
@@ -762,10 +760,10 @@ SI_Model MDL-root {
     }
     check(maxAnim.hasScene && maxAnim.frameCount() == 3, "Framebereich aus SI_Scene");
 
-    // SI_Transform SRT-<name> als Ruhewert. Bones ohne FCurve muessen ihre
-    // statische Pose behalten, nicht in die Identitaet fallen. In root.xsi
-    // haben nur 126 von 276 Modellen FCurves — ohne diesen Rueckfall steht
-    // mehr als die Haelfte des Skeletts falsch.
+    // SI_Transform SRT-<name> as the rest value. Bones without an FCurve must
+    // keep their static pose, not fall back to identity. In root.xsi only
+    // 126 of 276 models have FCurves - without this fallback more than half
+    // of the skeleton ends up wrong.
     const std::string srtStyle = R"(xsi 0350txt 0032
 SI_Scene s { "FRAMES", 1.000000, 2.000000, 20.000000, }
 SI_Model MDL-root {
@@ -798,7 +796,7 @@ SI_Model MDL-root {
                   "SRT-Rotation statt Identitaet");
     }
     if (iMoving >= 0) {
-        // FCurve gewinnt in ihrem Kanal, SRT bleibt in den uebrigen.
+        // The FCurve wins in its channel, SRT stays in the others.
         const g2::Mat3x4 m = srtAnim.localMatrix(iMoving, 2);
         checkNear(m.m[0][3], 60.0, 1e-4, "FCurve ueberschreibt den SRT-Kanal");
         checkNear(m.m[1][3], 2.0, 1e-4, "nicht animierter Kanal behaelt den SRT-Wert");
@@ -813,9 +811,9 @@ SI_Model MDL-root {
     check(res.missingBones.size() == 1 && res.missingBones[0] == "b",
           "fehlender Bone wird gemeldet");
 
-    // Der nicht animierte Bone "b" muss die Einheitsmatrix bekommen — genau
-    // das schreibt Carcass auch (in der echten _humanoid.gla steht beim nicht
-    // animierten Bone "face" die Einheitsmatrix).
+    // The non-animated bone "b" must get the identity matrix - that is exactly
+    // what Carcass writes too (in the real _humanoid.gla the non-animated
+    // bone "face" has the identity matrix).
     for (int f = 0; f < 2; ++f) {
         const g2::Mat3x4& m = res.frames.at(f, 2);
         double worst = 0;
@@ -825,23 +823,23 @@ SI_Model MDL-root {
         checkNear(worst, 0.0, 1e-5, "Frame " + std::to_string(f) + ": Bone \"b\" ist identisch");
     }
 
-    // Frame 1 hat Rotation 0 -> auch "a" muss die Einheitsmatrix sein.
+    // Frame 1 has rotation 0 -> "a" must be the identity matrix too.
     {
         const g2::Mat3x4& m = res.frames.at(0, 1);
         checkNear(m.m[0][0], 1.0, 1e-4, "Frame 0: Bone \"a\" unrotiert");
         checkNear(m.m[0][1], 0.0, 1e-4, "Frame 0: Bone \"a\" ohne Scherung");
     }
-    // Frame 2 hat 30 Grad um Z.
+    // Frame 2 has 30 degrees around Z.
     {
         const g2::Mat3x4& m = res.frames.at(1, 1);
         checkNear(m.m[0][0], std::cos(30.0 * 3.14159265358979 / 180.0), 2e-3,
                   "Frame 1: Bone \"a\" um 30 Grad gedreht");
     }
 
-    // Wurzelbewegung: Carcass legt auf den Wurzelbone eine LINEARE Rampe ueber
-    // die Gesamtverschiebung des Motion-Bones, als Gegenbewegung. Bewusst
-    // nicht die tatsaechliche Kurve — der Motion-Bone schwankt hier stark,
-    // die Rampe muss trotzdem schnurgerade laufen.
+    // Root motion: Carcass puts a LINEAR ramp over the total displacement of
+    // the Motion bone onto the root bone, as a counter-motion. Deliberately
+    // not the actual curve - the Motion bone swings wildly here, yet the ramp
+    // must still run dead straight.
     {
         const std::string src = R"(xsi 0350txt 0032
 SI_Scene s { "FRAMES", 1.000000, 5.000000, 20.000000, }
@@ -869,27 +867,27 @@ SI_Model MDL-rig.root {
         const auto rr = g2::xsi::evaluate(ref, ra, ro);
         check(rr.frameCount == 5, "fuenf Frames");
 
-        // Motion laeuft von z=0 auf z=10, also Gesamtverschiebung 10.
-        // GLA-y = -scale * (-dz) = +scale*dz = 20, verteilt auf 4 Schritte.
+        // Motion runs from z=0 to z=10, so the total displacement is 10.
+        // GLA-y = -scale * (-dz) = +scale*dz = 20, spread over 4 steps.
         const double expect[5] = {0.0, 5.0, 10.0, 15.0, 20.0};
         for (int f = 0; f < 5; ++f)
             checkNear(rr.frames.at(f, 0).m[1][3], expect[f], 1e-3,
                       "Wurzelrampe Frame " + std::to_string(f));
 
-        // Abschaltbar.
+        // Can be switched off.
         g2::xsi::EvalOptions off = ro;
         off.extractRootMotion = false;
         const auto ro2 = g2::xsi::evaluate(ref, ra, off);
         checkNear(ro2.frames.at(4, 0).m[1][3], 0.0, 1e-4, "ohne Wurzelbewegung bleibt es bei 0");
     }
 
-    // Origin-Versatz landet auf dem Wurzelbone.
+    // The origin offset ends up on the root bone.
     g2::xsi::EvalOptions o2 = opt;
     o2.origin = std::array<float, 3>{0.0f, 0.0f, 24.0f};
     const auto res2 = g2::xsi::evaluate(ref, anim, o2);
     checkNear(res2.frames.at(0, 0).m[2][3], -24.0, 1e-4, "-origin liegt negativ auf dem Wurzelbone");
 
-    // Alias-Zuordnung
+    // Alias mapping
     g2::xsi::EvalOptions o3 = opt;
     o3.aliases["b"] = "a";
     const auto res3 = g2::xsi::evaluate(ref, anim, o3);
@@ -943,7 +941,7 @@ void testCarParser() {
     check(grab != s.statements.end(), "$aseanimgrab gefunden");
     check(grab != s.statements.end() && grab->args.size() == 4, "$aseanimgrab hat 4 Argumente");
 
-    // Fehlende Argumente muessen eine brauchbare Meldung erzeugen.
+    // Missing arguments must produce a useful message.
     bool threw = false;
     try {
         g2::car::parse("$scale\n", "x.car", opt);
@@ -966,7 +964,7 @@ void testCarBuild() {
     { std::error_code ec; fs::remove_all(root, ec); }
     fs::create_directories(root / "models" / "anims");
 
-    // Zwei winzige Animationsdateien anlegen.
+    // Create two tiny animation files.
     const auto writeAnim = [&](const std::string& name, int frames, float degPerFrame,
                                float rate = 0.0f) {
         std::ofstream f(root / "models" / "anims" / name);
@@ -983,7 +981,7 @@ void testCarBuild() {
     };
     writeAnim("first.xsi", 5, 3.0f);
     writeAnim("second.xsi", 8, 1.5f);
-    writeAnim("scened.xsi", 6, 2.0f, 29.97f);  // mit SI_Scene, NTSC-Rate
+    writeAnim("scened.xsi", 6, 2.0f, 29.97f);  // with SI_Scene, NTSC rate
 
     {
         std::ofstream c(root / "test.car");
@@ -992,7 +990,7 @@ void testCarBuild() {
              "$aseanimgrab models/anims/first.xsi -loop -1 -framespeed 20\n"
              "$aseanimgrab models/anims/second.xsi -loop 3 -framespeed 30 "
              "-additional 2 4 -1 15 EXTRA_SEQ\n"
-             // Ohne -loop und ohne -framespeed: Vorgaben muessen greifen.
+             // Without -loop and without -framespeed: the defaults must apply.
              "$aseanimgrab models/anims/scened.xsi\n"
              "$aseanimgrabfinalize\n"
              "$aseanimconvertmdx_noask root -makeskel models/x/_humanoid -origin 0 0 24\n";
@@ -1033,19 +1031,19 @@ void testCarBuild() {
     check(br.sequences[2].frameCount == 4, "-additional Framezahl");
     check(br.sequences[2].fromAdditional, "als -additional markiert");
 
-    // Vorgaben ohne Flags. Beide an Ravens animation.cfg abgelesen:
-    // ohne -loop schreibt Carcass 0 (nicht -1), und ohne -framespeed die
-    // Framerate aus SI_Scene der jeweiligen .xsi.
+    // Defaults without flags. Both read off Raven's animation.cfg:
+    // without -loop Carcass writes 0 (not -1), and without -framespeed the
+    // frame rate from the SI_Scene of the respective .xsi.
     const auto& sc = br.sequences[3];
     check(sc.name == "SCENED", "dritte Sequenz benannt");
     check(sc.loopFrame == 0, "ohne -loop ist der Loopframe 0, nicht -1");
     check(sc.frameSpeed == 29, "Framerate 29.97 wird abgeschnitten, nicht gerundet");
     check(sc.frameCount == 6, "Framezahl aus SI_Scene (1..6)");
 
-    // -origin aus dem Skript muss auf dem Wurzelbone landen.
+    // -origin from the script must end up on the root bone.
     checkNear(br.frames.at(0, 0).m[2][3], -24.0, 1e-4, "-origin aus dem Skript angewandt");
 
-    // Fehlende Datei: harter Abbruch mit brauchbarer Meldung.
+    // Missing file: hard abort with a useful message.
     {
         std::ofstream c(root / "bad.car");
         c << "$aseanimgrab models/anims/gibtsnicht.xsi\n";
@@ -1061,7 +1059,7 @@ void testCarBuild() {
     }
     check(threw, "fehlende Animationsdatei bricht ab statt still zu verschieben");
 
-    // animation.cfg erzeugen und zurueckpruefen.
+    // Generate animation.cfg and check it back.
     const std::string cfg = g2::car::writeAnimationCfg(br.sequences, "test");
     check(cfg.find("EXTRA_SEQ") != std::string::npos, "animation.cfg enthaelt die Zusatzsequenz");
     check(cfg.find("\r\n") != std::string::npos, "animation.cfg nutzt CRLF");
@@ -1069,9 +1067,9 @@ void testCarBuild() {
     { std::error_code ec; fs::remove_all(root, ec); }
 }
 
-// Erzwingt Dezimalkomma statt Dezimalpunkt, ohne ein Systemlocale zu
-// brauchen. Damit laesst sich der Fall nachstellen, an dem das alte Carcass
-// scheiterte: es lief nur mit amerikanischen Regionseinstellungen.
+// Forces a decimal comma instead of a decimal point without needing a system
+// locale. This reproduces the case the old Carcass failed on: it only worked
+// with American regional settings.
 struct CommaDecimal : std::numpunct<char> {
     char do_decimal_point() const override { return ','; }
     char do_thousands_sep() const override { return '.'; }
@@ -1110,8 +1108,8 @@ void testAnimCache() {
     const auto a2 = cache.loadOrParse(src.string());
     check(cache.stats().hits == 1, "zweiter Zugriff kommt aus dem Cache");
 
-    // Der Cacheeintrag muss alles enthalten, was der Parser liefert —
-    // sonst wirkt er wie ein stiller Datenverlust.
+    // The cache entry must contain everything the parser delivers -
+    // otherwise it acts like silent data loss.
     check(a2.nodes.size() == a1.nodes.size(), "gleiche Knotenzahl");
     check(a2.frameCount() == a1.frameCount(), "gleicher Framebereich");
     checkNear(a2.frameRate, a1.frameRate, 1e-6, "Framerate erhalten");
@@ -1128,8 +1126,8 @@ void testAnimCache() {
         check(a2.nodes[ia].parent == a1.nodes[ia].parent, "Elternbeziehung erhalten");
     }
 
-    // Aendert sich die Quelle, muss der Eintrag verfallen. Sonst liefert der
-    // Cache alte Daten und ein Fix wirkt scheinbar nicht.
+    // If the source changes, the entry must expire. Otherwise the cache
+    // returns stale data and a fix appears not to work.
     step("Quelle aendern");
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     write(99.0f);
@@ -1145,7 +1143,7 @@ void testAnimCache() {
     check(removed > 0, "Leeren entfernt Eintraege");
     check(cache.sizeOnDisk() == 0, "danach ist der Cache leer");
 
-    // Abgeschalteter Cache darf nichts anlegen.
+    // A disabled cache must not create anything.
     g2::AnimCache off("");
     check(!off.enabled(), "leerer Ordner schaltet ab");
     const auto a4 = off.loadOrParse(src.string());
@@ -1160,10 +1158,10 @@ void testAnimCache() {
 void testEnumTable() {
     section("Enumtabelle aus anims.h");
 
-    // Ravens anims.h ist KEIN gueltiges C: viele Eintraege haben kein Komma.
-    // Ein Parser, der eines verlangt, uebersieht sie stillschweigend — bei
-    // der echten Datei waren das 102 von 1705 Eintraegen, und in der Folge
-    // wurden voellig gueltige Sequenzen als unbekannt gemeldet.
+    // Raven's anims.h is NOT valid C: many entries have no comma. A parser
+    // that requires one silently misses them - in the real file that was
+    // 102 of 1705 entries, and as a result perfectly valid sequences were
+    // reported as unknown.
     const std::string src = R"(
 #ifndef __ANIMS_H__
 typedef enum //# animNumber_e
@@ -1209,9 +1207,9 @@ void testCarValidate() {
         g2::writeFileChecked((dir / "leer.bin").string(), nullptr, 0);
         check(fs::exists(dir / "leer.bin"), "leere Datei angelegt");
 
-        // Der entscheidende Fall: ein Pfad, der sich nicht oeffnen laesst,
-        // MUSS auffliegen statt stillschweigend nichts zu tun. Genau das war
-        // vorher an drei Stellen der Fall.
+        // The crucial case: a path that cannot be opened MUST blow up instead
+        // of silently doing nothing. That is exactly what used to happen in
+        // three places.
         {
             const std::string blocker = (dir / "block").string();
             g2::writeFileChecked(blocker, std::string("x"));
@@ -1247,10 +1245,10 @@ void testCarValidate() {
         std::ofstream c(root / "bad.car");
         c << "$aseanimgrabinit\n"
              "$aseanimgrab anims/a.xsi -enum BOTH_STAND1\n"
-             "$aseanimgrab anims/a.xsi -enum BOTH_STAND1\n"          // doppelt
-             "$aseanimgrab anims/a.xsi -enum BOTH_UNBEKANNT\n"       // nicht in der Tabelle
+             "$aseanimgrab anims/a.xsi -enum BOTH_STAND1\n"          // duplicate
+             "$aseanimgrab anims/a.xsi -enum BOTH_UNBEKANNT\n"       // not in the table
              "$aseanimgrab anims/a.xsi -enum BOTH_WALK1 -additional 0 5 9 20 BOTH_RUN1\n"
-             "$aseanimgrab anims/fehlt.xsi -enum BOTH_RUN2\n"        // fehlt
+             "$aseanimgrab anims/fehlt.xsi -enum BOTH_RUN2\n"        // missing
              "$aseanimgrabfinalize\n"
              "$aseanimconvertmdx_noask r -makeskel models/x/_humanoid -origin 0 0 24\n";
     }
@@ -1289,7 +1287,7 @@ void testCarValidate() {
     check(has(g2::car::Issue::Level::Info, "keine Sequenz"),
           "Gegenrichtung gemeldet: Enum ohne Sequenz");
 
-    // Ein sauberes Skript darf keine Fehler erzeugen.
+    // A clean script must not produce errors.
     step("validate good.car");
     {
         std::ofstream c(root / "good.car");
@@ -1304,7 +1302,7 @@ void testCarValidate() {
         check(ok.ok(), "sauberes Skript passiert ohne Fehler");
     }
 
-    // Schreiben und wieder einlesen: die Bedeutung muss erhalten bleiben.
+    // Write and read back in: the meaning must be preserved.
     step("writeScript roundtrip");
     {
         const std::string text = g2::car::writeScript(script);
@@ -1325,7 +1323,7 @@ void testCarValidate() {
         check(sameNames, "Dateinamen und -additional erhalten");
     }
 
-    // Verzeichnis durchsuchen.
+    // Scan the directory.
     step("scanDirectory");
     {
         const auto found = g2::car::scanDirectory(root.string());
@@ -1334,21 +1332,20 @@ void testCarValidate() {
         for (const auto& f : found) if (f.grabs == 0) haveGrabs = false;
         check(haveGrabs, "Grabzahl je Datei ermittelt");
 
-        // In Unterordnern ebenfalls finden.
+        // Also find them in subfolders.
         std::error_code ec2;
         fs::create_directories(root / "tief" / "tiefer", ec2);
         { std::ofstream c(root / "tief" / "tiefer" / "d.car"); c << "$aseanimgrabinit\n"; }
         const auto deep = g2::car::scanDirectory(root.string());
         check(deep.size() == 3, "auch in Unterordnern gefunden");
 
-        // Tiefenbegrenzung greift.
+        // The depth limit takes effect.
         const auto shallow = g2::car::scanDirectory(root.string(), 0);
         check(shallow.size() == 2, "Tiefenbegrenzung 0 bleibt im Wurzelordner");
 
-        // Eine Verzeichnisverknuepfung auf einen Vorfahren darf die Suche
-        // NICHT in eine Endlosschleife schicken. Genau daran ist die
-        // vorherige Fassung mit recursive_directory_iterator unter Windows
-        // haengengeblieben.
+        // A directory link to an ancestor must NOT send the search into an
+        // endless loop. That is exactly where the previous version using
+        // recursive_directory_iterator got stuck on Windows.
         std::error_code lec;
         fs::create_directory_symlink(root, root / "tief" / "schleife", lec);
         if (!lec) {
@@ -1368,7 +1365,7 @@ void testLocaleIndependence() {
     const std::locale saved = std::locale();
     std::locale::global(std::locale(std::locale::classic(), new CommaDecimal));
 
-    // Gegenprobe: das Locale ist wirklich aktiv.
+    // Cross-check: the locale is really active.
     {
         std::ostringstream os;
         os.imbue(std::locale());
@@ -1408,7 +1405,7 @@ SI_Model MDL-rig.root {
             checkNear(anim.nodes[ia].srt[8], 0.125, 1e-6, "SRT-Wert mit drei Stellen");
         }
 
-        // Und dasselbe fuer das .car-Skript.
+        // And the same for the .car script.
         g2::car::ParseOptions po;
         po.followIncludes = false;
         const auto sc = g2::car::parse("$scale 0.64\n$origin 0 0 24.5\n", "l.car", po);
@@ -1428,15 +1425,15 @@ SI_Model MDL-rig.root {
 
 }  // namespace
 
-// Rueckweg: GLA -> dotXSI -> GLA.
+// Way back: GLA -> dotXSI -> GLA.
 //
-// Das ist der Ablauf, um den es dem Nutzer geht: eine Animation aus einer
-// fremden GLA herausloesen, mit eigenen Dateien mischen und neu bauen.
+// This is the workflow the user cares about: extract an animation from
+// someone else's GLA, mix it with their own files and rebuild.
 void testXsiExport() {
     std::cout << "== Export GLA -> dotXSI ==\n";
 
-    // Ein kleines Skelett und eine Animation von Hand bauen, damit der Test
-    // ohne die grossen Originaldateien laeuft.
+    // Build a small skeleton and an animation by hand, so the test runs
+    // without the large original files.
     step("Skelett anlegen");
     g2::Skeleton sk;
     sk.name = "t";
@@ -1446,19 +1443,19 @@ void testXsiExport() {
         b.name = "b" + std::to_string(i);
         b.parent = i == 0 ? -1 : i - 1;
         b.basePose = g2::Mat3x4::identity();
-        // Bindposen mit Versatz UND Skalierung: eine reine Identitaet wuerde
-        // Fehler in beiden verstecken.
+        // Bind poses with offset AND scale: a pure identity would hide
+        // errors in both.
         b.basePose.m[0][3] = static_cast<float>(i) * 3.0f;
         for (int r = 0; r < 3; ++r) b.basePose.m[r][r] = 0.64f;
         sk.bones.push_back(b);
     }
 
-    // Ein Bone mit dem Elternbone HINTER sich - genau der Fall, an dem die
-    // Indexreihenfolge scheitert.
+    // A bone with its parent bone AFTER it - exactly the case where index
+    // order breaks down.
     {
         g2::Bone b;
         b.name = "spaet";
-        b.parent = 4;   // zeigt auf den letzten, der noch kommt
+        b.parent = 4;   // points to the last one, which is still to come
         b.basePose = g2::Mat3x4::identity();
         for (int r = 0; r < 3; ++r) b.basePose.m[r][r] = 0.64f;
         sk.bones.insert(sk.bones.begin() + 1, b);
@@ -1494,13 +1491,13 @@ void testXsiExport() {
     g2::xsiexp::ExportOptions eo;
     eo.scale = sk.scale;
     const std::string text = g2::xsiexp::exportSequence(gla, {"seq", 0, frames}, eo);
-    // Vorgabe ist jetzt v3.0 — benannte Templates wie in Ravens root.xsi.
+    // The default is now v3.0 - named templates as in Raven's root.xsi.
     check(text.find("xsi 0300txt") == 0, "dotXSI-Kopf geschrieben");
     check(text.find("SI_Scene") != std::string::npos, "SI_Scene vorhanden");
 
-    // SI_FCurve MUSS direktes Kind von SI_Model sein. Steckt es in einem
-    // SI_Animation-Block, findet der Importeur es nicht - dann bleibt jeder
-    // Bone auf Frame 0 stehen, und ausgerechnet Frame 0 stimmt.
+    // SI_FCurve MUST be a direct child of SI_Model. If it sits inside an
+    // SI_Animation block the importer doesn't find it - then every bone
+    // stays on frame 0, and frame 0 of all frames is the one that's correct.
     check(text.find("SI_Animation") == std::string::npos,
           "keine SI_Animation-Verschachtelung um die Kurven");
 
@@ -1532,16 +1529,15 @@ void testXsiExport() {
 
     step("$keepmotion wie bei Raven");
     {
-        // $keepmotion behaelt nur den Motion-Bone. Die Wurzelbewegung wird in
-        // beiden Faellen herausgerechnet — so steht es in Carcass' Ausgabe
-        // ("Keeping motion bone", danach "Compensating for motion bone"), und
-        // so ist Ravens eigene _humanoid.gla gebaut, deren Skript $keepmotion
-        // enthaelt.
+        // $keepmotion only keeps the Motion bone. The root motion is taken out
+        // in both cases - that's what Carcass' output says ("Keeping motion
+        // bone", then "Compensating for motion bone"), and that's how Raven's
+        // own _humanoid.gla is built, whose script contains $keepmotion.
         const std::filesystem::path kr = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("keepmotion");
         std::filesystem::create_directories(kr / "models");
 
-        // Eine Animation, in der sich der Motion-Bone bewegt.
+        // An animation in which the Motion bone moves.
         {
             std::ofstream x(kr / "models" / "m.xsi", std::ios::binary);
             x << "xsi 0350txt 0032\n\nSI_Model MDL-model_root {\n"
@@ -1578,7 +1574,7 @@ void testXsiExport() {
             g2::car::BuildOptions bo2;
             bo2.baseDir = kr.string();
             const auto br2 = g2::car::build(sc2, ks, (kr / "t.car").string(), bo2);
-            // Verschiebung des Wurzelbones ueber die Sequenz.
+            // Displacement of the root bone over the sequence.
             const auto a = br2.frames.at(0, 0);
             const auto b = br2.frames.at(br2.frames.frameCount() - 1, 0);
             return std::fabs(b.m[0][3] - a.m[0][3]);
@@ -1598,12 +1594,11 @@ void testXsiExport() {
 
     step("Wurzelbewegung aus der GLA holen");
     {
-        // Die .frames-Datei ist dafuer nicht noetig: Carcass rechnet die
-        // Bewegung als lineare Rampe auf den Wurzelbone, und die steht
-        // weiterhin in der GLA.
+        // The .frames file isn't needed for this: Carcass applies the motion
+        // as a linear ramp on the root bone, and that is still in the GLA.
         //
-        // Hier wird eine GLA mit bekannter Rampe gebaut und geprueft, dass
-        // genau sie zurueckkommt.
+        // Here a GLA with a known ramp is built and we check that exactly
+        // that ramp comes back.
         g2::Skeleton s3;
         s3.name = "t3";
         s3.scale = 0.64f;
@@ -1614,14 +1609,14 @@ void testXsiExport() {
             b.basePose = g2::Mat3x4::identity();
             s3.bones.push_back(b);
         }
-        const int fr3 = 11;   // 10 Schritte
+        const int fr3 = 11;   // 10 steps
         g2::AnimationFrames af3;
         af3.numBones = 2;
         af3.matrices.resize(static_cast<std::size_t>(fr3 * 2));
         for (int f = 0; f < fr3; ++f)
             for (int b = 0; b < 2; ++b) {
                 g2::Mat3x4 m = g2::Mat3x4::identity();
-                // Nur der Wurzelbone traegt die Rampe: -35 ueber 10 Schritte.
+                // Only the root bone carries the ramp: -35 over 10 steps.
                 if (b == 0) m.m[0][3] = -3.5f * static_cast<float>(f);
                 af3.at(f, b) = m;
             }
@@ -1631,14 +1626,14 @@ void testXsiExport() {
         const auto rm = g2::xsiexp::detectRootMotion(g3, {"s", 0, fr3});
         check(rm.has_value(), "Bewegung erkannt");
         if (rm) {
-            // averagevec = -Rampe / Schritte = 35/10 = 3.5
+            // averagevec = -ramp / steps = 35/10 = 3.5
             check(std::fabs((*rm)[0] - 3.5f) < 0.05f, "Betrag stimmt");
             check(std::fabs((*rm)[1]) < 0.05f, "keine Bewegung in Y");
             check(std::fabs((*rm)[2]) < 0.05f, "keine Bewegung in Z");
         }
 
-        // Ohne Bewegung darf nichts gemeldet werden — sonst wuerde beim
-        // Export etwas eingesetzt, das es nie gab.
+        // Without motion nothing may be reported - otherwise the export
+        // would insert something that never existed.
         g2::AnimationFrames af4 = af3;
         for (int f = 0; f < fr3; ++f) af4.at(f, 0) = g2::Mat3x4::identity();
         const auto w4 = g2::writeMdxa(s3, af4);
@@ -1646,7 +1641,7 @@ void testXsiExport() {
         check(!g2::xsiexp::detectRootMotion(g4, {"s", 0, fr3}).has_value(),
               "ohne Bewegung wird nichts erfunden");
 
-        // Unsinnige Bereiche duerfen nicht abstuerzen.
+        // Nonsensical ranges must not crash.
         check(!g2::xsiexp::detectRootMotion(g3, {"s", 0, 1}).has_value(), "ein Frame");
         check(!g2::xsiexp::detectRootMotion(g3, {"s", -3, 5}).has_value(), "negativer Start");
         check(!g2::xsiexp::detectRootMotion(g3, {"s", 0, 999}).has_value(), "zu langer Bereich");
@@ -1654,24 +1649,24 @@ void testXsiExport() {
 
     step("Unterbereiche zusammenfassen");
     {
-        // Der Kern des Rueckwegs: exportierte man jede Sequenz einzeln,
-        // haette die neue GLA mehr Frames als die alte und die
-        // animation.cfg passte nicht mehr.
+        // The core of the way back: if every sequence were exported on its
+        // own, the new GLA would have more frames than the old one and the
+        // animation.cfg would no longer fit.
         using g2::xsiexp::CfgSequence;
         const std::vector<CfgSequence> cfg = {
             {"MASTER_A", 0, 10, -1, 20},
-            {"TEIL_A1", 0, 3, -1, 30},     // liegt in MASTER_A
-            {"TEIL_A2", 5, 2, 0, 10},      // liegt ebenfalls darin
+            {"TEIL_A1", 0, 3, -1, 30},     // lies inside MASTER_A
+            {"TEIL_A2", 5, 2, 0, 10},      // also lies inside it
             {"MASTER_B", 10, 5, 0, 20},
-            {"ALIAS_B", 10, 5, 0, 20},     // gleicher Bereich -> Unterbereich
+            {"ALIAS_B", 10, 5, 0, 20},     // same range -> sub-range
             {"MASTER_C", 15, 4, -1, 20},
         };
         const auto g = g2::xsiexp::groupSequences(cfg);
         check(g.masters.size() == 3, "drei Master erkannt");
         check(g.partial == 0, "nichts teilweise ueberlappend");
 
-        // Entscheidend: die Master duerfen sich nicht ueberschneiden und
-        // muessen alles abdecken. Sonst stimmt die Framezahl nicht.
+        // Crucial: the masters must not overlap and must cover everything.
+        // Otherwise the frame count is wrong.
         int covered = 0;
         int last = -1;
         bool disjoint = true;
@@ -1687,8 +1682,8 @@ void testXsiExport() {
         for (const auto& m : g.masters) inside += m.inside.size();
         check(inside == 3, "drei Unterbereiche zugeordnet");
 
-        // Das Skript muss die Unterbereiche als -additional mit dem
-        // richtigen Versatz tragen.
+        // The script must carry the sub-ranges as -additional with the
+        // correct offset.
         const auto sc = g2::xsiexp::buildScript(g, "models/x/", std::nullopt);
         check(sc.grabs.size() == 3, "drei Grabs");
         check(sc.grabs[0].enumName && *sc.grabs[0].enumName == "MASTER_A", "Enum gesetzt");
@@ -1700,10 +1695,10 @@ void testXsiExport() {
             check(sc.grabs[0].additional[1].loopFrame == 0, "Loopframe des Unterbereichs");
         }
 
-        // Die letzte Zeile sagt, WO die GLA entsteht und wie sie heisst.
-        // Der Wert steht exakt im Kopf der Quell-GLA — wird er abgeleitet
-        // statt uebernommen, landet die neue GLA unter falschem Namen und
-        // das Modell findet sie nicht.
+        // The last line says WHERE the GLA is created and what it's called.
+        // The value is stored verbatim in the source GLA's header - if it is
+        // derived instead of taken over, the new GLA ends up under the wrong
+        // name and the model doesn't find it.
         const auto scMs = g2::xsiexp::buildScript(g, "models/players/j/", std::nullopt, 0.64f,
                                                   false, "models/players/_humanoid/_humanoid");
         check(scMs.convert && scMs.convert->makeSkel == "models/players/_humanoid/_humanoid",
@@ -1711,30 +1706,30 @@ void testXsiExport() {
         check(scMs.convert && scMs.convert->root == "models/players/j/root",
               "root zeigt dorthin, wo die Dateien liegen");
 
-        // Ohne Angabe wird abgeleitet — und darf keinen fuehrenden
-        // Schraegstrich bekommen, sonst ist es ein absoluter Pfad.
+        // Without it, the path is derived - and must not get a leading
+        // slash, otherwise it's an absolute path.
         const auto scNo = g2::xsiexp::buildScript(g, "", std::nullopt);
         check(scNo.convert && scNo.convert->makeSkel == "_humanoid",
               "ohne Praefix kein fuehrender Schraegstrich");
 
-        // Und der Versatz muss im Skript landen, sonst steht das Modell
-        // beim Neubauen um diesen Betrag daneben.
+        // And the offset must end up in the script, otherwise the model is
+        // off by that amount after rebuilding.
         const auto sc2 = g2::xsiexp::buildScript(g, "models/x/",
                                                  std::array<float, 3>{0.0f, 0.0f, 24.0f});
         check(sc2.convert.has_value(), "Konvertierungsanweisung vorhanden");
         check(sc2.convert && sc2.convert->origin.has_value(), "origin steht im Skript");
 
-        // Ein Bereich, der ueber das Ende hinausragt, darf nicht still
-        // verbogen werden.
+        // A range that extends past the end must not be silently
+        // bent into shape.
         const auto g2p = g2::xsiexp::groupSequences({{"A", 0, 10, -1, 20}, {"B", 5, 10, -1, 20}});
         check(g2p.partial == 1, "teilweise ueberlappender Bereich wird gemeldet");
     }
 
     step("Kommentare in der animation.cfg");
     {
-        // Ravens animation.cfg gliedert 1683 Sequenzen mit Trennern und
-        // Ueberschriften. Ohne sie ist die Datei eine Wand aus Zahlen — und
-        // beim Neubauen gingen sie verloren, weil die cfg neu entsteht.
+        // Raven's animation.cfg structures 1683 sequences with separators and
+        // headings. Without them the file is a wall of numbers - and they were
+        // lost on rebuild, because the cfg is generated from scratch.
         const std::filesystem::path kd = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("kommentar");
         std::filesystem::create_directories(kd);
@@ -1757,12 +1752,12 @@ void testXsiExport() {
                   "drei Kommentarzeilen vor dem ersten");
             check(sc3.grabs[1].commentsBefore.size() == 1,
                   "eine vor dem zweiten");
-            // Die Leerzeile nach $aseanimgrabinit darf nicht mitwandern.
+            // The blank line after $aseanimgrabinit must not come along.
             for (const auto& c : sc3.grabs[0].commentsBefore)
                 check(!c.empty(), "keine leere Zeile vorangestellt");
         }
 
-        // Und sie muessen in der geschriebenen cfg landen.
+        // And they must end up in the written cfg.
         std::vector<g2::car::Sequence> sq;
         for (const auto& g : sc3.grabs) {
             g2::car::Sequence q;
@@ -1775,27 +1770,27 @@ void testXsiExport() {
         check(cfg.find("NEUE KATA-ANIMATIONEN") != std::string::npos,
               "Ueberschrift in der cfg");
 
-        // Luft um den Block: eine Ueberschrift, die an der Zeile darueber
-        // klebt, wirkt wie ein Nachtrag zur vorigen Sequenz statt wie der
-        // Anfang eines neuen Blocks.
+        // Space around the block: a heading glued to the line above looks
+        // like an addendum to the previous sequence rather than the start of
+        // a new block.
         {
             const std::size_t k = cfg.find("//////////////////////////////");
             check(k != std::string::npos, "Trennlinie vorhanden");
 
-            // Beim ERSTEN Block steht bewusst keine Leerzeile: er folgt
-            // direkt auf den Dateikopf, und dort waere sie ueberfluessig.
-            // Geprueft wird deshalb der zweite Kommentar, der mitten in der
-            // Liste steht.
+            // The FIRST block deliberately has no blank line: it follows the
+            // file header directly, where one would be superfluous.
+            // So we check the second comment, which sits in the middle of the
+            // list.
 
             const std::size_t e = cfg.find("einzelne Animationen je Charakter");
             check(e != std::string::npos, "zweiter Block vorhanden");
             if (e != std::string::npos) {
-                // Davor: der Zeilenanfang, und die Zeile darueber ist leer.
+                // Before it: the start of the line, and the line above is empty.
                 const std::size_t za = cfg.rfind("\r\n", e);
                 if (za != std::string::npos && za >= 2)
                     check(cfg.compare(za - 2, 2, "\r\n") == 0, "Leerzeile VOR dem Block");
 
-                // Danach: Zeilenende, dann eine leere Zeile.
+                // After it: end of line, then an empty line.
                 const std::size_t nz = cfg.find("\r\n", e);
                 check(nz != std::string::npos && cfg.compare(nz + 2, 2, "\r\n") == 0,
                       "Leerzeile NACH dem Block");
@@ -1803,7 +1798,7 @@ void testXsiExport() {
         }
         check(cfg.find("einzelne Animationen je Charakter") != std::string::npos,
               "zweiter Kommentar in der cfg");
-        // Und VOR der zugehoerigen Sequenz, nicht irgendwo.
+        // And BEFORE its sequence, not just anywhere.
         check(cfg.find("NEUE KATA") < cfg.find("BOTH_SMASHDOWN_DUAL"),
               "Kommentar steht vor seiner Sequenz");
 
@@ -1812,9 +1807,9 @@ void testXsiExport() {
 
     step("Spalten in der animation.cfg richten sich aus");
     {
-        // Carcass fuellt den Namen fest auf 20 Zeichen auf. Das reicht fuer
-        // "BOTH_STAND1", aber nicht fuer die langen Namen aus
-        // Charaktersaetzen — dort rutschen die Zahlen aus der Spalte.
+        // Carcass pads the name to a fixed 20 characters. That's enough for
+        // "BOTH_STAND1", but not for the long names from character sets -
+        // there the numbers slip out of their column.
         std::vector<g2::car::Sequence> sp;
         const auto mach = [&](const char* n, int t, int c, int l, int f) {
             g2::car::Sequence q;
@@ -1831,22 +1826,22 @@ void testXsiExport() {
 
         const std::string txt = g2::car::writeAnimationCfg(sp, "t");
 
-        // Aus jeder Datenzeile die Position der ersten Zahl bestimmen.
+        // Determine the position of the first number in each data line.
         std::vector<std::size_t> spalten;
         std::istringstream is(txt);
         std::string zeile;
         while (std::getline(is, zeile)) {
             if (zeile.empty() || zeile[0] == '/') continue;
             if (!zeile.empty() && zeile.back() == '\r') zeile.pop_back();
-            // Position, an der das ZAHLENFELD beginnt — also hinter dem
-            // Namen samt Auffuellung. Nicht die erste Ziffer suchen: die
-            // Zahlen sind rechtsbuendig, ihre Anfaenge liegen daher
-            // unterschiedlich weit rechts.
+            // Position where the NUMBER FIELD begins - i.e. after the name
+            // including its padding. Don't search for the first digit: the
+            // numbers are right-aligned, so their starts lie at different
+            // distances to the right.
             const std::size_t leer = zeile.find(' ');
             if (leer == std::string::npos) continue;
             spalten.push_back(zeile.find_first_not_of(' ', leer) - 0);
-            // Fuer den Vergleich zaehlt das ENDE der ersten Zahl: dort
-            // stehen die Ziffern buendig.
+            // For the comparison, the END of the first number is what counts:
+            // that's where the digits line up.
             const std::size_t start = zeile.find_first_not_of(' ', leer);
             const std::size_t ende = zeile.find(' ', start);
             spalten.back() = ende == std::string::npos ? zeile.size() : ende;
@@ -1858,8 +1853,8 @@ void testXsiExport() {
             if (spalten[k] != spalten[0]) gleich = false;
         check(gleich, "erste Zahl steht in allen Zeilen an derselben Stelle");
 
-        // Und die Engine muss es weiterhin lesen koennen: der Name bleibt
-        // das erste Feld, danach kommen vier Zahlen.
+        // And the engine must still be able to read it: the name stays the
+        // first field, followed by four numbers.
         {
             std::istringstream p2(txt);
             int datenzeilen = 0;
@@ -1877,15 +1872,14 @@ void testXsiExport() {
 
     step("animation.cfg heisst wie die Engine sie sucht");
     {
-        // Sie hiess frueher "<name>_animation.cfg". Das ueberschreibt nichts
-        // und liegt harmlos daneben — aber die Engine sucht "animation.cfg".
-        // Wer den Ausgabeordner ins Spiel kopiert, hat weiterhin die alte,
-        // und weil sich beim Einfuegen von Animationen ALLE nachfolgenden
-        // Zielframes verschieben, laeuft dann bei jedem Namen die Animation,
-        // die dort zufaellig steht.
+        // It used to be called "<name>_animation.cfg". That overwrites nothing
+        // and sits harmlessly next to it - but the engine looks for
+        // "animation.cfg". Anyone who copies the output folder into the game
+        // still has the old one, and because inserting animations shifts ALL
+        // subsequent target frames, each name then plays whatever animation
+        // happens to be there.
         //
-        // Das sah wie ein kaputtes Werkzeug aus und war eine vergessene
-        // Datei.
+        // It looked like a broken tool and was actually a forgotten file.
         const std::filesystem::path cd = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("cfgname");
         std::filesystem::create_directories(cd);
@@ -1901,17 +1895,16 @@ void testXsiExport() {
         }
         const std::string text = g2::car::writeAnimationCfg(sq, "2 frames");
 
-        // Der Name muss genau so lauten.
+        // The name must be exactly this.
         const std::filesystem::path erwartet = cd / "animation.cfg";
         { std::ofstream o(erwartet, std::ios::binary); o << text; }
         check(std::filesystem::exists(erwartet), "heisst animation.cfg");
 
-        // Und wieder eingelesen muss dieselbe Sequenz herauskommen.
+        // And reading it back in must yield the same sequence.
         //
-        // Der Stream steht in einem eigenen Block: unter Windows sperrt eine
-        // offene Datei ihren Ordner, und remove_all wuerde werfen — die
-        // Ausnahme brach frueher den ganzen Test samt aller folgenden
-        // Pruefungen ab.
+        // The stream lives in its own block: on Windows an open file locks
+        // its folder, and remove_all would throw - that exception used to
+        // abort the whole test along with all subsequent checks.
         std::string gefunden;
         {
             std::ifstream in(erwartet);
@@ -1932,13 +1925,12 @@ void testXsiExport() {
 
     step("Groessengrenze der animation.cfg");
     {
-        // Die Engine hat einen festen Puffer:
+        // The engine has a fixed buffer:
         //   UI_ParseAnimationFile: File ... too long (172308 > 159999)
         //
-        // Aus einem echten Fall: die Ausrichtung am laengsten Namen fuellte
-        // jede der 2463 Zeilen auf 46 Zeichen auf — rund 70000 Byte allein
-        // an Leerzeichen, genug um eine vorher passende Datei ueber die
-        // Grenze zu heben.
+        // From a real case: aligning to the longest name padded each of the
+        // 2463 lines to 46 characters - around 70000 bytes of spaces alone,
+        // enough to push a previously fitting file over the limit.
         std::vector<g2::car::Sequence> viele;
         for (int i = 0; i < 2500; ++i) {
             g2::car::Sequence q;
@@ -1949,14 +1941,14 @@ void testXsiExport() {
             q.frameSpeed = 20;
             viele.push_back(std::move(q));
         }
-        // Ein sehr langer Name darf die ganze Datei nicht aufblaehen.
+        // A very long name must not bloat the whole file.
         viele[1000].name = "BOTH_BOLT_BLOCK_TWO_HAND_BOTTOM_LEFT_ANAKIN_EXTRA_LANG";
 
         const std::string gross = g2::car::writeAnimationCfg(viele, "test");
         std::cout << "  2500 Sequenzen ergeben " << gross.size() << " Byte\n";
         check(gross.size() <= 159999, "bleibt unter der Grenze der Engine");
 
-        // Bei wenigen Sequenzen soll die Ausrichtung dagegen greifen.
+        // With few sequences, on the other hand, alignment should apply.
         std::vector<g2::car::Sequence> wenige(viele.begin(), viele.begin() + 5);
         wenige[2].name = "BOTH_EIN_SEHR_LANGER_NAME_FUER_DEN_TEST";
         const std::string klein = g2::car::writeAnimationCfg(wenige, "test");
@@ -1970,13 +1962,13 @@ void testXsiExport() {
 
     step("Doppelte Sequenznamen melden");
     {
-        // Die Engine schlaegt in animation.cfg nach dem NAMEN nach. Steht
-        // einer zweimal drin, gewinnt der letzte — die erste Animation ist
-        // unerreichbar, obwohl ihre Frames Platz belegen.
+        // The engine looks things up in animation.cfg by NAME. If one appears
+        // twice, the last one wins - the first animation is unreachable even
+        // though its frames take up space.
         //
-        // Im Spiel sieht das aus, als tue die Animation nichts, und niemand
-        // sucht die Ursache in der cfg. Aus einem echten Fall: zwei
-        // Sequenzen standen in einer 2463 Eintraege langen Datei doppelt.
+        // In game it looks as if the animation does nothing, and nobody looks
+        // for the cause in the cfg. From a real case: two sequences appeared
+        // twice in a file 2463 entries long.
         const std::filesystem::path dd = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("doppelt");
         std::filesystem::create_directories(dd);
@@ -2000,13 +1992,13 @@ void testXsiExport() {
                 gemeldet = true;
         check(gemeldet, "Doppelung wird als Fehler gemeldet");
 
-        // Der eindeutige Name darf NICHT gemeldet werden.
+        // The unique name must NOT be reported.
         bool falschAlarm = false;
         for (const auto& is : vr.issues)
             if (is.message.find("BOTH_WALK1 steht") != std::string::npos) falschAlarm = true;
         check(!falschAlarm, "eindeutige Namen bleiben unbeanstandet");
 
-        // Auch -additional-Namen zaehlen mit: sie landen ebenso in der cfg.
+        // -additional names count too: they end up in the cfg as well.
         {
             std::ofstream c(dd / "u.car");
             c << "$aseanimgrabinit\n"
@@ -2026,13 +2018,13 @@ void testXsiExport() {
 
     step("Fehlende Dateien mit Zuordnung melden");
     {
-        // "Eine Datei fehlt" hilft bei 1393 Grabs niemandem. Gebraucht wird,
-        // WELCHE Sequenz betroffen ist und wo die Datei erwartet wurde.
+        // "A file is missing" helps nobody with 1393 grabs. What's needed is
+        // WHICH sequence is affected and where the file was expected.
         const std::filesystem::path mr = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("missing");
         std::filesystem::create_directories(mr / "models" / "x");
-        // Eine Datei muss lesbar sein: fehlen ALLE, bricht build mit einer
-        // anderen Meldung ab, und der Fall waere hier nicht geprueft.
+        // One file must be readable: if ALL are missing, build aborts with a
+        // different message, and this case would not be tested here.
         {
             std::ofstream x(mr / "models" / "x" / "da.xsi", std::ios::binary);
             x << "xsi 0350txt 0032\n\nSI_Model MDL-model_root {\n"
@@ -2055,7 +2047,7 @@ void testXsiExport() {
 
         g2::car::BuildOptions bo;
         bo.baseDir = mr.string();
-        bo.skipMissing = true;   // damit wir das Ergebnis bekommen statt einer Ausnahme
+        bo.skipMissing = true;   // so we get the result instead of an exception
 
         g2::Skeleton sk2;
         sk2.name = "t";
@@ -2069,13 +2061,13 @@ void testXsiExport() {
         check(br.missing.size() == 2, "beide fehlenden erfasst");
         if (br.missing.size() == 2) {
             check(br.missing[0].sequence == "BOTH_ATTACK1", "Sequenzname aus -enum");
-            // Ohne -enum wird der Name aus dem Dateinamen abgeleitet.
+            // Without -enum the name is derived from the file name.
             check(br.missing[1].sequence == "AUCHWEG", "Sequenzname aus dem Dateinamen");
             check(br.missing[0].line == 2, "Zeile in der .car mitgeliefert");
             check(br.missing[1].line == 3, "auch fuer die zweite");
             check(br.missing[0].file == "models/x/weg.xsi", "Pfad wie in der .car");
         }
-        // Die alte Liste muss weiterhin gefuellt sein.
+        // The old list must still be filled.
         check(br.missingFiles.size() == 2, "Pfadliste bleibt erhalten");
 
         { std::error_code rmEc; std::filesystem::remove_all(mr, rmEc); }
@@ -2083,7 +2075,7 @@ void testXsiExport() {
 
     step("parallelFor: Threadnummer und Blockvergabe");
     {
-        // 1) Jedes Element genau einmal.
+        // 1) Every element exactly once.
         for (unsigned th : {1u, 2u, 3u, 8u, 64u}) {
             const std::size_t n = 1000;
             std::vector<std::atomic<int>> seen(n);
@@ -2096,11 +2088,11 @@ void testXsiExport() {
                                    " Threads");
         }
 
-        // 2) Die Threadnummer bleibt im gueltigen Bereich.
+        // 2) The thread number stays within the valid range.
         //
-        // Genau hier lag der Fehler: die Nummer stand frueher in einem
-        // thread_local und ueberlebte den Aufruf. Beim zweiten Durchlauf mit
-        // WENIGER Threads zeigte sie hinter das Ende des Zaehlerfeldes.
+        // This is exactly where the bug was: the number used to live in a
+        // thread_local and survived the call. On the second run with FEWER
+        // threads it pointed past the end of the counter array.
         for (unsigned th : {8u, 4u, 1u, 2u}) {
             std::atomic<int> zuGross{0};
             g2::parallelForWorker(
@@ -2113,8 +2105,8 @@ void testXsiExport() {
                   "Threadnummer unter " + std::to_string(th) + " (nach vorherigem Lauf)");
         }
 
-        // 3) Je Thread ein eigener Zaehler, ohne Sperre — die Summe muss
-        //    stimmen.
+        // 3) A separate counter per thread, without a lock - the sum must
+        //    be correct.
         {
             const unsigned th = 4;
             std::vector<long> perWorker(th, 0);
@@ -2126,7 +2118,7 @@ void testXsiExport() {
             check(sum == 49995000L, "Summe ueber getrennte Zaehler stimmt");
         }
 
-        // 4) Eine Ausnahme kommt beim Aufrufer an und reisst nichts mit.
+        // 4) An exception reaches the caller and takes nothing down with it.
         {
             bool geworfen = false;
             try {
@@ -2142,19 +2134,18 @@ void testXsiExport() {
             check(geworfen, "Ausnahme wird weitergereicht");
         }
 
-        // 5) Randfaelle duerfen nicht abstuerzen.
+        // 5) Edge cases must not crash.
         check((g2::parallelFor(0, [](std::size_t) {}, 8), true), "leerer Bereich");
         check((g2::parallelFor(1, [](std::size_t) {}, 8), true), "ein Element, acht Threads");
     }
 
     step("Auskunft ueber die Laufzeit");
     {
-        // Die Frage, ob das Programm auf einem fremden Rechner startet,
-        // soll sich ohne externe Werkzeuge beantworten lassen.
+        // Whether the program starts on someone else's machine should be
+        // answerable without external tools.
         //
-        // Auf Linux ist die Antwort immer "ja"; die Pruefung stellt hier
-        // sicher, dass die Funktion ueberhaupt auswertbar ist und zur
-        // Uebersetzungszeit feststeht.
+        // On Linux the answer is always "yes"; the check here makes sure the
+        // function can be evaluated at all and is fixed at compile time.
         static_assert(g2::staticRuntime() || !g2::staticRuntime(),
                       "staticRuntime muss zur Uebersetzungszeit feststehen");
         check(g2::staticRuntime() == g2::staticRuntime(), "Auskunft ist stabil");
@@ -2162,11 +2153,11 @@ void testXsiExport() {
 
     step("Bonenamen ohne Ruecksicht auf Gross-/Kleinschreibung");
     {
-        // Ravens Modelle schreiben den Bewegungsbone "Motion", eigene oft
-        // "motion" — beim SBD-Humanoid ist genau das der Fall. Wird nur
-        // genau verglichen, findet die Rampenberechnung ihren Bone nicht,
-        // die Wurzelbewegung bleibt drin, und die Figur rutscht im Spiel
-        // beim Laufen davon.
+        // Raven's models spell the motion bone "Motion", custom ones often
+        // "motion" - that is exactly the case with the SBD humanoid. With an
+        // exact comparison only, the ramp calculation doesn't find its bone,
+        // the root motion stays in, and the character slides away in game
+        // while walking.
         g2::xsi::AnimFile a;
         g2::xsi::AnimNode n1;
         n1.name = "motion";
@@ -2180,8 +2171,8 @@ void testXsiExport() {
         check(a.indexOf("lhand") == 1, "auch andersherum");
         check(a.indexOf("gibtsnicht") < 0, "unbekannter Name bleibt unbekannt");
 
-        // Bei zwei Bones, die sich nur in der Schreibweise unterscheiden,
-        // muss der exakte gewinnen.
+        // With two bones that differ only in case, the exact match must
+        // win.
         g2::xsi::AnimFile b;
         g2::xsi::AnimNode m1;
         m1.name = "motion";
@@ -2194,9 +2185,9 @@ void testXsiExport() {
 
     step("Rahmen um die Grabs");
     {
-        // Frueher gab writeScript die Grabs NUR nach einem $aseanimgrabinit
-        // aus. Ohne addGrabFrame sah die Datei vollstaendig aus und enthielt
-        // keine einzige Sequenz. Jetzt setzt writeScript den Rahmen selbst.
+        // writeScript used to output the grabs ONLY after an $aseanimgrabinit.
+        // Without addGrabFrame the file looked complete but contained not a
+        // single sequence. Now writeScript adds the frame itself.
         g2::car::Script leer;
         g2::car::GrabDirective gd;
         gd.file = "models/x/a.xsi";
@@ -2214,36 +2205,36 @@ void testXsiExport() {
         check(mit.find("$aseanimgrab models/x/a.xsi") != std::string::npos, "Grab geschrieben");
         check(mit.find("$aseanimgrabfinalize") != std::string::npos, "finalize geschrieben");
 
-        // Zweimal aufrufen darf nichts verdoppeln.
+        // Calling it twice must not duplicate anything.
         g2::car::addGrabFrame(leer);
         const std::string zwei = g2::car::writeScript(leer);
         check(zwei == mit, "zweiter Aufruf aendert nichts");
 
-        // Und wieder einlesen muss den Grab zurueckgeben.
+        // And reading it back in must return the grab.
         const auto zurueck = g2::car::parse(mit, "test.car");
         check(zurueck.grabs.size() == 1, "wieder eingelesen: ein Grab");
     }
 
     step("Scherung: naechstgelegene Rotation");
     {
-        // Eine Matrix mit ungleichen Achsenlaengen UND leichter Schiefe.
-        // Genau so sehen die lokalen Transformationen aus, wenn Bindposen
-        // mit verschiedenen Achsenlaengen hintereinandergeschaltet werden —
-        // in JK2s _humanoid.gla haengen 46 der 72 Bones direkt am
-        // Brustkorb, und dort kommt das haeufig vor.
+        // A matrix with unequal axis lengths AND a slight skew.
+        // That is exactly what the local transforms look like when bind poses
+        // with different axis lengths are chained - in JK2's _humanoid.gla
+        // 46 of the 72 bones hang directly off the rib cage, and it happens
+        // a lot there.
         g2::Skeleton s2;
         s2.name = "t2";
         s2.scale = 0.64f;
         for (int i = 0; i < 3; ++i) {
             g2::Bone b;
             b.name = "s" + std::to_string(i);
-            b.parent = i == 0 ? -1 : 0;   // flach: alles am ersten Bone
+            b.parent = i == 0 ? -1 : 0;   // flat: everything on the first bone
             b.basePose = g2::Mat3x4::identity();
-            // Ungleiche Achsenlaengen, aber rechtwinklig — wie bei Raven.
+            // Unequal axis lengths, but orthogonal - as with Raven.
             b.basePose.m[0][0] = 0.64f;
             b.basePose.m[1][1] = 0.696f;
             b.basePose.m[2][2] = 0.64f;
-            b.basePose.m[0][3] = static_cast<float>(i) * 30.0f;   // langer Hebel
+            b.basePose.m[0][3] = static_cast<float>(i) * 30.0f;   // long lever
             s2.bones.push_back(b);
         }
         const int nb2 = static_cast<int>(s2.bones.size());
@@ -2289,19 +2280,19 @@ void testXsiExport() {
             }
         std::cout << "  flaches Skelett mit ungleichen Achsen: " << worst2 << "\n";
 
-        // Ohne Polarzerlegung lag der Fehler hier bei ueber 0,5 — mit ihr
-        // bleibt er in derselben Groessenordnung wie die Quantisierung.
+        // Without polar decomposition the error here was above 0.5 - with it
+        // it stays in the same order of magnitude as the quantization.
         check(worst2 < 0.2, "flaches Skelett bleibt brauchbar");
         { std::error_code rmEc; std::filesystem::remove_all(tp, rmEc); }
     }
 
     step("Restbewegung erkennen");
     {
-        // Eine Sequenz OHNE Bewegung darf nicht gemeldet werden.
+        // A sequence WITHOUT motion must not be reported.
         check(g2::xsiexp::residualMotion(gla, {"ganz", 0, frames}) < 0.05f,
               "unbewegte Sequenz meldet keine Restbewegung");
 
-        // Ohne Motion-Bone im Skelett gibt es nichts zu messen.
+        // Without a Motion bone in the skeleton there is nothing to measure.
         g2::Skeleton ohne = sk;
         for (auto& b : ohne.bones)
             if (b.name == "Motion") b.name = "kein_motion";
@@ -2310,7 +2301,7 @@ void testXsiExport() {
         check(g2::xsiexp::residualMotion(kopie, {"x", 0, frames}) == 0.0f,
               "ohne Motion-Bone wird nichts gemeldet");
 
-        // Unsinnige Bereiche duerfen nicht abstuerzen.
+        // Nonsensical ranges must not crash.
         check(g2::xsiexp::residualMotion(gla, {"x", 0, 1}) == 0.0f, "ein Frame: nichts zu messen");
         check(g2::xsiexp::residualMotion(gla, {"x", -5, 10}) == 0.0f, "negativer Start abgewiesen");
         check(g2::xsiexp::residualMotion(gla, {"x", 0, frames + 99}) == 0.0f,
@@ -2319,10 +2310,10 @@ void testXsiExport() {
 
     step("Templatenamen mit Leerzeichen");
     {
-        // Softimage schreibt Szenennamen mit Leerzeichen und Punkten.
-        // Ein Parser, der genau ein Token erwartet, bricht dort ab — bei
-        // Ravens Zwischensequenzen fielen so fuenf von 1400 Dateien aus,
-        // mit der Meldung "'{' erwartet nach Template SI_Scene".
+        // Softimage writes scene names with spaces and dots.
+        // A parser that expects exactly one token aborts there - with Raven's
+        // cutscenes five of 1400 files failed this way, with the message
+        // "'{' erwartet nach Template SI_Scene".
         const std::filesystem::path td = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("tmplname");
         std::filesystem::create_directories(td);
@@ -2346,8 +2337,8 @@ void testXsiExport() {
         check(ok, "Datei mit mehrteiligem Namen wird gelesen");
         check(roots == 2, "beide Wurzeltemplates erkannt");
 
-        // Eine Datei ohne oeffnende Klammer darf trotzdem abbrechen,
-        // nicht endlos weiterlesen.
+        // A file without an opening brace must still abort, not keep
+        // reading forever.
         {
             std::ofstream o(td / "kaputt.xsi", std::ios::binary);
             o << "xsi 0350txt 0032\n\nSI_Scene ";
@@ -2367,15 +2358,15 @@ void testXsiExport() {
 
     step("GLA-Name aus -makeskel");
     {
-        // Der Name steht als Zeichenkette im Kopf der GLA und sagt der
-        // Engine, welches Skelett das ist. Kam er von der Referenz, trug
-        // JEDE gebaute Datei "models/players/_humanoid/_humanoid" — egal
-        // wohin sie gehoerte.
+        // The name is stored as a string in the GLA header and tells the
+        // engine which skeleton this is. When it came from the reference,
+        // EVERY built file carried "models/players/_humanoid/_humanoid" - no
+        // matter where it belonged.
         //
-        // Im Spiel meldete sich ein eigener Humanoid dann als der
-        // Standard-Humanoid, die Engine nahm dessen animation.cfg und
-        // spielte an jeder Stelle die Animation ab, die dort zufaellig
-        // stand. Das sah nach kaputten Animationen aus und war ein Name.
+        // In game a custom humanoid then identified itself as the standard
+        // humanoid, the engine took its animation.cfg and at every slot
+        // played whatever animation happened to be there. It looked like
+        // broken animations and was just a name.
         g2::Skeleton umbenannt = sk;
         umbenannt.name = "models/players/_humanoid_bdroid/_humanoid";
         const auto w5 = g2::writeMdxa(umbenannt, af);
@@ -2384,20 +2375,19 @@ void testXsiExport() {
               "der gesetzte Name steht in der Datei");
         check(g5.skeleton.name != sk.name, "und nicht der der Vorlage");
 
-        // Bones und Frames bleiben davon unberuehrt.
+        // Bones and frames are unaffected by this.
         check(g5.numFrames == frames, "Framezahl unveraendert");
         check(g5.skeleton.bones.size() == sk.bones.size(), "Bonezahl unveraendert");
     }
 
     step("dotXSI-Fassung 3.0 und 3.5");
     {
-        // Der Unterschied ist nicht nur die Zahl im Kopf: v3.0 BENENNT
-        // seine Templates, v3.5 laesst sie namenlos. Wir schrieben bisher
-        // benannte Templates unter einem 3.5-Kopf — 3.0-Inhalt mit
-        // 3.5-Etikett.
+        // The difference isn't just the number in the header: v3.0 NAMES its
+        // templates, v3.5 leaves them nameless. Until now we wrote named
+        // templates under a 3.5 header - 3.0 content with a 3.5 label.
         //
-        // Ravens JK2-root.xsi ist v3.0 (511 BASEPOSE, 514 SRT, benannte
-        // Kurven), ihre JKA-Animationsdateien sind v3.5 mit namenlosen.
+        // Raven's JK2 root.xsi is v3.0 (511 BASEPOSE, 514 SRT, named
+        // curves), their JKA animation files are v3.5 with nameless ones.
         g2::xsiexp::ExportOptions o30 = eo, o35 = eo;
         o30.version = g2::xsiexp::ExportOptions::Version::V30;
         o35.version = g2::xsiexp::ExportOptions::Version::V35;
@@ -2408,16 +2398,16 @@ void testXsiExport() {
         check(t30.find("xsi 0300txt") == 0, "3.0 schreibt 0300txt");
         check(t35.find("xsi 0350txt") == 0, "3.5 schreibt 0350txt");
 
-        // Und der Inhalt muss dazu passen, nicht nur der Kopf.
-        // Gegen den TATSAECHLICHEN ersten Bonenamen pruefen, nicht gegen
-        // "model_root": das Testskelett heisst anders, und ein Test, der auf
-        // einen fremden Namen prueft, misst nichts.
+        // And the content must match too, not just the header.
+        // Check against the ACTUAL first bone name, not against
+        // "model_root": the test skeleton uses different names, and a test
+        // that checks for a foreign name measures nothing.
         const std::string erster = "SI_FCurve " + sk.bones[0].name + "-";
         check(t30.find(erster) != std::string::npos, "3.0 benennt die Kurven");
         check(t35.find(erster) == std::string::npos, "3.5 benennt sie nicht");
         check(t35.find("SI_FCurve {") != std::string::npos, "3.5 schreibt sie namenlos");
 
-        // Beide muessen sich wieder einlesen lassen und dasselbe ergeben.
+        // Both must be readable again and yield the same result.
         const std::filesystem::path vd = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("xsiver");
         std::filesystem::create_directories(vd);
@@ -2450,18 +2440,18 @@ void testXsiExport() {
 
     step("Ein-Frame-Sequenzen");
     {
-        // Carcass weist eine .xsi mit nur einem Frame ab:
+        // Carcass rejects an .xsi with only one frame:
         //   "XSI file-format doesn't support 1-frames files 100% legally"
-        // Ravens eigene 58 Ein-Frame-Sequenzen sind denn auch alle
-        // -additional-Unterbereiche laengerer Dateien.
+        // Accordingly, Raven's own 58 single-frame sequences are all
+        // -additional sub-ranges of longer files.
         //
-        // Deshalb wird der Frame verdoppelt: zwei identische Frames, die
-        // Animation unveraendert, und Carcass kann die Datei lesen.
+        // That's why the frame is doubled: two identical frames, the
+        // animation unchanged, and Carcass can read the file.
         const std::string one = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eo);
         check(one.find("0,\n  1,\n") != std::string::npos,
               "Framebereich 0..1 statt 0..0");
 
-        // Beide Frames muessen denselben Inhalt haben.
+        // Both frames must have the same content.
         const std::filesystem::path od = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("onefr");
         std::filesystem::create_directories(od);
@@ -2485,7 +2475,7 @@ void testXsiExport() {
         }
         check(diff < 1e-5, "beide Frames identisch - die Animation aendert sich nicht");
 
-        // Mehrframige Sequenzen bleiben unveraendert.
+        // Multi-frame sequences stay unchanged.
         const std::string many = g2::xsiexp::exportSequence(gla, {"mehr", 0, frames}, eo);
         check(many.find("0,\n  " + std::to_string(frames - 1) + ",\n") != std::string::npos,
               "mehrframige Sequenz unveraendert");
@@ -2495,21 +2485,21 @@ void testXsiExport() {
 
     step("BASEPOSE-Block");
     {
-        // Ravens root.xsi hat pro Bone ZWEI Transform-Bloecke: "SRT-" fuer
-        // die Pose und "BASEPOSE-" fuer die Bindepose. Carcass liest den
-        // zweiten. Wir schrieben ihn nicht — und deshalb meldete Carcass
-        // fuer jeden Bone "Basepose ... differs".
+        // Raven's root.xsi has TWO transform blocks per bone: "SRT-" for the
+        // pose and "BASEPOSE-" for the bind pose. Carcass reads the second
+        // one. We didn't write it - and that's why Carcass reported
+        // "Basepose ... differs" for every bone.
         //
-        // Der Inhalt ist die WELT-Bindepose in dotXSI-Koordinaten, durch die
-        // Skelettskalierung geteilt. Gegengeprueft an Ravens eigener Datei:
-        // fuer lfemurYZ steht dort
+        // The content is the WORLD bind pose in dotXSI coordinates, divided by
+        // the skeleton scale. Cross-checked against Raven's own file: for
+        // lfemurYZ it contains
         //   1.0 1.0 1.0 / 90.174767 3.982727 -74.993988 / 5.643987 55.604065 0.322196
-        // und genau das ergibt die Rechnung.
+        // and that is exactly what the calculation yields.
         const std::string txt3 = g2::xsiexp::exportSequence(gla, {"bp", 0, frames}, eo);
         check(txt3.find("SI_Transform BASEPOSE-") != std::string::npos,
               "BASEPOSE-Block wird geschrieben");
 
-        // Fuer jeden Bone genau einer, wie bei Raven.
+        // Exactly one per bone, as with Raven.
         std::size_t nBase = 0, nSrt = 0, pos = 0;
         while ((pos = txt3.find("SI_Transform BASEPOSE-", pos)) != std::string::npos) {
             ++nBase;
@@ -2520,23 +2510,23 @@ void testXsiExport() {
             ++nSrt;
             ++pos;
         }
-        // Die WURZEL bekommt keinen BASEPOSE-Block.
+        // The ROOT gets no BASEPOSE block.
         //
-        // Ravens Dateien haben durchweg genau drei SRT mehr als BASEPOSE —
-        // root.xsi 277/274, jede Animationsdatei 98/95. Es fehlen
-        // model_root, mesh_root und skeleton_root. Von denen kennt die GLA
-        // nur model_root, also ist die Differenz bei uns genau eins.
+        // Raven's files consistently have exactly three more SRT than
+        // BASEPOSE - root.xsi 277/274, every animation file 98/95. Missing are
+        // model_root, mesh_root and skeleton_root. Of those the GLA only knows
+        // model_root, so for us the difference is exactly one.
         check(nBase == nSrt - 1, "genau ein SRT mehr als BASEPOSE");
         check(nBase == sk.bones.size() - 1, "fuer alle ausser der Wurzel");
         check(txt3.find("BASEPOSE-" + sk.bones[0].name) == std::string::npos,
               "die Wurzel hat keinen BASEPOSE-Block");
 
-        // Die drei Varianten muessen sich unterscheiden.
+        // The three variants must differ.
         //
-        // Welche Carcass will, ist offen — deshalb sind alle drei
-        // erzeugbar. Ein Schalter, der nichts aendert, waere schlimmer als
-        // keiner: man probiert dreimal dasselbe und haelt das Ergebnis fuer
-        // eine Antwort.
+        // Which one Carcass wants is an open question - that's why all three
+        // can be generated. A switch that changes nothing would be worse than
+        // none: you'd try the same thing three times and take the result for
+        // an answer.
         {
             g2::xsiexp::ExportOptions ow = eo, ol = eo, on = eo;
             ow.basePose = g2::xsiexp::ExportOptions::BasePose::World;
@@ -2553,9 +2543,9 @@ void testXsiExport() {
             check(tl.find("BASEPOSE-") != std::string::npos, "local schreibt einen Block");
         }
 
-        // Und er muss VOR dem zugehoerigen SRT stehen, wie in Ravens
-        // Dateien. Nicht gegen den ERSTEN SRT pruefen: der gehoert zur
-        // Wurzel, die keinen BASEPOSE hat.
+        // And it must come BEFORE its SRT, as in Raven's files. Don't check
+        // against the FIRST SRT: that one belongs to the root, which has no
+        // BASEPOSE.
         {
             const std::string& zweiter = sk.bones[1].name;
             const std::size_t b2 = txt3.find("SI_Transform BASEPOSE-" + zweiter);
@@ -2567,14 +2557,14 @@ void testXsiExport() {
 
     step("SI_Transform ist die Ruhelage");
     {
-        // Carcass liest den SI_Transform-Block als Bindepose, verkettet ihn
-        // ueber die Hierarchie und vergleicht das Ergebnis mit dem
-        // Zielskelett. Stand dort die animierte Pose von Frame 0, meldete es
-        // fuer jeden Bone "Basepose for bone ... differs".
+        // Carcass reads the SI_Transform block as the bind pose, chains it
+        // through the hierarchy and compares the result with the target
+        // skeleton. When it held the animated pose of frame 0, it reported
+        // "Basepose for bone ... differs" for every bone.
         //
-        // Der eigene Importeur nimmt die Werte nie — er wertet die FCurves
-        // aus —, deshalb blieb das unbemerkt, bis jemand die Datei durch
-        // Ravens Carcass schickte.
+        // Our own importer never uses these values - it evaluates the
+        // FCurves - so this went unnoticed until someone ran the file through
+        // Raven's Carcass.
         const std::string txt2 = g2::xsiexp::exportSequence(gla, {"ruhe", 0, frames}, eo);
         const std::filesystem::path rp = std::filesystem::temp_directory_path() /
                                          uniqueTestDir("rest");
@@ -2584,18 +2574,18 @@ void testXsiExport() {
         const auto ra = g2::xsi::loadAnimation(g2::xsi::parseFile((rp / "r.xsi").string()),
                                                (rp / "r.xsi").string());
 
-        // Die SRT-Kette muss die Bindepose ergeben, nicht Frame 0.
+        // The SRT chain must yield the bind pose, not frame 0.
         //
-        // Geprueft ueber den vorhandenen Weg: eine Kopie der Datei ohne
-        // FCurves auswerten. Dann greift in localMatrix der SRT-Rueckfall,
-        // und das Ergebnis ist genau die Ruhelage, die Carcass liest.
+        // Checked via the existing path: evaluate a copy of the file without
+        // FCurves. Then the SRT fallback in localMatrix kicks in, and the
+        // result is exactly the rest pose that Carcass reads.
         //
-        // Gegengeprueft an Ravens eigener Both_forcelandleft1.xsi: dort steht
-        // fuer lower_lumbar Skalierung 1,0 und Translation 9,0. Genau das
-        // ergibt die lokale Bindepose — ohne Division durch die
-        // Skelettskalierung, denn die kuerzt sich beim Bilden von
-        // Eltern^-1 mal Kind heraus. Mit Division stuenden dort 1,5625 und
-        // 14,0625, und Carcass meldete "Basepose ... differs".
+        // Cross-checked against Raven's own Both_forcelandleft1.xsi: there,
+        // lower_lumbar has scale 1.0 and translation 9.0. That is exactly what
+        // the local bind pose gives - without dividing by the skeleton scale,
+        // because it cancels out when forming parent^-1 times child. With the
+        // division it would read 1.5625 and 14.0625, and Carcass reported
+        // "Basepose ... differs".
         g2::xsi::AnimFile ruhe = ra;
         for (auto& n : ruhe.nodes) n.channels.clear();
 
@@ -2613,13 +2603,12 @@ void testXsiExport() {
 
             const g2::Mat3x4 m = ruhe.localMatrix(nd, 0);
 
-            // Translation UND Skalierung pruefen.
+            // Check translation AND scale.
             //
-            // Nur die Translation zu vergleichen war zu schwach: die
-            // Skelettskalierung an der WURZEL blieb dabei unbemerkt, weil
-            // deren Translation null ist. Carcass meldete sie sehr wohl —
-            // als "model_root differs by 0.230400", und weil die ganze Kette
-            // darauf aufbaut, danach fuer jeden Bone.
+            // Comparing only the translation was too weak: the skeleton scale
+            // at the ROOT went unnoticed, because its translation is zero.
+            // Carcass did report it - as "model_root differs by 0.230400", and
+            // since the whole chain builds on it, for every bone after that.
             for (int r = 0; r < 3; ++r) {
                 const double e = std::fabs(static_cast<double>(local.m[r][3]) - m.m[r][3]);
                 if (e > worstRest) {
@@ -2627,7 +2616,7 @@ void testXsiExport() {
                     worstBone = sk.bones[b].name + " (Translation)";
                 }
             }
-            // Spaltenlaengen: die Skalierung, unabhaengig von der Rotation.
+            // Column lengths: the scale, independent of the rotation.
             const int par2 = sk.bones[b].parent;
             for (int c = 0; c < 3; ++c) {
                 double lenLocal = 0.0, lenM = 0.0;
@@ -2637,8 +2626,8 @@ void testXsiExport() {
                 }
                 lenLocal = std::sqrt(lenLocal);
                 lenM = std::sqrt(lenM);
-                // Bei der Wurzel steckt die Skelettskalierung noch in der
-                // Bindepose; die Datei traegt sie bewusst nicht.
+                // For the root the skeleton scale is still in the bind pose;
+                // the file deliberately doesn't carry it.
                 if (par2 < 0 && sk.scale > 0.0f) lenLocal /= sk.scale;
                 const double e = std::fabs(lenLocal - lenM);
                 if (e > worstRest) {
@@ -2669,7 +2658,7 @@ void testXsiExport() {
             check(std::fabs((*av)[0] - 1.5f) < 1e-4, "x stimmt");
             check(std::fabs((*av)[2] + 2.25f) < 1e-4, "z stimmt");
         }
-        // Unbekannte Sequenz darf nichts liefern statt irgendetwas.
+        // An unknown sequence must return nothing rather than something random.
         check(!g2::xsiexp::readAverageVec(ff.string(), "gibtsnicht").has_value(),
               "unbekannte Sequenz liefert nichts");
     }
@@ -2677,16 +2666,16 @@ void testXsiExport() {
     { std::error_code rmEc; std::filesystem::remove_all(tmp, rmEc); }
 }
 
-// Nachtests zur Pruefung vom September 2026: jede hier gepruefte Stelle war
-// ein echter Fehler. Die Kommentare nennen jeweils, was vorher passierte.
+// Follow-up tests for the September 2026 review: every spot checked here was
+// a real bug. Each comment states what used to happen.
 void testRobustness() {
     namespace fs = std::filesystem;
     section("Speichern verliert nichts");
     {
-        // Kopfkommentar, Zeilenendkommentar an einer Nicht-Grab-Zeile,
-        // eigenwillige Flag-Reihenfolge, unbekanntes Flag, Pfad mit
-        // Leerzeichen, -makeskin, Kommentar am Dateiende. Frueher ging davon
-        // beim ersten Speichern die Haelfte verloren.
+        // Header comment, end-of-line comment on a non-grab line, unusual
+        // flag order, unknown flag, path with spaces, -makeskin, comment at
+        // the end of the file. Previously half of this was lost on the first
+        // save.
         const std::string src =
             "// Kopf\r\n"
             "$scale 0.64  // Massstab\r\n"
@@ -2701,8 +2690,8 @@ void testRobustness() {
         g2::car::Script sc = g2::car::parse(src);
         check(g2::car::writeScript(sc) == src, "unveraendert gespeichert: zeichengleich");
 
-        // Jetzt aendern: die Zeilen entstehen neu und muessen trotzdem
-        // dasselbe bedeuten.
+        // Now modify: the lines are regenerated and must still mean the
+        // same thing.
         sc.grabs[0].loop = 5;
         sc.grabs[1].frameSpeed = 10;
         const std::string out = g2::car::writeScript(sc);
@@ -2759,8 +2748,8 @@ void testRobustness() {
             for (int b = 0; b < 3; ++b) frames.at(f, b) = g2::Mat3x4::identity();
         const auto good = g2::writeMdxa(skel, frames).data;
 
-        // Parent des ersten Bones auf 99: frueher las jede Auswertung damit
-        // ausserhalb des Skeletts.
+        // Parent of the first bone set to 99: previously every evaluation then
+        // read outside the skeleton.
         auto badParent = good;
         std::int32_t rel = 0;
         std::memcpy(&rel, badParent.data() + 100, 4);
@@ -2770,8 +2759,8 @@ void testRobustness() {
         try { (void)g2::readMdxa(badParent); } catch (const std::exception&) { threw = true; }
         check(threw, "ungueltiger Parent-Index wird abgewiesen");
 
-        // Negativer Offset: wurde nach size_t gewandelt riesig, mit der
-        // Laenge wieder klein, und die Groessenpruefung liess ihn durch.
+        // Negative offset: converted to size_t it became huge, small again
+        // once the length was added, and the size check let it through.
         auto badOfs = good;
         const std::int32_t neg = -3;
         std::memcpy(badOfs.data() + 80, &neg, 4);
@@ -2779,7 +2768,7 @@ void testRobustness() {
         try { (void)g2::readMdxa(badOfs); } catch (const std::exception&) { threw = true; }
         check(threw, "negativer Frame-Offset wird abgewiesen");
 
-        // Negativer Versatz im Vergleich.
+        // Negative offset in the comparison.
         const auto a = g2::readMdxa(good);
         g2::DiffOptions dopt;
         dopt.frameOffsetB = -1;
@@ -2790,8 +2779,8 @@ void testRobustness() {
 
     section("Unlesbare .xsi bricht den Bau ab");
     {
-        // Frueher wurde sie still uebersprungen; alle folgenden Sequenzen
-        // standen dann an anderen Zielframes als in der animation.cfg.
+        // It used to be silently skipped; all following sequences then sat at
+        // different target frames than in the animation.cfg.
         const fs::path dir = fs::temp_directory_path() / uniqueTestDir("unreadable");
         fs::create_directories(dir / "models");
         {
@@ -2838,27 +2827,27 @@ void testRobustness() {
 }
 
 int main() {
-    // Ausgabe ungepuffert. Bei einem Haenger oder Absturz ist sonst nicht zu
-    // erkennen, wo es passiert ist: der zuletzt gedruckte Text steckt noch im
-    // Puffer, und der Lauf sieht so aus, als waere er frueher stehen
-    // geblieben. Ein Testlauf ist kurz genug, dass die Einbusse egal ist.
+    // Unbuffered output. Otherwise, on a hang or crash you can't tell where it
+    // happened: the last printed text is still stuck in the buffer, and the
+    // run looks as if it stopped earlier. A test run is short enough that the
+    // performance cost doesn't matter.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     g_trace = !g2::envValue("G2C_TRACE").empty();
     std::thread watchdog(watchdogMain);
 
-    // Jeden Abschnitt einzeln absichern.
+    // Guard each section individually.
     //
-    // Bricht ein Test ab, soll das Werkzeug SAGEN, welcher es war. Vorher
-    // endete die Ausgabe einfach mitten im Lauf, und aus "es hoert nach
-    // Skriptpruefung auf" laesst sich nicht ableiten, ob der Test selbst
-    // abgestuerzt ist oder der naechste beim Start.
+    // If a test aborts, the tool should SAY which one it was. Previously the
+    // output simply ended in the middle of the run, and from "it stops after
+    // Skriptpruefung" you can't tell whether that test itself crashed or the
+    // next one did on startup.
     const auto run = [](const char* name, void (*fn)()) {
         g_currentTest.store(name);
         g_currentStep.store("(Anfang)");
-        // Nach jedem Abschnitt leeren. Bei einem harten Absturz — etwa einer
-        // Zugriffsverletzung, die kein catch abfaengt — geht der gepufferte
-        // Text sonst verloren, und die Ausgabe endet scheinbar frueher als
-        // der Lauf. Das lenkt die Suche auf die falsche Stelle.
+        // Flush after every section. On a hard crash - such as an access
+        // violation that no catch intercepts - the buffered text is otherwise
+        // lost, and the output seems to end earlier than the run did. That
+        // points the search at the wrong place.
         std::fflush(stdout);
         try {
             fn();

@@ -3717,3 +3717,77 @@ nicht, und `BOTH_WALK1` neben `both_walk1` waere derselbe Eintrag.
 **Die Meldungen traegt der Hauptthread ein.** Der Bau laeuft mit Kopien der
 Dokumente in einem eigenen Thread und darf sie nicht aendern; die Namen
 werden uebergeben und beim Zeichnen eingetragen.
+
+## 70. Updates
+
+g2c sucht beim Start bei GitHub nach einer neueren Version und bietet sie in
+einer Leiste unter der Werkzeugleiste an:
+
+    Neue Version verfuegbar: 1.1.0 (installiert: 1.0.0)
+    [Jetzt aktualisieren] [Was ist neu?] [Spaeter] [Diese Version ueberspringen]
+
+**Installiert wird nur nach einem Klick.** Der Start fragt nur eine kleine
+JSON-Antwort ab (`api.github.com/repos/DennisHerrm/G2C-toolkit/releases/latest`)
+und laesst sich in den Einstellungen unter *Updates* abschalten. Ohne Netz
+meldet der automatische Start nichts; nur "Nach Updates suchen" (Menue
+*Ansicht* oder Einstellungen) zeigt Fehler an.
+
+### Was beim Aktualisieren passiert
+
+1. `g2c.exe` und `SHA256SUMS.txt` der Version werden geladen - nur von
+   `github.com/DennisHerrm/G2C-toolkit/releases/download/`, jede andere
+   Adresse wird abgelehnt.
+2. Die neue Exe muss Groesse, "MZ"-Kopf und SHA-256 bestehen. Sonst wird sie
+   verworfen, und nichts wird ersetzt.
+3. Die laufende Exe wird in `g2c.exe.old` umbenannt (eine laufende Exe laesst
+   sich unter Windows umbenennen, aber nicht ueberschreiben), die neue kommt
+   an ihre Stelle. Scheitert der zweite Schritt, wird der erste
+   rueckgaengig gemacht.
+4. Liegt `g2c-cli.exe` daneben (aus der Zip), wird sie mit ersetzt.
+5. "Jetzt neu starten" beendet g2c wie das Schliessen-Kreuz - ungespeicherte
+   Skripte werden vorher abgefragt - und startet die neue Version. Die
+   raeumt `g2c.exe.old` weg und meldet im Protokoll
+   "g2c wurde auf 1.1.0 aktualisiert".
+
+Liegt g2c in einem geschuetzten Ordner (etwa unter *Programme*), scheitert
+Schritt 3; die Leiste bietet dann die Download-Seite an.
+
+### Kanaele
+
+| Kanal | Quelle | Fuer wen |
+|---|---|---|
+| Stabil | das neueste Release mit Versionsnummer (Tag `v1.2.0`) | Standard |
+| Snapshot | die Vorabversion `snapshot`: jeder Stand von `main`, sobald alle Tests bestanden sind | wer Neuerungen sofort will |
+
+Vorgabe ist der Kanal, aus dem die Exe stammt. Umstellen in den
+Einstellungen unter *Updates*.
+
+**Selbst gebaute Exe** (`build.bat`, `cmake` ohne `G2C_VERSION`) heissen
+"dev" und suchen nie von selbst - sie haben keine Nummer zum Vergleichen, und
+eine Entwicklerfassung soll nicht bei jedem Start zum Ersetzen angeboten
+werden. "Nach Updates suchen" geht trotzdem.
+
+### Kommandozeile
+
+    g2c update            neue Version holen und einsetzen
+    g2c update -check     nur nachsehen
+    g2c update -snapshot  Snapshot-Kanal (-stable fuer stabil)
+
+Nur `g2c.exe` kann das; `g2c-cli.exe` hat keinen Netzwerkcode.
+
+### Versionsnummer
+
+CMake stempelt sie ein: `-DG2C_VERSION=v1.2.0 -DG2C_COMMIT=<hash>`. Sie steht
+in *Ansicht > Ueber g2c*, in `g2c about` und in den Dateieigenschaften der
+Exe. Aus PowerShell das Argument in Anfuehrungszeichen setzen:
+`"-DG2C_VERSION=v1.2.0"` - ungequotet teilt PowerShell am Punkt, und CMake
+bricht dann mit einem Hinweis ab.
+
+### Testen ohne GitHub
+
+`G2C_UPDATE_TEST_SERVER=http://127.0.0.1:8765` leitet die Anfragen an
+`api.github.com` und `github.com` an einen lokalen Server um. Die
+Pruefregeln gelten weiter fuer die urspruenglichen Adressen. So ist der
+ganze Ablauf - Suchen, Laden, Pruefen, Ersetzen der laufenden Exe,
+Neustart - gegen einen nachgebauten Server getestet, inklusive falscher
+Pruefsumme, fremder Adressen und fehlender Verbindung.

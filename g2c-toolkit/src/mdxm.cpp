@@ -11,16 +11,16 @@
 namespace g2 {
 namespace {
 
-// Waehlt bis zu vier Gewichte aus, nach Groesse sortiert, und normiert sie neu.
+// Picks up to four weights, sorted by magnitude, and renormalizes them.
 std::vector<VertexWeight> selectWeights(const Vertex& v, MdxmWriteStats& stats) {
     std::vector<VertexWeight> w;
     for (const auto& x : v.weights)
         if (x.weight > 0.0f) w.push_back(x);
 
     if (w.empty()) {
-        // Carcass meldet hier "Vert (%d) on mesh \"%s\" has no weights" und
-        // macht trotzdem weiter. Wir binden den Vertex an Bone 0 mit
-        // Gewicht 1, damit das Modell wenigstens definiert bleibt.
+        // Carcass reports "Vert (%d) on mesh \"%s\" has no weights" here and
+        // carries on anyway. We bind the vertex to bone 0 with weight 1 so
+        // that the model at least stays well-defined.
         w.push_back(VertexWeight{0, 1.0f});
     }
 
@@ -41,8 +41,8 @@ std::vector<VertexWeight> selectWeights(const Vertex& v, MdxmWriteStats& stats) 
     return w;
 }
 
-// Sammelt alle in dieser Surface referenzierten Bones und liefert die
-// Zuordnung global -> lokal (0..31).
+// Collects all bones referenced in this surface and returns the
+// global -> local mapping (0..31).
 std::map<int, int> collectBoneRefs(const Surface& surf, std::vector<std::int32_t>& refsOut,
                                    MdxmWriteStats& stats) {
     std::map<int, int> mapping;
@@ -125,7 +125,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
     buf.i32(fmt::kMdxmVersion);
     buf.fixedString(mesh.name, fmt::kMaxQPath, "GLM-Name");
     buf.fixedString(mesh.animName, fmt::kMaxQPath, "GLA-Referenz");
-    buf.i32(0);                    // animIndex, fuellt die Engine
+    buf.i32(0);                    // animIndex, filled in by the engine
     buf.i32(mesh.numBones);
     buf.i32(numLODs);
     const std::size_t patchOfsLODs = buf.reserveI32();
@@ -137,11 +137,11 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
     if (headerEnd != sizeof(fmt::MdxmHeader))
         throw std::logic_error("Header-Groesse stimmt nicht mit MdxmHeader ueberein");
 
-    // Offsettabelle der Surface-Hierarchie, relativ zum Ende des Headers.
+    // Offset table of the surface hierarchy, relative to the end of the header.
     std::vector<std::size_t> patchHierOffsets(static_cast<std::size_t>(numSurfaces));
     for (auto& s : patchHierOffsets) s = buf.reserveI32();
 
-    // Kinderlisten aus parentIndex ableiten.
+    // Derive the child lists from parentIndex.
     std::vector<std::vector<int>> children(static_cast<std::size_t>(numSurfaces));
     for (std::int32_t i = 0; i < numSurfaces; ++i) {
         const int p = mesh.lods.front().surfaces[static_cast<std::size_t>(i)].parentIndex;
@@ -157,7 +157,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
         buf.fixedString(surf.name, fmt::kMaxQPath, "Surface-Name");
         buf.u32(surf.flags);
         buf.fixedString(surf.shader, fmt::kMaxQPath, "Shader-Name");
-        buf.i32(0);   // shaderIndex, fuellt die Engine
+        buf.i32(0);   // shaderIndex, filled in by the engine
         buf.i32(surf.parentIndex);
         const auto& kids = children[static_cast<std::size_t>(i)];
         buf.i32(static_cast<std::int32_t>(kids.size()));
@@ -171,12 +171,12 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
         const std::size_t lodStart = buf.size();
         const std::size_t patchLodEnd = buf.reserveI32();
 
-        // WICHTIG: Die Surface-Offsets sind relativ zum Anfang DIESER Tabelle,
-        // also zu lodStart + sizeof(mdxmLOD_t), nicht zu lodStart selbst.
-        // An der echten _humanoid.glm nachgeprueft: dort steht fuer Surface 0
-        // der Wert 336 = 84 * 4, und die erste Surface liegt genau
-        // 336 Bytes hinter dem Tabellenanfang. Mit lodStart als Basis waere
-        // alles um 4 Byte verschoben.
+        // IMPORTANT: The surface offsets are relative to the start of THIS
+        // table, i.e. to lodStart + sizeof(mdxmLOD_t), not to lodStart itself.
+        // Verified against the real _humanoid.glm: there surface 0 has the
+        // value 336 = 84 * 4, and the first surface sits exactly 336 bytes
+        // after the start of the table. With lodStart as the base, everything
+        // would be shifted by 4 bytes.
         const std::size_t surfTableStart = buf.size();
 
         std::vector<std::size_t> patchSurfOffsets(static_cast<std::size_t>(numSurfaces));
@@ -193,7 +193,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
 
             buf.i32(0);    // ident
             buf.i32(si);   // thisSurfaceIndex
-            buf.i32(-static_cast<std::int32_t>(surfStart));   // ofsHeader, zurueck zum Dateianfang
+            buf.i32(-static_cast<std::int32_t>(surfStart));   // ofsHeader, back to the start of the file
             buf.i32(static_cast<std::int32_t>(surf.vertices.size()));
             const std::size_t patchOfsVerts = buf.reserveI32();
             buf.i32(static_cast<std::int32_t>(surf.triangles.size()));
@@ -202,7 +202,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
             const std::size_t patchOfsBoneRefs = buf.reserveI32();
             const std::size_t patchSurfEnd = buf.reserveI32();
 
-            // Dreiecke
+            // Triangles
             buf.patchI32(patchOfsTris, static_cast<std::int32_t>(buf.size() - surfStart));
             for (const auto& t : surf.triangles) {
                 buf.i32(t.indexes[0]);
@@ -210,7 +210,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
                 buf.i32(t.indexes[2]);
             }
 
-            // Vertices (32 Byte), danach separat die UVs (8 Byte)
+            // Vertices (32 bytes), followed separately by the UVs (8 bytes)
             buf.patchI32(patchOfsVerts, static_cast<std::int32_t>(buf.size() - surfStart));
             for (const auto& v : surf.vertices) {
                 const auto w = selectWeights(v, result.stats);
@@ -232,8 +232,8 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
                     const auto localIdx = static_cast<std::uint32_t>(it->second);
                     packed |= (localIdx & 0x1f) << (fmt::kBitsPerBoneRef * k);
 
-                    // 10-Bit-Gewicht: untere 8 Bit ins Byte-Array, obere 2 Bit
-                    // an Position 20 + 2*k in das gepackte Wort.
+                    // 10-bit weight: lower 8 bits go into the byte array, upper
+                    // 2 bits into the packed word at position 20 + 2*k.
                     auto q = static_cast<std::uint32_t>(std::lrintf(w[k].weight * 1023.0f));
                     q = std::min<std::uint32_t>(q, 1023u);
                     weightBytes[k] = static_cast<std::uint8_t>(q & 0xff);
@@ -248,7 +248,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
                 buf.f32(v.uv[1]);
             }
 
-            // Bone-Referenzen
+            // Bone references
             buf.patchI32(patchOfsBoneRefs, static_cast<std::int32_t>(buf.size() - surfStart));
             for (std::int32_t r : boneRefs) buf.i32(r);
 

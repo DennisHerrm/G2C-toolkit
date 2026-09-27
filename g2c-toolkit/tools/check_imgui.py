@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Prueft die ImGui-Aufrufe auf die Paarungsregeln.
+"""Checks the ImGui calls against the pairing rules.
 
-ImGui verlangt bei einigen Funktionen, dass das Gegenstueck IMMER aufgerufen
-wird — auch wenn Begin false liefert. Andere duerfen NUR bei true beendet
-werden. Wer das verwechselt, bekommt eine Zusicherung zur Laufzeit, und zwar
-oft erst dann, wenn ein Fenster minimiert oder ein Reiter zugeklappt wird.
+For some functions, ImGui requires the counterpart to ALWAYS be called -
+even if Begin returns false. Others may ONLY be ended on true. Mixing these
+up gets you an assertion at runtime, and often only once a window is
+minimized or a tab is collapsed.
 
-Aus der offiziellen Beschreibung:
+From the official documentation:
 
     Always call a matching End() for each Begin() call, regardless of its
     return value! ... this is inconsistent with most other BeginXXX
     functions.
 
-Diese Datei kann ImGui nicht ausfuehren. Geprueft wird deshalb, was sich am
-Quelltext ablesen laesst: Zaehlen die Paare? Steht ein PopID zu jedem PushID?
+This file can't run ImGui. So it checks what can be read from the source:
+do the pairs add up? Is there a PopID for every PushID?
 """
 
 import re
@@ -22,16 +22,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Paare. Links stehen ALLE Varianten, die dasselbe Gegenstueck brauchen.
+# Pairs. On the left are ALL variants that need the same counterpart.
 #
-# Die Regel ist nicht "gleich oft": ein frueher Ausstieg
+# The rule is not "equally often": an early exit
 #
 #     if (!ImGui::Begin(...)) { ImGui::End(); return; }
 #     ...
 #     ImGui::End();
 #
-# ist korrekt und ergibt MEHR End als Begin. Zu wenige End sind der Fehler,
-# zu viele sind ein Hinweis auf mehrere Ausgaenge.
+# is correct and yields MORE End than Begin. Too few End calls are the bug,
+# too many just indicate multiple exits.
 PAIRE = [
     (["ImGui::Begin("], "ImGui::End("),
     (["ImGui::BeginChild("], "ImGui::EndChild("),
@@ -50,7 +50,7 @@ PAIRE = [
 
 
 def zaehle(text: str, was: str) -> int:
-    """Zaehlt Vorkommen ausserhalb von Kommentaren."""
+    """Counts occurrences outside of comments."""
     n = 0
     for zeile in text.split("\n"):
         code = zeile.split("//")[0]
@@ -65,15 +65,15 @@ def main() -> int:
         for aufListe, zu in PAIRE:
             a = sum(zaehle(text, x) for x in aufListe)
             z = zaehle(text, zu)
-            # Zu WENIG Gegenstuecke ist der Fehler. Mehr heisst nur, dass es
-            # Funktionen mit mehreren Ausgaengen gibt.
+            # Too FEW counterparts is the bug. More just means there are
+            # functions with multiple exits.
             if z < a:
                 name = aufListe[0].rstrip("(")
                 print(f"  FEHLER: {datei.name}: {a}x {name}, aber nur {z}x "
                       f"{zu.rstrip('(')} — fehlendes Gegenstueck")
                 fehler += 1
 
-        # PushStyleColor nimmt eine Zahl mit; PopStyleColor(n) gibt n frei.
+        # PushStyleColor pushes one entry; PopStyleColor(n) pops n.
         push = sum(len(re.findall(r"PushStyleColor\(", z.split("//")[0]))
                    for z in text.split("\n"))
         pop = 0
@@ -93,25 +93,25 @@ def main() -> int:
             print(f"  FEHLER: {datei.name}: {push}x PushStyleVar, aber {pop} freigegeben")
             fehler += 1
 
-    # Die Spaltenzahl in BeginTable muss zur Anzahl der
-    # TableSetupColumn-Aufrufe passen.
+    # The column count in BeginTable must match the number of
+    # TableSetupColumn calls.
     #
-    # Stimmt sie nicht, meldet ImGui zur LAUFZEIT
-    # "Called TableSetupColumn() too many times" — und die ueberzaehlige
-    # Spalte rutscht sichtbar in eine eigene Zeile. Beim Uebersetzen faellt
-    # davon nichts auf.
+    # If it doesn't, ImGui reports at RUNTIME
+    # "Called TableSetupColumn() too many times" - and the extra column
+    # visibly slips into a row of its own. Nothing of this shows up at
+    # compile time.
     for datei in sorted((ROOT / "gui").glob("*.cpp")):
         text = datei.read_text(encoding="utf-8", errors="replace")
         for m in re.finditer(r'BeginTable\(\s*"([^"]+)"\s*,\s*(\d+)', text):
             name, deklariert = m.group(1), int(m.group(2))
 
-            # Bis zum zugehoerigen EndTable zaehlen.
+            # Count up to the matching EndTable.
             rest = text[m.end():]
             ende = rest.find("EndTable()")
             bereich = rest[:ende] if ende >= 0 else rest
 
-            # Nur Aufrufe VOR der ersten Datenzeile zaehlen: danach kommen
-            # keine Spaltendefinitionen mehr.
+            # Only count calls BEFORE the first data row: after that, no more
+            # column definitions follow.
             erste_zeile = bereich.find("TableHeadersRow()")
             kopf = bereich[:erste_zeile] if erste_zeile >= 0 else bereich
 

@@ -1,28 +1,27 @@
-// Oberflaeche wirklich bedienen: klicken, ziehen, tippen — ohne Fenster.
+// Actually operate the GUI: click, drag, type - without a window.
 //
-// tests/gui_tests.cpp prueft die Logik hinter der Oberflaeche. Gezeichnet wird
-// dort nichts, und damit bleibt alles ungeprueft, was erst beim Zeichnen
-// passiert: Kontextmenues, Ziehen und Ablegen, Dialoge, Tastenkuerzel, die
-// Reihenfolge von Begin/End in fruehen Ruecksprungpfaden.
+// tests/gui_tests.cpp checks the logic behind the GUI. Nothing is drawn there,
+// so everything that only happens while drawing stays untested: context menus,
+// drag and drop, dialogs, keyboard shortcuts, the ordering of Begin/End in
+// early-return paths.
 //
-// Dieser Treiber baut dafuer eine kleine Testmaschine ueber ImGuis eigene
-// Test-Engine-Hooks (IMGUI_ENABLE_TEST_ENGINE): jedes Widget meldet Kennung,
-// Beschriftung und Rechteck. Damit laesst sich jedes Element per Beschriftung
-// finden und mit echten Maus- und Tastaturereignissen bedienen — so, wie ein
-// Mensch es tun wuerde, nur tausendmal schneller.
+// For that, this driver builds a small test machine on top of ImGui's own
+// test engine hooks (IMGUI_ENABLE_TEST_ENGINE): every widget reports its ID,
+// label and rectangle. That way every element can be found by its label and
+// operated with real mouse and keyboard events - just as a human would do it,
+// only a thousand times faster.
 //
-// Jede ImGui-Zusicherung (fehlendes End, doppelte ID, falsche Popup-Paare)
-// wird abgefangen und als Fehler gezaehlt, statt den Lauf zu beenden.
+// Every ImGui assertion (missing End, duplicate ID, mismatched popup pairs)
+// is caught and counted as an error instead of ending the run.
 //
-// Aufruf:  g2_gui_driver <arbeitsordner> [<assetwurzel> <referenz.gla> <anims.h>]
+// Usage:  g2_gui_driver <workdir> [<assetroot> <reference.gla> <anims.h>]
 //
-// Ohne Assetwurzel legt der Treiber sich kleine Beispieldateien selbst an.
-// Mit echten Daten prueft er zusaetzlich eine vollstaendige _humanoid.car.
+// Without an asset root the driver creates small sample files by itself.
+// With real data it additionally checks a complete _humanoid.car.
 //
-// Alles Geschriebene landet unter <arbeitsordner>. %APPDATA% wird fuer den
-// Lauf dorthin umgelenkt: die Einstellungen des Nutzers — zuletzt offene
-// Skripte, Ausgabeordner — duerfen durch einen Testlauf weder gelesen noch
-// ueberschrieben werden.
+// Everything written ends up under <workdir>. %APPDATA% is redirected there
+// for the run: the user's settings - recently opened scripts, output folders -
+// must be neither read nor overwritten by a test run.
 
 #include "gui/app.h"
 #include "gui/i18n.h"
@@ -58,7 +57,7 @@ namespace fs = std::filesystem;
 using g2::gui::S;
 using g2::gui::tr;
 
-// --- Erfassung ueber die Test-Engine-Hooks ----------------------------------
+// --- Capture via the test engine hooks --------------------------------------
 
 namespace {
 
@@ -75,7 +74,7 @@ std::vector<Item>                     g_cur;
 std::unordered_map<ImGuiID, size_t>   g_curIdx;
 std::vector<Item>                     g_last;
 std::set<ImGuiID>                     g_dupThisFrame;
-std::map<std::string, int>            g_idConflicts;   // "Fenster | Beschriftung" -> Anzahl
+std::map<std::string, int>            g_idConflicts;   // "window | label" -> count
 std::vector<std::string>              g_asserts;
 int                                   g_failures = 0;
 int                                   g_checks = 0;
@@ -119,8 +118,8 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
                                  const ImGuiLastItemData* data) {
     if (id == 0) return;
     if (const auto it = g_curIdx.find(id); it != g_curIdx.end()) {
-        // Nur im selben Fenster ist es ein Konflikt. Mehrzeilige Eingaben
-        // melden sich einmal als Kindfenster und einmal im Elternfenster an.
+        // It is only a conflict within the same window. Multiline inputs
+        // register once as a child window and once in the parent window.
         const char* w = ctx->CurrentWindow ? ctx->CurrentWindow->Name : "";
         bool isChild = false;
         for (ImGuiWindow* cw : ctx->Windows)
@@ -148,10 +147,10 @@ void ImGuiTestEngineHook_ItemInfo(ImGuiContext*, ImGuiID id, const char* label,
 void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}
 const char* ImGuiTestEngine_FindItemDebugLabel(ImGuiContext*, ImGuiID) { return nullptr; }
 
-// --- Absturzfaenger -----------------------------------------------------------
+// --- Crash catcher ------------------------------------------------------------
 //
-// Ein Zugriffsfehler soll als Befund im Protokoll landen, nicht den ganzen
-// Lauf beenden. __try verlangt eine Funktion ohne Objekte mit Destruktor.
+// An access violation should end up as a finding in the log, not end the whole
+// run. __try requires a function without objects that have a destructor.
 namespace {
 #ifdef _WIN32
 using Thunk = void (*)(void*);
@@ -165,7 +164,7 @@ int runGuardedRaw(Thunk fn, void* arg) {
 }
 #endif
 
-// Liefert 0, wenn alles gut ging, sonst den Ausnahmecode.
+// Returns 0 if everything went fine, otherwise the exception code.
 int guarded(const std::function<void()>& f) {
 #ifdef _WIN32
     struct Ctx { const std::function<void()>* f; std::string err; };
@@ -196,7 +195,7 @@ int guarded(const std::function<void()>& f) {
 #endif
 }
 
-// --- Treiber ------------------------------------------------------------------
+// --- Driver -------------------------------------------------------------------
 
 std::string displayOf(const std::string& label) {
     const std::size_t p = label.find("##");
@@ -234,7 +233,7 @@ struct Driver {
             slowestWhere = where;
         }
 
-        // Texturwuensche sofort als erledigt melden: es gibt keine Grafikkarte.
+        // Report texture requests as done immediately: there is no GPU.
         for (ImTextureData* t : ImGui::GetPlatformIO().Textures) {
             if (t->Status == ImTextureStatus_WantCreate) {
                 t->SetTexID(static_cast<ImTextureID>(1));
@@ -261,22 +260,22 @@ struct Driver {
         for (int i = 0; i < n; ++i) frame();
     }
 
-    // --- Suchen ---
-    // Fenster melden sich selbst als Element mit ihrem Namen an. Ein Dialog
-    // "Ueberschreiben###overwrite" hiesse sonst genauso wie sein Knopf.
+    // --- Lookup ---
+    // Windows register themselves as an item with their own name. Otherwise a
+    // dialog "Ueberschreiben###overwrite" would have the same name as its button.
     const Item* findIf(const std::function<bool(const Item&)>& pred) const {
         for (const Item& i : g_last)
             if (i.label != i.window && pred(i)) return &i;
         return nullptr;
     }
-    // Sichtbare Beschriftung genau (nach Abzug von "##...").
+    // Exact visible label (after stripping "##...").
     const Item* find(const std::string& text, const char* windowPart = nullptr) const {
         return findIf([&](const Item& i) {
             if (windowPart && i.window.find(windowPart) == std::string::npos) return false;
             return displayOf(i.label) == text;
         });
     }
-    // Sichtbare Beschriftung endet auf text — fuer Knoepfe mit Symbol davor.
+    // Visible label ends with text - for buttons with an icon in front.
     const Item* findEnds(const std::string& text, const char* windowPart = nullptr) const {
         return findIf([&](const Item& i) {
             if (windowPart && i.window.find(windowPart) == std::string::npos) return false;
@@ -290,14 +289,14 @@ struct Driver {
             return i.label.find(text) != std::string::npos;
         });
     }
-    // iconButton zeichnet "##ib" unter PushID(text): die Kennung laesst sich
-    // nachrechnen, die Beschriftung nicht lesen.
+    // iconButton draws "##ib" under PushID(text): the ID can be recomputed,
+    // the label cannot be read.
     const Item* findIconButton(const char* text, const char* windowPart) const {
         ImGuiWindow* w = nullptr;
         for (ImGuiWindow* cand : GImGui->Windows)
             if (std::string(cand->Name).find(windowPart) != std::string::npos && cand->WasActive) {
                 w = cand;
-                // Innerstes Fenster bevorzugen.
+                // Prefer the innermost window.
             }
         if (!w) return nullptr;
         for (ImGuiWindow* cand : GImGui->Windows) {
@@ -314,7 +313,7 @@ struct Driver {
 
     static bool disabled(const Item* i) { return i && (i->itemFlags & ImGuiItemFlags_Disabled); }
 
-    // --- Eingaben ---
+    // --- Input ---
     void mods(bool ctrl, bool shift) {
         ImGuiIO& io = ImGui::GetIO();
         io.AddKeyEvent(ImGuiMod_Ctrl, ctrl);
@@ -329,13 +328,13 @@ struct Driver {
     static ImVec2 center(const Item& i) {
         return ImVec2((i.bb.Min.x + i.bb.Max.x) * 0.5f, (i.bb.Min.y + i.bb.Max.y) * 0.5f);
     }
-    // Links in der Zeile statt in der Mitte: bei Tabellenzeilen liegen in
-    // der Mitte andere Spalten, die eigene Widgets tragen koennen.
+    // Left side of the row instead of the center: in table rows the center
+    // holds other columns, which may carry widgets of their own.
     static ImVec2 leftOf(const Item& i) {
         return ImVec2(i.bb.Min.x + 6.0f, (i.bb.Min.y + i.bb.Max.y) * 0.5f);
     }
-    // Zeit verstreichen lassen, wie ein Mensch zwischen zwei Klicks. Ohne
-    // das werten zwei Klicks auf dieselbe Zeile als Doppelklick.
+    // Let time pass, like a human between two clicks. Without this, two clicks
+    // on the same row count as a double click.
     void pause() {
         nextDelta = 0.4f;
         frame();
@@ -343,8 +342,8 @@ struct Driver {
     void clickAt(ImVec2 p, int button = 0, bool ctrl = false, bool shift = false) {
         mods(ctrl, shift);
         moveTo(p);
-        // Elemente mit AllowOverlap uebernehmen den Mauszeiger erst ein Bild
-        // spaeter. Ein Mensch bewegt die Maus ohnehin ueber viele Bilder.
+        // Items with AllowOverlap only take over the mouse cursor one frame
+        // later. A human moves the mouse over many frames anyway.
         frames(2);
         ImGui::GetIO().AddMouseButtonEvent(button, true);
         frame();
@@ -419,8 +418,8 @@ struct Driver {
     }
     void escape() { key(ImGuiKey_Escape); }
 
-    // Reiter melden sich ohne Beschriftung an die Test-Hooks. Deshalb ueber
-    // ImGuis Tab-Leisten suchen und das Rechteck selbst ausrechnen.
+    // Tabs register with the test hooks without a label. So search ImGui's
+    // tab bars and compute the rectangle ourselves.
     Item tabHit;
     const Item* findTab(const std::string& labelPart) {
         ImGuiContext& g = *GImGui;
@@ -434,8 +433,8 @@ struct Driver {
                 tabHit = Item{};
                 tabHit.id = t.ID;
                 tabHit.label = name;
-                // Nur das linke Drittel: rechts sitzt das Schliessen-Kreuz,
-                // und ein Klick in die Mitte trifft es bei kurzen Namen.
+                // Only the left third: the close cross sits on the right, and
+                // a click in the middle hits it for short names.
                 tabHit.bb = ImRect(ImVec2(x0 + 4.0f, tb->BarRect.Min.y),
                                    ImVec2(x0 + t.Width / 3.0f, tb->BarRect.Max.y));
                 return &tabHit;
@@ -444,8 +443,8 @@ struct Driver {
         return nullptr;
     }
 
-    // Element ueber seine Kennung finden. Fuer Widgets, die ihre Beschriftung
-    // nicht an die Hooks melden (Kombinationsfelder).
+    // Find an item by its ID. For widgets that do not report their label to
+    // the hooks (combo boxes).
     const Item* findById(const char* label, const char* windowPart) const {
         for (ImGuiWindow* w : GImGui->Windows) {
             if (!w->WasActive || std::string(w->Name).find(windowPart) == std::string::npos) continue;
@@ -456,7 +455,7 @@ struct Driver {
         return nullptr;
     }
 
-    // Name des Tabs, den ImGui in der Skript-Tableiste gerade zeigt.
+    // Name of the tab ImGui is currently showing in the script tab bar.
     std::string shownTab(const std::string& anyPathInBar) const {
         ImGuiContext& g = *GImGui;
         for (int n = 0; n < g.TabBars.GetMapSize(); ++n) {
@@ -473,7 +472,7 @@ struct Driver {
         return {};
     }
 
-    // Knoepfe der Modusleiste: drei "##mode" in dieser Reihenfolge.
+    // Mode bar buttons: three "##mode" in this order.
     const Item* modeButton(int n) const {
         int k = 0;
         for (const Item& i : g_last)
@@ -481,12 +480,12 @@ struct Driver {
                 return &i;
         return nullptr;
     }
-    // Genaue Beschriftung samt "##".
+    // Exact label including "##".
     const Item* findLabel(const std::string& full) const {
         return findIf([&](const Item& i) { return i.label == full; });
     }
 
-    // Hauptmenue oeffnen und einen Eintrag waehlen.
+    // Open the main menu and pick an entry.
     bool menu(const char* top, const char* entry, const char* sub = nullptr) {
         const Item* t = find(top);
         if (!t) {
@@ -537,13 +536,13 @@ struct Driver {
     }
     bool popupOpen() const { return !GImGui->OpenPopupStack.empty(); }
 
-    // Zeile der Sequenztabelle nach Name.
+    // Row of the sequence table by name.
     const Item* row(const std::string& name) const {
         return findIf([&](const Item& i) {
             return i.window.find("seqs") != std::string::npos && displayOf(i.label) == name;
         });
     }
-    // Letztes Vorkommen — nach dem Einfuegen gibt es Namen doppelt.
+    // Last occurrence - after inserting, names exist twice.
     const Item* rowLast(const std::string& name) const {
         const Item* hit = nullptr;
         for (const Item& i : g_last)
@@ -563,7 +562,7 @@ struct Driver {
     }
 };
 
-// Kleine Beispieldateien, wenn keine echten Daten angegeben sind.
+// Small sample files when no real data is given.
 void writeText(const fs::path& p, const std::string& s) {
     fs::create_directories(p.parent_path());
     std::ofstream f(p, std::ios::binary);
@@ -614,7 +613,7 @@ int main(int argc, char** argv) {
     fs::create_directories(work / "appdata");
     g_log = std::fopen((work / "gui_driver.log").string().c_str(), "w");
 
-    // Einstellungen des Nutzers nicht anfassen.
+    // Do not touch the user's settings.
 #ifdef _WIN32
     _putenv_s("APPDATA", (work / "appdata").string().c_str());
 #else
@@ -628,7 +627,7 @@ int main(int argc, char** argv) {
     const fs::path enums = real ? fs::path(argv[4]) : fs::path();
     const fs::path bigCar = argc >= 6 ? fs::path(argv[5]) : fs::path();
 
-    // --- ImGui ohne Fenster ---
+    // --- ImGui without a window ---
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     GImGui->TestEngineHookItems = true;
@@ -638,7 +637,7 @@ int main(int argc, char** argv) {
     io.ConfigDebugHighlightIdConflicts = true;
     io.Fonts->AddFontDefault();
 
-    // Plattform: Dialoge liefern, was der Test vorgibt.
+    // Platform: dialogs return whatever the test specifies.
     std::vector<std::vector<std::string>> nextFiles;
     std::vector<std::string>              nextFolder;
     std::vector<std::string>              revealed;
@@ -660,15 +659,15 @@ int main(int argc, char** argv) {
     };
     plat.revealInExplorer = [&](const std::string& p) { revealed.push_back(p); };
 
-    // Beispieldaten, wenn keine echten da sind: eine Animation mit Bewegung,
-    // eine zweite, ein root.
+    // Sample data when there is no real data: one animation with motion,
+    // a second one, a root.
     const fs::path cars = work / "cars";
     fs::create_directories(cars);
 
     auto app = std::make_unique<g2::gui::App>(plat);
     Driver D;
     D.app = app.get();
-    // Hohe DPI: deckt Skalierungsfehler auf, die bei 100 % nicht auffallen.
+    // High DPI: reveals scaling bugs that go unnoticed at 100 %.
     app->settings().dpiScale = 1.5f;
     D.frames(3);
 
@@ -680,8 +679,8 @@ int main(int argc, char** argv) {
             ++crashes;
             ++g_failures;
             out("    [ABSTURZ] %s  (Code 0x%08X)\n", what, static_cast<unsigned>(code));
-            // Nach einem Absturz mitten im Bild ist der ImGui-Zustand kaputt.
-            // Frisch anfangen, damit die folgenden Schritte etwas aussagen.
+            // After a crash in the middle of a frame the ImGui state is broken.
+            // Start fresh so the following steps still mean something.
             if (GImGui->WithinFrameScope) ImGui::ErrorRecoveryTryToRecoverState(nullptr);
             if (GImGui->WithinFrameScope) ImGui::EndFrame();
         }
@@ -694,7 +693,7 @@ int main(int argc, char** argv) {
         check(D.find(tr(S::MenuBuild)) != nullptr, "Menue Bauen sichtbar");
         check(D.find(tr(S::MenuView)) != nullptr, "Menue Ansicht sichtbar");
 
-        // Jedes Hauptmenue oeffnen und schliessen.
+        // Open and close every main menu.
         for (S m : {S::MenuFile, S::MenuBuild, S::MenuView}) {
             D.click(D.find(tr(m)));
             D.frames(2);
@@ -708,7 +707,7 @@ int main(int argc, char** argv) {
             D.frames(2);
         }
 
-        // Hell / Dunkel mehrfach: die Abstaende duerfen nicht wachsen.
+        // Light / dark several times: the spacings must not grow.
         const float before = ImGui::GetStyle().ItemInnerSpacing.x;
         const float indentBefore = ImGui::GetStyle().IndentSpacing;
         for (int k = 0; k < 3; ++k) {
@@ -721,7 +720,7 @@ int main(int argc, char** argv) {
                   std::to_string(before) + " -> " +
                   std::to_string(ImGui::GetStyle().ItemInnerSpacing.x) + ")");
 
-        // Einstellungsleiste aus und wieder an.
+        // Settings bar off and on again.
         D.menu(tr(S::MenuView), tr(S::Settings));
         check(D.findIf([](const Item& i) { return i.window.find("settings") != std::string::npos; }) ==
                   nullptr,
@@ -731,7 +730,7 @@ int main(int argc, char** argv) {
                   nullptr,
               "Einstellungsleiste wieder da");
 
-        // Info-Fenster.
+        // About window.
         D.menu(tr(S::MenuView), tr(S::About));
         D.frames(2);
         check(D.windowOpen(tr(S::About)), "Info-Fenster offen");
@@ -739,7 +738,7 @@ int main(int argc, char** argv) {
         D.frames(2);
         check(!D.windowOpen(tr(S::About)), "Info-Fenster ueber Schliessen zu");
 
-        // Leere Aktionen ohne Skript duerfen nichts tun.
+        // Empty actions without a script must do nothing.
         D.key(ImGuiKey_S, true);
         D.key(ImGuiKey_S, true, true);
         check(app->documents().empty(), "Strg+S ohne Skript: kein Tab entstanden");
@@ -760,17 +759,17 @@ int main(int argc, char** argv) {
         check(st.useCache != c0, "Haekchen Cache reagiert");
         check(st.carcassCompat != k0, "Haekchen Carcass-Modus reagiert");
         check(st.readFrameCounts != r0, "Haekchen Framezahlen reagiert");
-        // Mesh aus -> Skin ausgegraut.
+        // Mesh off -> skin grayed out.
         if (!st.writeMesh) check(Driver::disabled(D.find(tr(S::WriteSkin))), "Skin ausgegraut ohne Mesh");
         for (S s : {S::WriteFrames, S::WriteMesh, S::UseCache, S::CarcassMode, S::ReadFrameCounts})
             D.click(D.find(tr(s)));
         check(st.writeFrames == f0 && st.writeMesh == m0 && st.carcassCompat == k0,
               "zweiter Klick stellt zurueck");
 
-        // Pfade: per Ordnerknopf (Dialog liefert) und per Tippen.
+        // Paths: via the folder button (dialog supplies them) and by typing.
         if (real) {
             nextFolder.push_back(base.string());
-            // Der erste Ordnerknopf gehoert zur Assetwurzel.
+            // The first folder button belongs to the asset root.
             const Item* btn = D.findIf([](const Item& i) {
                 return i.window.find("settings") != std::string::npos &&
                        (i.label == "..." || (!i.label.empty() && (unsigned char)i.label[0] >= 0xE0));
@@ -786,10 +785,10 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
-    // Arbeitsdaten: kleine Skripte zum Umordnen und Bauen.
+    // Working data: small scripts for reordering and building.
     fs::path smallCar, smallCar2;
     if (real) {
-        // Kleines, echtes Skript: die ersten 12 Grabs der grossen .car.
+        // Small, real script: the first 12 grabs of the big .car.
         const auto big = g2::car::parseFile(bigCar.string());
         std::ostringstream s;
         s << "// Kopfkommentar, darf beim Speichern nicht verloren gehen\n";
@@ -832,27 +831,27 @@ int main(int argc, char** argv) {
         D.frames(2);
         check(app->documents().size() == 2, "Datei > Ordner oeffnen: zweiter Tab");
 
-        // Dieselbe Datei nicht doppelt.
+        // The same file must not open twice.
         nextFiles.push_back({smallCar.string()});
         D.menu(tr(S::MenuFile), tr(S::OpenScript));
         check(app->documents().size() == 2, "dieselbe Datei nicht doppelt geoeffnet");
 
-        // Tabs anklicken.
+        // Click tabs.
         const Item* t0 = D.findTab("###" + app->documents()[0].path);
         D.click(t0);
         D.frames(2);
         check(app->activeTab() == 0, "Klick auf ersten Tab aktiviert ihn");
 
-        // Eine schon offene .car erneut oeffnen (Doppelklick im Explorer):
-        // ihr Tab muss erscheinen, nicht der gerade sichtbare.
+        // Open an already open .car again (double click in Explorer):
+        // its tab must show up, not the one currently visible.
         const std::string p1 = app->documents()[1].path;
         app->openPath(p1);
         D.frames(3);
         check(app->activeTab() == 1 && D.shownTab(p1).find(p1) != std::string::npos,
               "erneut geoeffnete .car springt auf ihren Tab (ImGui zeigt: " + D.shownTab(p1) + ")");
 
-        // Neustart: der zuletzt aktive Tab muss wieder gewaehlt sein, nicht
-        // der erste.
+        // Restart: the last active tab must be selected again, not the
+        // first one.
         {
             const float dpi = app->settings().dpiScale;
             app.reset();
@@ -892,7 +891,7 @@ int main(int argc, char** argv) {
         check(countSelected(d) == 5 && d.selected[3], "Strg+Klick fuegt sie wieder hinzu");
         check(!D.windowOpen("###seqdlg"), "zwei langsame Klicks sind kein Doppelklick");
 
-        // Filter: tippen, dann Bereichsauswahl.
+        // Filter: type, then range selection.
         const Item* filt = D.findIf([](const Item& i) { return i.label == "##filter"; });
         D.click(filt);
         D.type("A1_B");
@@ -916,7 +915,7 @@ int main(int argc, char** argv) {
             check(hiddenSel == 0, "Umschalt+Klick mit Filter waehlt KEINE ausgeblendeten Zeilen (" +
                                       std::to_string(hiddenSel) + " ausgeblendet gewaehlt)");
         }
-        // Filter leeren.
+        // Clear the filter.
         D.click(filt);
         D.key(ImGuiKey_A, true);
         D.key(ImGuiKey_Backspace);
@@ -940,12 +939,12 @@ int main(int argc, char** argv) {
         const Item* dst = D.row(nameAt(5));
         if (src && dst) D.dragPath(Driver::leftOf(*src), {Driver::leftOf(*dst)});
         D.frames(2);
-        // Abgelegt "vor Zeile 5": a steht danach an Index 4.
+        // Dropped "before row 5": afterwards a sits at index 4.
         check(nameAt(4) == a, "Zeile 1 per Ziehen hinter Zeile 4 verschoben (jetzt: " + grabNames(d) + ")");
         check(d.dirty, "Skript als geaendert markiert");
         check(g2::gui::App::isRootGrab(d.script.grabs.back()), "root bleibt die letzte Zeile");
 
-        // Mehrfachauswahl als Block ziehen.
+        // Drag a multi-selection as a block.
         const std::string x = nameAt(0), y = nameAt(2);
         D.clickRow(D.row(x));
         D.clickRow(D.row(y), true);
@@ -962,13 +961,13 @@ int main(int argc, char** argv) {
                                           std::to_string(px) + "," + std::to_string(py) + ")");
         check(g2::gui::App::isRootGrab(d.script.grabs.back()), "root weiterhin zuletzt");
 
-        // Obere oder untere Haelfte der Zielzeile: davor oder dahinter, und
-        // waehrend des Ziehens eine Linie genau an dieser Stelle.
+        // Upper or lower half of the target row: before or after it, and
+        // while dragging a line exactly at that position.
         {
             const auto punkt = [](const Item& it, float anteil) {
                 return ImVec2(it.bb.Min.x + 6.0f, it.bb.Min.y + it.bb.GetHeight() * anteil);
             };
-            // Halten, zur Stelle ziehen, Zustand pruefen, loslassen.
+            // Hold, drag to the spot, check state, release.
             const auto ziehe = [&](const std::string& quelle, std::size_t zielZeile, float anteil,
                                    int* linienVertices) {
                 D.clickRow(D.row(quelle));
@@ -999,8 +998,8 @@ int main(int argc, char** argv) {
             ziehe(m2, 3, 0.2f, nullptr);
             check(nameAt(2) == m2, "obere Haelfte von Zeile 3: davor eingefuegt (" + grabNames(d) + ")");
 
-            // Unter eine Ueberschrift ziehen: die Ueberschrift bleibt oben,
-            // die Sequenz steht darunter.
+            // Drag below a heading: the heading stays on top, the sequence
+            // sits below it.
             std::size_t mitKomm = 0;
             for (std::size_t k = 1; k + 1 < d.script.grabs.size(); ++k)
                 if (!d.script.grabs[k].commentsBefore.empty()) mitKomm = k;
@@ -1024,7 +1023,7 @@ int main(int argc, char** argv) {
             check(g2::gui::App::isRootGrab(d.script.grabs.back()), "root bleibt zuletzt");
         }
 
-        // Ziehen auf den ANDEREN Tab: darf nicht im falschen Skript umordnen.
+        // Dragging onto the OTHER tab: must not reorder in the wrong script.
         if (app->documents().size() >= 2) {
             auto& other = app->documents()[1];
             const std::string before0 = grabNames(d);
@@ -1033,8 +1032,8 @@ int main(int argc, char** argv) {
             const Item* s3 = D.row(nameAt(3));
             const Item* tab1 = D.findTab("###" + other.path);
             if (s3 && tab1) {
-                // Ueber dem Tab verweilen, bis ImGui ihn umschaltet, dann in
-                // der Tabelle ablegen.
+                // Hover over the tab until ImGui switches to it, then drop in
+                // the table.
                 D.moveTo(Driver::leftOf(*s3));
                 ImGui::GetIO().AddMouseButtonEvent(0, true);
                 D.frame();
@@ -1055,7 +1054,7 @@ int main(int argc, char** argv) {
             const bool otherUnchanged = grabNames(other) == before1;
             check(otherUnchanged, "Zeile auf anderen Tab gezogen: das ANDERE Skript bleibt unveraendert");
             (void)before0;
-            // Zurueck zum ersten Tab.
+            // Back to the first tab.
             D.click(D.findTab("###" + d.path));
             D.frames(2);
         }
@@ -1072,7 +1071,7 @@ int main(int argc, char** argv) {
         };
         const auto ctx = [&](std::size_t k, S entry) {
             if (D.popupOpen()) D.escape();
-            // Gibt es den Namen weiter oben schon, das spaetere Vorkommen.
+            // If the name already exists further up, use the later occurrence.
             std::size_t before = 0;
             for (std::size_t j = 0; j < k; ++j) before += nameAt(j) == nameAt(k) ? 1 : 0;
             const auto target = [&] { return before ? D.rowLast(nameAt(k)) : D.row(nameAt(k)); };
@@ -1117,7 +1116,7 @@ int main(int argc, char** argv) {
 
         ctx(1, S::Copy);
         check(app->clipboardSize() == 1, "Kopieren: eine Sequenz in der Ablage");
-        // Einfuegen: Beschriftung enthaelt die Anzahl.
+        // Paste: the label contains the count.
         if (D.popupOpen()) D.escape();
         D.clickRow(D.row(nameAt(5)));
         D.click(D.row(nameAt(5)), 1);
@@ -1128,7 +1127,7 @@ int main(int argc, char** argv) {
         D.frames(3);
         check(d.script.grabs.size() == n0 + 1, "Einfuegen danach: eine Zeile mehr");
 
-        // Loeschen mit Rueckfrage: erst Nein, dann Ja.
+        // Delete with confirmation: first No, then Yes.
         ctx(6, S::DeleteSeq);
         check(D.popupOpen(), "Loeschen fragt nach");
         D.click(D.find(tr(S::No)));
@@ -1139,7 +1138,7 @@ int main(int argc, char** argv) {
         D.frames(2);
         check(d.script.grabs.size() == n0, "Ja loescht genau eine");
 
-        // Ausschneiden = kopieren + loeschen mit Rueckfrage.
+        // Cut = copy + delete with confirmation.
         ctx(1, S::Cut);
         D.click(D.findEnds(tr(S::DeleteSeq), "confirmdel"));
         D.frames(2);
@@ -1159,12 +1158,12 @@ int main(int argc, char** argv) {
         D.doubleClick(D.row(nameAt(2)));
         D.frames(2);
         check(D.windowOpen("###seqdlg"), "Doppelklick oeffnet den Sequenzdialog");
-        // Gross genug, dass alle Knoepfe im sichtbaren Bereich liegen.
+        // Large enough that all buttons lie within the visible area.
         ImGui::SetWindowSize("###seqdlg", ImVec2(1200, 1150));
         ImGui::SetWindowPos("###seqdlg", ImVec2(360, 60));
         D.frames(3);
 
-        // Enum waehlen.
+        // Pick an enum.
         D.click(D.findLabel(std::string(tr(S::DlgChoose)) + "##m"));
         D.frames(2);
         check(D.popupOpen(), "Enum-Auswahl offen");
@@ -1180,7 +1179,7 @@ int main(int argc, char** argv) {
         check(d.script.grabs[2].enumName && *d.script.grabs[2].enumName == "BOTH_STAND1",
               "Enum aus der Liste uebernommen");
 
-        // Zusatzsequenz anlegen und wieder entfernen.
+        // Add an extra sequence and remove it again.
         const std::size_t a0 = d.script.grabs[2].additional.size();
         D.click(D.find(tr(S::DlgAddExtra), "###seqdlg"));
         check(d.script.grabs[2].additional.size() == a0 + 1, "-additional angelegt");
@@ -1190,7 +1189,7 @@ int main(int argc, char** argv) {
         D.click(del);
         check(d.script.grabs[2].additional.size() == a0, "-additional entfernt");
 
-        // Loop-Frame ueber die Plus-Taste.
+        // Loop frame via the plus button.
         const int l0 = d.script.grabs[2].loop.value_or(-1);
         const Item* plus = D.findIf([](const Item& i) {
             return i.window.find("seqdlg") != std::string::npos && i.label == "+";
@@ -1198,8 +1197,8 @@ int main(int argc, char** argv) {
         D.click(plus);
         check(d.script.grabs[2].loop.value_or(-1) == l0 + 1, "Loop-Frame +1");
 
-        // Tab wechseln, waehrend der Dialog offen ist: der Dialog darf danach
-        // nicht still die gleiche Zeile im ANDEREN Skript bearbeiten.
+        // Switch tabs while the dialog is open: afterwards the dialog must not
+        // silently edit the same row in the OTHER script.
         if (app->documents().size() >= 2) {
             auto& other = app->documents()[1];
             const std::string o2 = other.script.grabs[2].enumName ? *other.script.grabs[2].enumName
@@ -1241,7 +1240,7 @@ int main(int argc, char** argv) {
         std::size_t total0 = d.script.trailingComments.size();
         for (const auto& g : d.script.grabs) total0 += g.commentsBefore.size();
 
-        // Rechtsklick > Nach oben.
+        // Right click > Move up.
         D.click(c, 1);
         D.frames(2);
         D.click(D.find(tr(S::MoveUp)));
@@ -1250,7 +1249,7 @@ int main(int argc, char** argv) {
         for (const auto& g : d.script.grabs) total1 += g.commentsBefore.size();
         check(total1 == total0, "Nach oben: keine Kommentarzeile verloren");
 
-        // Ans Ende ziehen.
+        // Drag to the end.
         c = D.findIf([](const Item& i) {
             return i.window.find("seqs") != std::string::npos && i.label.rfind("//////", 0) == 0;
         });
@@ -1261,7 +1260,7 @@ int main(int argc, char** argv) {
         for (const auto& g : d.script.grabs) total2 += g.commentsBefore.size();
         check(total2 == total0, "Ans Ende gezogen: keine Kommentarzeile verloren");
 
-        // Doppelklick auf den Zeilenkommentar einer Sequenz.
+        // Double click on a sequence's line comment.
         const Item* tc = D.findIf([](const Item& i) {
             return i.window.find("seqs") != std::string::npos && i.label == "...";
         });
@@ -1305,12 +1304,12 @@ int main(int argc, char** argv) {
     step("10. Bauen aus der Oberflaeche");
     guardedStep("Bauen", [&] {
         if (!real || app->documents().size() < 2) return;
-        // Ausgabe ueber den Knopf "Standardordner".
+        // Output via the "default folder" button.
         D.click(D.find(tr(S::DefaultFolder)));
         auto& d = app->documents()[static_cast<std::size_t>(app->activeTab())];
         check(!d.outputDir.empty(), "Standardordner gesetzt");
 
-        // Ungespeicherte Aenderung vor dem Bauen.
+        // Unsaved change before building.
         check(d.dirty, "Skript hat ungespeicherte Aenderungen");
         const std::string onDiskBefore = readAll(d.path);
         D.click(D.findIconButton(tr(S::BtnBuild), "##main"));
@@ -1326,17 +1325,17 @@ int main(int argc, char** argv) {
         check(onDiskAfter != onDiskBefore && !d.dirty,
               "vor dem Bauen gespeichert: .car auf der Platte entspricht dem Gebauten");
 
-        // Kopfkommentar ueberlebt das Speichern.
+        // Header comment survives saving.
         check(onDiskAfter.find("Kopfkommentar") != std::string::npos,
               "Kopfkommentar der .car nach dem Speichern noch vorhanden");
 
-        // Alle bauen.
+        // Build all.
         app->assignDefaultOutputs(true);
         D.click(D.findIconButton(tr(S::BtnBuildAll), "##main"));
         D.waitBuild();
         check(logHas(*app, "t_gui.gla"), "Alle bauen: Protokoll meldet die GLA");
 
-        // Protokoll: Ausgabeordner oeffnen.
+        // Log: open the output folder.
         if (!D.findTab(tr(S::TabLog))) out("    (Reiter %s nicht gefunden)\n", tr(S::TabLog));
         D.click(D.findTab(tr(S::TabLog)));
         D.frames(2);
@@ -1360,7 +1359,7 @@ int main(int argc, char** argv) {
         check(!app->documents()[0].dirty, "Strg+S speichert");
         check(fs::exists(app->documents()[0].path + ".bak"), ".bak angelegt");
 
-        // Tastenkuerzel, die im Menue angeschrieben stehen.
+        // Keyboard shortcuts that are shown in the menu.
         for (auto& x : app->documents()) x.validated = false;
         D.key(ImGuiKey_F7);
         check(app->documents()[0].validated, "F7 prueft (steht so im Menue)");
@@ -1368,7 +1367,7 @@ int main(int argc, char** argv) {
         D.key(ImGuiKey_O, true);
         check(dialogTitles.size() > titles0, "Strg+O oeffnet den Dateidialog");
 
-        // Strg+W: sauberer Tab geht zu, geaenderter fragt nach.
+        // Ctrl+W: a clean tab closes, a modified one asks first.
         const std::size_t n0 = app->documents().size();
         for (auto& x : app->documents()) x.dirty = false;
         D.key(ImGuiKey_W, true);
@@ -1391,7 +1390,7 @@ int main(int argc, char** argv) {
     fs::path glaDir;
     guardedStep("Extract", [&] {
         if (!real) return;
-        // Frisch gebaute GLA aus Schritt 10 samt Begleitdateien.
+        // Freshly built GLA from step 10 including its companion files.
         for (const auto& x : app->documents())
             if (!x.outputDir.empty() && fs::exists(fs::path(x.outputDir) / "t_gui.gla")) glaDir = x.outputDir;
         if (glaDir.empty()) {
@@ -1412,7 +1411,7 @@ int main(int argc, char** argv) {
         check(ex.seqs.size() == 13, "13 Sequenzen (" + std::to_string(ex.seqs.size()) + ")");
         if (ex.seqs.size() < 5) return;
 
-        // Auswahl.
+        // Selection.
         const auto exRow = [&](const std::string& n) {
             return D.findIf([&](const Item& i) {
                 return i.window.find("extract") != std::string::npos && displayOf(i.label) == n;
@@ -1424,7 +1423,7 @@ int main(int argc, char** argv) {
         for (char c : ex.selected) nsel += c ? 1 : 0;
         check(nsel == 4, "Umschalt-Auswahl: 4 Sequenzen");
 
-        // Zielordner und Export der Auswahl.
+        // Target folder and export of the selection.
         const fs::path outX = work / "extract_out" / "models" / "players" / "t_x";
         fs::create_directories(outX);
         nextFolder.push_back(outX.string());
@@ -1439,10 +1438,10 @@ int main(int argc, char** argv) {
             if (e.path().extension() == ".xsi") ++nx;
         check(nx == 4, "4 .xsi exportiert (" + std::to_string(nx) + ")");
 
-        // Liegen alle Bedienelemente der Exportzeile im sichtbaren Bereich?
+        // Are all controls of the export row within the visible area?
         {
-            // Gegen den sichtbaren Bereich des Extract-Fensters pruefen, nicht
-            // gegen den Bildschirm: links sitzt die Modusleiste.
+            // Check against the visible area of the extract window, not
+            // against the screen: the mode bar sits on the left.
             std::size_t clipped = 0;
             for (ImGuiWindow* w : GImGui->Windows) {
                 if (!w->WasActive || std::string(w->Name).find("extract") == std::string::npos) continue;
@@ -1452,14 +1451,14 @@ int main(int argc, char** argv) {
             check(clipped == 0, "alle Bedienelemente im Extract-Modus sichtbar (" +
                                     std::to_string(clipped) + " abgeschnitten)");
         }
-        // Fassung umstellen (Kombinationsfeld).
+        // Switch the version (combo box).
         D.click(D.findById("##xsiver", "extract"));
         D.frames(2);
         D.click(D.findIf([](const Item& i) { return displayOf(i.label) == "3.5"; }));
         check(ex.xsiVersion == g2::xsiexp::ExportOptions::Version::V35, "dotXSI 3.5 gewaehlt");
 
-        // Alles mit .car. Eine .car liegt schon da: es muss nachgefragt und
-        // vor dem Ersetzen gesichert werden.
+        // Everything with .car. A .car already exists: it must ask first and
+        // make a backup before replacing it.
         const fs::path carOut = outX / "t_gui.car";
         writeText(carOut, "// eigene Datei, darf nicht still ueberschrieben werden\n");
         D.click(D.findIconButton(tr(S::ExportAllWithCar), "extract"));
@@ -1485,8 +1484,8 @@ int main(int argc, char** argv) {
               "alte .car als .bak gesichert");
         check(readAll(carOut).find("$aseanimgrab") != std::string::npos, "neue .car geschrieben");
         {
-            // Aus der exportierten .car wieder bauen koennen: jede Zeile muss
-            // sich lesen lassen.
+            // It must be possible to build again from the exported .car: every
+            // line must be readable.
             bool ok = true;
             try {
                 const auto sc = g2::car::parseFile(carOut.string());
@@ -1497,7 +1496,7 @@ int main(int argc, char** argv) {
             check(ok, "exportierte .car ist lesbar und vollstaendig");
         }
 
-        // Vergleich mit einer anderen animation.cfg.
+        // Comparison with another animation.cfg.
         const fs::path cmpCfg = work / "compare_animation.cfg";
         {
             std::ofstream f(cmpCfg);
@@ -1538,7 +1537,7 @@ int main(int argc, char** argv) {
         }
         check(canvas != nullptr, "Zeichenflaeche vorhanden, Drehen und Zoomen ohne Fehler");
         D.click(D.find(tr(S::PreviewReset)));
-        // Sequenzauswahl.
+        // Sequence selection.
         D.click(D.find(tr(S::PreviewSeq)));
         D.frames(2);
         const auto& ex = app->extract();
@@ -1546,7 +1545,7 @@ int main(int argc, char** argv) {
         D.click(s);
         check(true, "Sequenz in der Vorschau gewechselt");
 
-        // animation.cfg, die zu KEINER Sequenz dieser GLA passt.
+        // animation.cfg that matches NONE of this GLA's sequences.
         const fs::path badCfg = work / "fremd_animation.cfg";
         {
             std::ofstream f(badCfg);
@@ -1570,7 +1569,7 @@ int main(int argc, char** argv) {
             app->clearFontsDirty();
         }
     });
-    // In jeder Sprache die Meldungen mit Zahlen und Pfaden ausloesen.
+    // Trigger the messages with numbers and paths in every language.
     for (int l = 0; l < static_cast<int>(g2::gui::Lang::Count); ++l) {
         const auto cand = static_cast<g2::gui::Lang>(l);
         g2::gui::setLanguage(cand);
@@ -1624,12 +1623,12 @@ int main(int argc, char** argv) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 20.0;
         out("    Bildaufbau mit %zu Zeilen: %.1f ms\n", d.script.grabs.size(), ms);
         check(ms < 50.0, "Tabelle bleibt fluessig (< 50 ms je Bild)");
-        // Scrollen.
+        // Scroll.
         const Item* any = D.findIf([](const Item& i) { return i.window.find("seqs") != std::string::npos; });
         if (any) for (int k = 0; k < 10; ++k) D.wheel(Driver::center(*any), -20.0f);
         check(true, "gescrollt");
 
-        // Speichern ohne Aenderung: Datei muss inhaltlich gleich bleiben.
+        // Saving without changes: the file content must stay the same.
         app->saveDocument(app->documents().size() - 1);
         const auto a = g2::car::parseFile(bigCar.string());
         const auto b = g2::car::parseFile(copy.string());
@@ -1640,7 +1639,151 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
-    step("17. Alle schliessen");
+    // The update bar, clicked through like a user would: against a fake
+    // GitHub, with a separate App, so the other steps keep their state.
+    step("17. Updates");
+    guardedStep("Updates", [&] {
+        namespace upd = g2::gui::update;
+        const fs::path ud = work / "update";
+        fs::create_directories(ud);
+        writeText(ud / "g2c.exe", "MZalt");
+        const std::string newExe = "MZ" + std::string(50000, 'N');
+        const std::string dl = "https://github.com/DennisHerrm/G2C-toolkit/releases/download/v9.0.0/";
+        const std::string sums = upd::sha256Hex(newExe) + "  g2c.exe\n";
+        const std::string json =
+            "{\"tag_name\":\"v9.0.0\",\"target_commitish\":\"main\",\"prerelease\":false,"
+            "\"html_url\":\"https://github.com/DennisHerrm/G2C-toolkit/releases/tag/v9.0.0\","
+            "\"assets\":[{\"name\":\"g2c.exe\",\"size\":" + std::to_string(newExe.size()) +
+            ",\"browser_download_url\":\"" + dl + "g2c.exe\"},{\"name\":\"SHA256SUMS.txt\",\"size\":" +
+            std::to_string(sums.size()) + ",\"browser_download_url\":\"" + dl + "SHA256SUMS.txt\"}]}";
+        bool netDown = false;
+        std::vector<std::string> opened;
+
+        g2::gui::Platform up = plat;
+        up.network.get = [&](const std::string& url, std::size_t) {
+            upd::HttpResult r;
+            if (netDown) { r.error = "Zeitueberschreitung"; return r; }
+            if (url == upd::apiUrl(upd::Channel::Stable)) { r.status = 200; r.body = json; }
+            else if (url == dl + "SHA256SUMS.txt") { r.status = 200; r.body = sums; }
+            else r.status = 404;
+            return r;
+        };
+        up.network.download = [&](const std::string&, const fs::path& dest,
+                                  const std::function<bool(std::uint64_t, std::uint64_t)>& progress) {
+            writeText(dest, newExe);
+            progress(newExe.size(), newExe.size());
+            return std::string();
+        };
+        up.openUrl = [&](const std::string& u) { opened.push_back(u); };
+        up.exePath = ud / "g2c.exe";
+        up.build = {"1.0.0", ""};
+
+        auto ua = std::make_unique<g2::gui::App>(up);
+        D.app = ua.get();
+        ua->updater()->wait();
+        D.frames(3);
+        check(D.find(tr(S::UpdInstall)) != nullptr, "Start: Leiste zeigt die neue Version");
+
+        D.click(D.find(tr(S::UpdNotes)));
+        D.frames(2);
+        check(opened.size() == 1 && opened[0].find("/releases/tag/v9.0.0") != std::string::npos,
+              "\"Was ist neu?\" oeffnet die Seite der Version");
+
+        D.click(D.find(tr(S::UpdLater)));
+        D.frames(2);
+        check(D.find(tr(S::UpdInstall)) == nullptr, "\"Spaeter\" blendet die Leiste aus");
+
+        D.menu(tr(S::MenuView), tr(S::UpdCheckNow));
+        ua->updater()->wait();
+        D.frames(3);
+        check(D.find(tr(S::UpdInstall)) != nullptr, "Ansicht > Nach Updates suchen: Leiste wieder da");
+
+        D.click(D.find(tr(S::UpdSkip)));
+        D.frames(2);
+        check(ua->settings().skippedUpdate == "v9.0.0" && D.find(tr(S::UpdInstall)) == nullptr,
+              "\"Diese Version ueberspringen\" merkt sich v9.0.0");
+
+        // Settings bar: its section sits at the bottom, scroll there first.
+        if (const Item* any = D.findIf([](const Item& i) { return i.window.find("settings") != std::string::npos; }))
+            for (int k = 0; k < 8; ++k) D.wheel(Driver::center(*any), -20.0f);
+        D.frames(2);
+        const bool autoBefore = ua->settings().checkUpdates;
+        D.click(D.find(tr(S::UpdAuto), "settings"));
+        D.frames(2);
+        check(ua->settings().checkUpdates != autoBefore, "Haken \"Beim Start nach Updates suchen\" schaltet um");
+        D.click(D.find(tr(S::UpdAuto), "settings"));
+        D.frames(2);
+        check(ua->settings().checkUpdates == autoBefore, "und wieder zurueck");
+        check(D.findById("##updchannel", "settings") != nullptr, "Kanalauswahl vorhanden");
+
+        // A manual check shows even a skipped version.
+        D.click(D.find(tr(S::UpdCheckNow), "settings"));
+        ua->updater()->wait();
+        D.frames(3);
+        check(D.find(tr(S::UpdInstall)) != nullptr, "manuelle Suche zeigt auch die uebersprungene Version");
+
+        // No network: a manual check says so, with the way out.
+        D.click(D.find(tr(S::UpdLater)));
+        netDown = true;
+        D.click(D.find(tr(S::UpdCheckNow), "settings"));
+        ua->updater()->wait();
+        D.frames(3);
+        check(D.find(tr(S::UpdOpenPage)) != nullptr, "ohne Netz: Fehlerleiste mit Download-Seite");
+        D.click(D.find(tr(S::UpdOpenPage)));
+        D.frames(2);
+        check(!opened.empty() && opened.back() == "https://github.com/DennisHerrm/G2C-toolkit/releases",
+              "Download-Seite geoeffnet");
+        D.click(D.find(tr(S::DlgClose), "updbanner"));
+        D.frames(2);
+        check(D.find(tr(S::UpdOpenPage)) == nullptr, "Fehlerleiste geschlossen");
+        netDown = false;
+
+        // Install.
+        D.click(D.find(tr(S::UpdCheckNow), "settings"));
+        ua->updater()->wait();
+        D.frames(3);
+        D.click(D.find(tr(S::UpdInstall)));
+        ua->updater()->wait();
+        D.frames(3);
+        std::string now;
+        {
+            std::ifstream f(ud / "g2c.exe", std::ios::binary);
+            now.assign(std::istreambuf_iterator<char>(f), {});
+        }
+        check(now == newExe, "\"Jetzt aktualisieren\" hat die Exe ersetzt");
+        check(D.find(tr(S::UpdRestart)) != nullptr, "Leiste bietet den Neustart an");
+
+        // Restart with unsaved changes: asks first; cancelling cancels the restart.
+        writeText(ud / "u.car", "$aseanimgrabinit\n$aseanimgrabfinalize\n");
+        ua->openCar((ud / "u.car").string());
+        ua->documents().back().dirty = true;
+        D.frames(2);
+        D.click(D.find(tr(S::UpdRestart)));
+        D.frames(3);
+        check(D.popupOpen() && !ua->restartRequested(), "Neustart fragt nach ungespeicherten Aenderungen");
+        D.click(D.find(tr(S::No)));
+        D.frames(3);
+        check(!ua->restartRequested() && !ua->quitApproved(), "\"Nein\": kein Neustart, kein Beenden");
+        D.click(D.find(tr(S::UpdRestart)));
+        D.frames(3);
+        D.click(D.find(tr(S::Discard)));
+        D.frames(3);
+        check(ua->restartRequested(), "\"Verwerfen\": Neustart freigegeben");
+
+        D.app = app.get();
+        ua.reset();
+        D.frames(3);
+
+        // The next start notices the update and cleans up.
+        auto ub = std::make_unique<g2::gui::App>(up);
+        ub->updater()->wait();
+        check(logHas(*ub, "9.0.0") || logHas(*ub, "1.0.0"), "Neustart meldet das Update im Protokoll");
+        check(!fs::exists(ud / "g2c.exe.old"), "alte Exe beim Neustart entfernt");
+        ub.reset();
+    });
+
+    // =====================================================================
+    step("18. Alle schliessen");
     guardedStep("Schliessen", [&] {
         if (app->documents().empty()) return;
         for (auto& d : app->documents()) d.dirty = true;
@@ -1650,7 +1793,7 @@ int main(int argc, char** argv) {
               "Alle schliessen mit ungespeicherten Aenderungen fragt nach");
     });
 
-    // --- Zusammenfassung ---
+    // --- Summary ---
     D.frames(3);
     app.reset();
     ImGui::DestroyContext();

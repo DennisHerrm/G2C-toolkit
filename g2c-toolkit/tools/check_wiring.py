@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Findet Zustandsfelder, die gesetzt, aber nie gelesen werden.
+"""Finds state fields that are set but never read.
 
-Warum das noetig ist:
+Why this is necessary:
 
-Mehrfach ist in diesem Projekt eine Ersetzung ins Leere gelaufen und hat
-still eine Codestelle entfernt. Beim Umordnen der Sequenzen traf es die
-Ausfuehrung: das Kontextmenue setzte `pendingBlock_`, aber niemand las das
-Feld mehr aus. Der Compiler schweigt dazu — eine Zuweisung an ein
-existierendes Feld ist voellig legal. Die Tests schwiegen auch, weil die
-Datenoperation selbst in Ordnung war; nur die Verdrahtung fehlte.
+Several times in this project, a replacement missed its target and silently
+removed a piece of code. When reordering sequences, it hit the execution
+step: the context menu set `pendingBlock_`, but nobody read the field
+anymore. The compiler says nothing about that - assigning to an existing
+field is perfectly legal. The tests said nothing either, because the data
+operation itself was fine; only the wiring was missing.
 
-Aus Sicht des Nutzers hiess das: Klick, und nichts passiert.
+From the user's point of view that meant: click, and nothing happens.
 
-Ein Feld, in das nur geschrieben wird, ist fast immer genau so ein Fall.
+A field that is only ever written to is almost always exactly such a case.
 """
 
 import re
@@ -22,28 +22,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FILES = [ROOT / "gui" / "app.cpp", ROOT / "gui" / "app.h"]
 
-# Felder, die absichtlich nur geschrieben werden.
+# Fields that are intentionally only written.
 ALLOWED = {
-    "frameWorkerBaseDir_",   # nur zur Nachvollziehbarkeit gesetzt
+    "frameWorkerBaseDir_",   # set only for traceability
 }
 
 
 def plattformrueckrufe(gui: Path) -> int:
-    """Jeder Platform-Rueckruf muss gesetzt UND benutzt werden.
+    """Every Platform callback must be set AND used.
 
-    Ein Rueckruf, den main_win32.cpp setzt, den die Oberflaeche aber nie
-    aufruft, ist toter Code — und umgekehrt ein Aufruf ins Leere.
+    A callback that main_win32.cpp sets but the UI never calls is dead
+    code - and conversely, a call that goes nowhere.
 
-    Genau das ist mit pickFolders passiert: der Dialog war da, die Knoepfe
-    riefen weiter den alten. Der Fehler zeigte sich nur daran, dass sich im
-    Dialog kein zweiter Ordner markieren liess.
+    That is exactly what happened with pickFolders: the dialog was there, but
+    the buttons kept calling the old one. The bug only showed in that you
+    couldn't select a second folder in the dialog.
     """
     fehler = 0
     header = (gui / "app.h").read_text(encoding="utf-8", errors="replace")
     app = (gui / "app.cpp").read_text(encoding="utf-8", errors="replace")
     win = (gui / "main_win32.cpp").read_text(encoding="utf-8", errors="replace")
 
-    # Rueckrufe aus der Platform-Struktur herausziehen.
+    # Extract the callbacks from the Platform struct.
     i = header.find("struct Platform")
     if i < 0:
         return 0
@@ -67,7 +67,7 @@ def main() -> int:
     source = (ROOT / "gui" / "app.cpp").read_text(encoding="utf-8")
     both = header + "\n" + source
 
-    # Felder der Klasse: enden auf einen Unterstrich.
+    # Class fields: they end in an underscore.
     members = set(re.findall(r"\b(\w+_)\s*[;=({]", header))
     members = {m for m in members if not m.startswith("_")} - ALLOWED
 
@@ -79,12 +79,12 @@ def main() -> int:
             after = both[occ.end():occ.end() + 40]
             before = both[max(0, occ.start() - 30):occ.start()]
 
-            # Deklaration im Header ueberspringen.
+            # Skip the declaration in the header.
             if re.match(r"\s*[;={]", after) and "return" not in before and "(" not in before:
                 if occ.start() < len(header):
                     continue
 
-            # Zuweisung: Feld gefolgt von = (aber nicht == != <= >=).
+            # Assignment: field followed by = (but not == != <= >=).
             if re.match(r"\s*=[^=]", after):
                 writes += 1
             elif re.match(r"\s*\.(clear|assign|push_back|erase|insert|reset)\b", after):

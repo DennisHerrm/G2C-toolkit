@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Erzeugt assets/g2c.ico aus derselben Geometrie wie assets/g2c.svg.
+"""Generates assets/g2c.ico from the same geometry as assets/g2c.svg.
 
-Warum nicht die SVG rastern? Das braeuchte cairosvg oder Inkscape — eine
-Abhaengigkeit, die man erst installieren muss. Die Form ist einfach genug,
-um sie direkt zu zeichnen; noetig ist nur Pillow.
+Why not rasterize the SVG? That would need cairosvg or Inkscape - a
+dependency you have to install first. The shape is simple enough to draw
+directly; all that's needed is Pillow.
 
-Die .ico enthaelt vier Groessen, und die kleinen sind NICHT einfach
-herunterskaliert:
+The .ico contains four sizes, and the small ones are NOT simply scaled
+down:
 
-  256, 48  volle Zeichnung mit Gelenkkette
-  32, 16   nur die Zeichen, Kette weggelassen
+  256, 48  full drawing with joint chain
+  32, 16   only the glyphs, chain left out
 
-Bei 16 Pixeln waere die Kette drei ununterscheidbare Punkte und wuerde die
-Zeichen nur verschmieren. Genau dafuer erlaubt das Format ein eigenes Bild
-je Groesse — Windows waehlt selbst die passende.
+At 16 pixels the chain would be three indistinguishable dots and would only
+smear the glyphs. This is exactly why the format allows a separate image per
+size - Windows picks the matching one itself.
 
-Gezeichnet wird immer in 8-facher Groesse und danach mit LANCZOS
-verkleinert. Pillow kann keine Kantenglaettung beim Zeichnen; ohne diesen
-Umweg haetten die Rundungen Treppen.
+Everything is always drawn at 8x size and then downscaled with LANCZOS.
+Pillow can't anti-alias while drawing; without this detour the curves would
+have jagged steps.
 """
 
 from pathlib import Path
@@ -30,13 +30,13 @@ TILE = (0x0F, 0x6E, 0x56)
 GLYPH = (0xFF, 0xFF, 0xFF)
 CHAIN = (0x5D, 0xCA, 0xA5)
 
-SS = 8          # Ueberabtastung
-BASE = 96       # Koordinatensystem der SVG
+SS = 8          # supersampling
+BASE = 96       # coordinate system of the SVG
 
 
 def draw(size: int, with_chain: bool) -> Image.Image:
     n = size * SS
-    k = n / BASE                      # Umrechnung SVG-Einheit -> Bildpunkt
+    k = n / BASE                      # conversion SVG unit -> pixel
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
@@ -45,16 +45,16 @@ def draw(size: int, with_chain: bool) -> Image.Image:
 
     d.rounded_rectangle([0, 0, n - 1, n - 1], radius=S(20), fill=TILE)
 
-    w = S(11)                          # Strichstaerke der Zeichen
+    w = S(11)                          # stroke width of the glyphs
 
-    # g: Bauch
+    # g: bowl
     r = S(11)
     cx, cy = S(29), S(40)
     d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=GLYPH, width=int(round(w)))
 
-    # g: Stamm mit Schwanz. Die Kurve wird als Streckenzug angenaehert —
-    # bei achtfacher Aufloesung ist der Unterschied zur echten Bezierkurve
-    # nach dem Verkleinern nicht mehr sichtbar.
+    # g: stem with tail. The curve is approximated as a polyline - at eight
+    # times the resolution, the difference from a real Bezier curve is no
+    # longer visible after downscaling.
     stem = [(S(41), S(29)), (S(41), S(53))]
     for i in range(1, 13):
         t = i / 12
@@ -65,7 +65,7 @@ def draw(size: int, with_chain: bool) -> Image.Image:
     _cap(d, stem[0], w, GLYPH)
     _cap(d, stem[-1], w, GLYPH)
 
-    # 2: obere Rundung, Schraege, Fuss
+    # 2: upper curve, diagonal, foot
     two = []
     for i in range(0, 13):
         t = i / 12
@@ -99,7 +99,7 @@ def draw(size: int, with_chain: bool) -> Image.Image:
 
 
 def _cap(d, pt, w, color):
-    """Runde Kappe. Pillows line() zeichnet stumpfe Enden."""
+    """Round cap. Pillow's line() draws flat ends."""
     x, y = pt
     r = w / 2
     d.ellipse([x - r, y - r, x + r, y + r], fill=color)
@@ -112,7 +112,7 @@ def main():
                  append_images=imgs[1:])
     print(f"  {OUT}  ({OUT.stat().st_size} Bytes, 4 Groessen)")
 
-    # Zur Sichtkontrolle auch als PNG.
+    # Also as PNG for visual inspection.
     for im in imgs:
         p = OUT.with_name(f"g2c_{im.width}.png")
         im.save(p)

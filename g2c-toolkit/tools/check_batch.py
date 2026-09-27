@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Statische Pruefung von build.bat.
+"""Static check of build.bat.
 
-Batch laesst sich hier nicht ausfuehren. Geprueft wird deshalb, was sich
-ohne Ausfuehrung pruefen laesst:
+Batch can't be executed here. So what gets checked is whatever can be
+checked without running it:
 
-  * jedes "goto" hat eine Sprungmarke
-  * jede Sprungmarke wird auch angesprungen (sonst ist sie toter Code)
-  * Klammern sind ausgeglichen
-  * kein blankes "exit" - das beendet die ganze Eingabeaufforderung, nicht
-    nur das Skript, und schliesst dem Nutzer das Fenster vor der Nase zu
+  * every "goto" has a label
+  * every label is actually jumped to (otherwise it is dead code)
+  * parentheses are balanced
+  * no bare "exit" - that ends the whole command prompt, not just the
+    script, and slams the window shut in the user's face
 """
 
 import re
@@ -22,13 +22,12 @@ def main() -> int:
     raw = SRC.read_bytes()
     errors = 0
 
-    # Zeilenenden. Das ist kein Schoenheitsfehler.
+    # Line endings. This is not a cosmetic issue.
     #
-    # cmd.exe verhaelt sich mit Unix-Zeilenenden unzuverlaessig: Sprungmarken
-    # greifen nicht, Befehle laufen zusammen, und ein "pause" am Ende wird
-    # uebersprungen - das Fenster geht zu, bevor jemand etwas lesen kann.
-    # Genau das ist hier passiert, nachdem eine Bearbeitung die CRLF
-    # ersetzt hatte.
+    # cmd.exe behaves unreliably with Unix line endings: labels don't work,
+    # commands run together, and a "pause" at the end gets skipped - the
+    # window closes before anyone can read anything. That is exactly what
+    # happened here after an edit had replaced the CRLFs.
     crlf = raw.count(b"\r\n")
     lf = raw.count(b"\n")
     if lf and crlf != lf:
@@ -36,9 +35,9 @@ def main() -> int:
               f"Windows-Zeilenenden.")
         errors += 1
 
-    # Nicht-ASCII. Die Codepage einer Eingabeaufforderung ist nicht
-    # vorhersagbar (850 in Deutschland, 857 in der Tuerkei, 437 in den USA);
-    # Umlaute und Gedankenstriche erscheinen dort als Unsinn.
+    # Non-ASCII. The code page of a command prompt is not predictable (850 in
+    # Germany, 857 in Turkey, 437 in the US); umlauts and dashes show up there
+    # as garbage.
     nonascii = [i for i, b in enumerate(raw) if b > 127]
     if nonascii:
         line = raw[: nonascii[0]].count(b"\n") + 1
@@ -46,15 +45,14 @@ def main() -> int:
               f"Nur ASCII verwenden.")
         errors += 1
 
-    # Der Mantel muss vorhanden sein.
+    # The wrapper must be present.
     #
-    # Ohne ihn beendet ein fehlgeschlagenes "goto" die Datei sofort und
-    # wortlos - das Fenster geht zu, und die Meldung mit dem Grund
-    # verschwindet mit ihm.
+    # Without it, a failed "goto" ends the file immediately and silently -
+    # the window closes, and the message explaining why disappears with it.
     #
-    # Zeilenweise pruefen, nicht im Gesamttext: "call :main" steht auch im
-    # Kommentar darueber, und ein Kommentar ruft nichts auf. Der erste
-    # Versuch dieser Pruefung ist genau darauf hereingefallen.
+    # Check line by line, not in the whole text: "call :main" also appears in
+    # the comment above it, and a comment calls nothing. The first version
+    # of this check fell for exactly that.
     def is_code(line: str) -> bool:
         t = line.strip().lower()
         return bool(t) and not t.startswith("rem") and not t.startswith("::")
@@ -66,7 +64,7 @@ def main() -> int:
               "Mantel schliesst sich das Fenster bei einem Fehler wortlos.")
         errors += 1
     else:
-        # Und der Mantel muss auch wirklich offen halten.
+        # And the wrapper must actually keep the window open.
         if not any(l.strip().lower() == "cmd /k" for l in code_lines):
             print("  FEHLER: kein 'cmd /k' im Mantel - das Fenster bliebe nicht offen")
             errors += 1
@@ -80,9 +78,9 @@ def main() -> int:
 
     labels = {m.group(1).lower() for m in re.finditer(r"^\s*:([A-Za-z_]\w*)", text, re.M)}
     gotos = {m.group(1).lower() for m in re.finditer(r"\bgoto\s+:?([A-Za-z_]\w*)", text, re.I)}
-    # "call :marke" ist ebenfalls ein Sprung - und der wichtigste hier: der
-    # Mantel ruft :main so auf, damit ein Abbruch darin zurueckkehrt statt
-    # das Fenster zu schliessen.
+    # "call :label" is a jump as well - and the most important one here: the
+    # wrapper calls :main this way, so that an abort inside it returns
+    # instead of closing the window.
     gotos |= {m.group(1).lower() for m in re.finditer(r"\bcall\s+:([A-Za-z_]\w*)", text, re.I)}
     gotos.discard("eof")
 
@@ -98,10 +96,10 @@ def main() -> int:
         if code.strip().lower().startswith("rem"):
             continue
 
-        # Klammern, die keine Bloecke sind, herausnehmen:
-        #   %ProgramFiles(x86)%   Umgebungsvariable mit Klammer im Namen
-        #   [17.0^,18.0^)         mit ^ maskierte Klammer in einem Argument
-        #   "..."                 Klammern in Zeichenketten
+        # Remove parentheses that are not blocks:
+        #   %ProgramFiles(x86)%   environment variable with a parenthesis in its name
+        #   [17.0^,18.0^)         parenthesis escaped with ^ in an argument
+        #   "..."                 parentheses inside strings
         code = re.sub(r"%[^%]*%", "", code)
         code = re.sub(r'"[^"]*"', "", code)
         code = re.sub(r"\^.", "", code)
@@ -115,11 +113,11 @@ def main() -> int:
         print(f"  FEHLER: {depth} Klammer(n) nicht geschlossen")
         errors += 1
 
-    # Weitere Windows-Dateien mit denselben Anforderungen.
+    # Further Windows files with the same requirements.
     #
-    # .rc geht durch rc.exe, .bat durch cmd.exe - beide erwarten
-    # Windows-Zeilenenden und vertragen keine Bytes ueber 127, weil die
-    # Codepage nicht vorhersagbar ist.
+    # .rc goes through rc.exe, .bat through cmd.exe - both expect Windows
+    # line endings and can't handle bytes above 127, because the code page
+    # is not predictable.
     for extra in ("start_build.bat", "fenster_test.bat", "../assets/g2c.rc"):
         f = SRC.parent / extra
         if not f.exists():
@@ -133,7 +131,7 @@ def main() -> int:
             print(f"  FEHLER: {f.name} enthaelt Bytes ueber 127")
             errors += 1
 
-    # start_build.bat mitpruefen, wenn vorhanden.
+    # Also check start_build.bat, if present.
     wrapper = SRC.parent / "start_build.bat"
     if wrapper.exists():
         w = wrapper.read_text(encoding="utf-8", errors="replace")

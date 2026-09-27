@@ -1,22 +1,22 @@
-// include/g2/xsi_export.h — Animationen aus einer GLA zurueck nach dotXSI.
+// include/g2/xsi_export.h - Animations from a GLA back to dotXSI.
 //
-// Die Umkehrung von xsi_anim.cpp. Die Vorwaertsformel dort lautet
+// The inverse of xsi_anim.cpp. The forward formula there is
 //
-//     Wurzel:  A(b) = X(b)·B(b)^-1              [+ origin, + Wurzelrampe]
-//     sonst:   A(b) = B(p)·X(p)^-1·X(b)·B(b)^-1
+//     root:    A(b) = X(b)·B(b)^-1              [+ origin, + root ramp]
+//     other:   A(b) = B(p)·X(p)^-1·X(b)·B(b)^-1
 //
-// und laesst sich eindeutig umstellen:
+// and can be rearranged unambiguously:
 //
-//     Wurzel:  X(b) = A(b)·B(b)
-//     sonst:   X(b) = X(p)·B(p)^-1·A(b)·B(b)
+//     root:    X(b) = A(b)·B(b)
+//     other:   X(b) = X(p)·B(p)^-1·A(b)·B(b)
 //
-// Danach zurueck in den dotXSI-Raum ueber wx = C^-1·(X/scale)·C, lokal
-// machen gegen den Elternbone, und in Translation plus Euler zerlegen.
+// Then back into dotXSI space via wx = C^-1·(X/scale)·C, made local relative
+// to the parent bone, and decomposed into translation plus Euler angles.
 //
-// Was dabei NICHT verlustfrei ist: die Rotationen liegen in der GLA als
-// 16-Bit-Quaternionen vor. Der Fehler bleibt unter 0,01 Grad und damit weit
-// unter allem, was im Spiel sichtbar waere — aber bitgleich zur
-// Originaldatei wird das Ergebnis nicht.
+// What is NOT lossless here: the rotations are stored in the GLA as 16-bit
+// quaternions. The error stays below 0.01 degrees and thus far below
+// anything visible in the game - but the result will not be bit-identical
+// to the original file.
 
 #pragma once
 
@@ -33,126 +33,124 @@
 namespace g2::xsiexp {
 
 struct ExportOptions {
-    // Muessen zu den Werten passen, mit denen gebaut wurde — sonst kommt
-    // eine massstaeblich falsche Datei heraus.
+    // Must match the values the build was done with - otherwise the file
+    // comes out at the wrong scale.
     float                              scale = 0.64f;
     std::optional<std::array<float, 3>> origin;
 
-    // Bildrate fuer SI_Scene.
+    // Frame rate for SI_Scene.
     int fps = 20;
 
-    // Wurzelbewegung pro Frame, aus der .frames-Datei ("averagevec").
+    // Root motion per frame, from the .frames file ("averagevec").
     //
-    // Ohne sie kommt eine Laufanimation zwar richtig aussehend, aber AUF DER
-    // STELLE heraus: Carcass entfernt die Wurzelbewegung beim Bauen und legt
-    // sie in die .frames, damit die Spiel-Engine sie anwendet. In der GLA
-    // steht sie nicht mehr.
+    // Without it, a run animation looks right but comes out RUNNING IN
+    // PLACE: Carcass removes the root motion when building and puts it into
+    // the .frames file so the game engine applies it. It is no longer in the
+    // GLA.
     //
-    // Wird sie hier eingesetzt, entsteht eine .xsi, die sich wie eine
-    // Originaldatei verhaelt: das Neubauen entfernt die Bewegung wieder und
-    // schreibt dieselbe averagevec.
+    // If it is applied here, the result is a .xsi that behaves like an
+    // original file: rebuilding removes the motion again and writes the same
+    // averagevec.
     std::optional<std::array<float, 3>> rootMotionPerFrame;
 
-    // Welche Bindepose in den BASEPOSE-Block?
+    // Which bind pose goes into the BASEPOSE block?
     //
-    // Ravens root.xsi enthaelt dort die WELTpose — nachgerechnet stimmen
-    // alle neun Zahlen. Trotzdem meldet Carcass bei unseren Dateien
-    // "non-uniform scaling" mit Werten um 0,4096, also 0,64 zum Quadrat:
-    // die Skalierung wird zweimal angewandt.
+    // Raven's root.xsi contains the WORLD pose there - recomputed, all nine
+    // numbers match. Still, Carcass reports "non-uniform scaling" for our
+    // files with values around 0.4096, i.e. 0.64 squared: the scaling is
+    // applied twice.
     //
-    // Der Verdacht: Carcass verkettet die BASEPOSE-Bloecke ueber die
-    // Hierarchie. Bei Raven faellt das nicht auf, weil dort
-    // Gruppierungsknoten (lleg_root, rd1root ...) dazwischenliegen, deren
-    // Bindepose neutral ist. Unsere Dateien haben die nicht, weil die GLA
-    // sie nicht kennt.
+    // The suspicion: Carcass concatenates the BASEPOSE blocks along the
+    // hierarchy. With Raven's files this doesn't show, because there are
+    // grouping nodes in between (lleg_root, rd1root ...) whose bind pose is
+    // neutral. Our files don't have those, because the GLA doesn't know them.
     //
-    // Welche Variante richtig ist, laesst sich nur mit Carcass selbst
-    // entscheiden. Deshalb beide anbieten, statt zu raten.
+    // Which variant is correct can only be decided with Carcass itself. So
+    // offer both instead of guessing.
     enum class BasePose {
-        World,   // wie in Ravens Dateien
-        Local,   // gegen den Elternbone, falls Carcass selbst verkettet
-        None,    // gar kein Block — so war es vor der Korrektur
+        World,   // as in Raven's files
+        Local,   // relative to the parent bone, in case Carcass concatenates itself
+        None,    // no block at all - as it was before the fix
     };
     BasePose basePose = BasePose::World;
 
-    // Welche dotXSI-Fassung im Kopf steht.
+    // Which dotXSI version goes into the header.
     //
-    // Der Unterschied ist nicht nur die Zahl: v3.0 BENENNT seine Templates
-    // ("SI_FCurve <bone>-SCALING-X { ... }"), v3.5 laesst sie namenlos
+    // The difference is not just the number: v3.0 NAMES its templates
+    // ("SI_FCurve <bone>-SCALING-X { ... }"), v3.5 leaves them unnamed
     // ("SI_FCurve { \"<bone>\", \"SCALING-X\", ... }").
     //
-    // Wir schrieben bisher benannte Templates unter einem 3.5-Kopf — also
-    // 3.0-Inhalt mit 3.5-Etikett. Das liest zwar jeder tolerante Parser,
-    // aber es ist nicht das, was draufsteht.
+    // Until now we wrote named templates under a 3.5 header - i.e. 3.0
+    // content with a 3.5 label. Any tolerant parser reads that, but it is
+    // not what the label says.
     //
-    // Ravens JK2-Modelldatei ist v3.0, die JKA-Animationsdateien sind v3.5.
-    // Wer fuer aeltere Werkzeuge exportiert, will 3.0; wer zu neueren passt,
-    // 3.5. Beides ausgeben zu koennen kostet wenig.
+    // Raven's JK2 model file is v3.0, the JKA animation files are v3.5.
+    // Exporting for older tools wants 3.0; matching newer ones, 3.5. Being
+    // able to output both costs little.
     enum class Version {
-        V30,   // benannte Templates, wie Ravens root.xsi
-        V35,   // namenlose Templates, wie Ravens Animationsdateien
+        V30,   // named templates, like Raven's root.xsi
+        V35,   // unnamed templates, like Raven's animation files
     };
     Version version = Version::V30;
 };
 
-// Liest die Wurzelbewegung einer Sequenz aus einer .frames-Datei.
-// Der Schluessel ist der Pfad der Quelldatei, wie er in der .car steht.
+// Reads a sequence's root motion from a .frames file.
+// The key is the source file's path as it appears in the .car.
 std::optional<std::array<float, 3>> readAverageVec(const std::string& framesPath,
                                                    const std::string& sequenceOrFile);
 
-// Schaetzt den -origin-Versatz aus der GLA.
+// Estimates the -origin offset from the GLA.
 //
-// Der Versatz ist ueber alle Frames konstant, die Wurzelbewegung nicht —
-// deshalb ist der haeufigste Wert je Achse der Versatz. Eine Schaetzung
-// bleibt es trotzdem: liefert sie etwas, wird der Wert ausgegeben, damit man
-// ihn pruefen kann, und -origin ueberschreibt ihn jederzeit.
+// The offset is constant across all frames, the root motion is not - so
+// the most frequent value per axis is the offset. It remains an estimate,
+// though: if it yields something, the value is printed so it can be
+// checked, and -origin overrides it at any time.
 std::optional<std::array<float, 3>> detectOrigin(const MdxaFile& gla);
 
 
-// Sucht einen konstanten Versatz in der Wurzelbone-Translation.
+// Looks for a constant offset in the root bone translation.
 //
-// "-origin 0 0 24" verschiebt beim Bauen das ganze Modell, und der Versatz
-// steckt danach in jeder Frame-Matrix. Wird er beim Export nicht wieder
-// hinzugefuegt, zieht das Neubauen ihn ein ZWEITES Mal ab — das Modell steht
-// dann 24 Einheiten daneben.
+// "-origin 0 0 24" shifts the whole model when building, and the offset is
+// then contained in every frame matrix. If it is not added back on export,
+// rebuilding subtracts it a SECOND time - the model then stands 24 units
+// off.
 std::optional<std::array<float, 3>> detectOrigin(const MdxaFile& gla);
 
 
-// Ein Ausschnitt der GLA als eigenstaendige Animation.
+// A section of the GLA as a standalone animation.
 struct Sequence {
     std::string name;
     int         startFrame = 0;
     int         frameCount = 0;
 };
 
-// Restbewegung des Motion-Bones innerhalb eines Ausschnitts.
+// Residual motion of the Motion bone within a section.
 //
-// Carcass entfernt die Wurzelbewegung je ANIMATION. Eine Sequenz, die nur
-// ein Ausschnitt einer laengeren Animation ist — in JK2s animation.cfg sind
-// das 16 % —, traegt deshalb einen Rest davon.
+// Carcass removes the root motion per ANIMATION. A sequence that is only a
+// section of a longer animation - 16 % in JK2's animation.cfg - therefore
+// carries a remainder of it.
 //
-// Beim Neubauen wird dieser Rest wieder entfernt und landet in der .frames.
-// Die Animation bleibt heil; nur der Ort, an dem die Bewegung steht,
-// wechselt. Bitgleich zur Quelle wird die neue GLA dann nicht.
+// On rebuild, this remainder is removed again and ends up in the .frames
+// file. The animation stays intact; only the place where the motion is
+// stored changes. The new GLA is then not bit-identical to the source.
 float residualMotion(const MdxaFile& gla, const Sequence& seq);
 
-// Holt die Wurzelbewegung aus der GLA selbst.
+// Recovers the root motion from the GLA itself.
 //
-// Die .frames-Datei ist dafuer NICHT noetig. Carcass rechnet die Bewegung
-// als lineare Rampe auf den Wurzelbone; sie steht damit weiterhin in der
-// GLA — als Translationsdifferenz zwischen erstem und letztem Frame der
-// Sequenz, geteilt durch die Zahl der Schritte.
+// The .frames file is NOT needed for this. Carcass computes the motion as a
+// linear ramp on the root bone; so it is still in the GLA - as the
+// translation difference between the first and last frame of the sequence,
+// divided by the number of steps.
 //
-// Gegen Ravens _humanoid.frames geprueft: bei allen 178 Sequenzen mit
-// Bewegung stimmt der so gewonnene Wert mit "averagevec" ueberein.
+// Checked against Raven's _humanoid.frames: for all 178 sequences with
+// motion, the value obtained this way matches "averagevec".
 //
-// Leer, wenn die Sequenz keine Bewegung hat — dann gibt es nichts
-// wiederherzustellen.
+// Empty if the sequence has no motion - then there is nothing to restore.
 std::optional<std::array<float, 3>> detectRootMotion(const MdxaFile& gla, const Sequence& seq);
 
-// --- Aus einer GLA wieder ein baubares Skript machen ------------------------
+// --- Turning a GLA back into a buildable script -----------------------------
 //
-// Eine Zeile der animation.cfg.
+// One line of animation.cfg.
 struct CfgSequence {
     std::string name;
     int         start = 0;
@@ -161,8 +159,8 @@ struct CfgSequence {
     int         fps = 20;
 };
 
-// Ein Bereich, der als eigene .xsi geschrieben wird, samt der Sequenzen, die
-// darin liegen.
+// A range that is written as its own .xsi, together with the sequences that
+// lie inside it.
 struct MasterGroup {
     CfgSequence              self;
     std::vector<CfgSequence> inside;
@@ -170,44 +168,44 @@ struct MasterGroup {
 
 struct Grouping {
     std::vector<MasterGroup> masters;
-    std::size_t              partial = 0;   // nur teilweise ueberlappend
+    std::size_t              partial = 0;   // only partially overlapping
 };
 
-// Fasst Unterbereiche zusammen.
+// Merges sub-ranges.
 //
-// Viele Sequenzen sind Ausschnitte einer laengeren — in JK2s animation.cfg
-// 268 von 989. Exportierte man jede als eigene Datei, haette die neue GLA
-// mehr Frames als die alte und die animation.cfg passte nicht mehr.
+// Many sequences are sections of a longer one - 268 of 989 in JK2's
+// animation.cfg. If each were exported as its own file, the new GLA would
+// have more frames than the old one and animation.cfg would no longer fit.
 //
-// Deshalb wird nur der jeweils groesste, sich nicht ueberschneidende Bereich
-// als Datei geschrieben; was darin liegt, wird im Skript zu -additional —
-// genau die Struktur, die Raven selbst benutzt.
+// Therefore only the largest non-overlapping range in each case is written
+// as a file; whatever lies inside it becomes -additional in the script -
+// exactly the structure Raven itself uses.
 Grouping groupSequences(const std::vector<CfgSequence>& cfg);
 
-// Baut daraus ein .car-Skript.
+// Builds a .car script from it.
 //
-// xsiPrefix ist der Pfad, der den Dateinamen vorangestellt wird, so wie er
-// spaeter in der .car stehen soll (z.B. "models/players/jk2/").
+// xsiPrefix is the path prepended to the file names, as it should later
+// appear in the .car (e.g. "models/players/jk2/").
 //
-// origin MUSS derselbe Wert sein, mit dem exportiert wurde: der Export
-// rechnet ihn in die .xsi ein; fehlt er im Skript, zieht das Neubauen ihn
-// nicht wieder ab, und das ganze Modell steht um diesen Betrag daneben.
-// makeSkel ist die letzte Zeile des Skripts: sie sagt, WO die GLA entsteht
-// und wie sie heisst. Der Wert steht exakt im Kopf der Quell-GLA — bei
-// Ravens _humanoid.gla ist es "models/players/_humanoid/_humanoid", und
-// genau das steht auch in ihrer .car. Leer = aus xsiPrefix ableiten, was
-// nur ein Notbehelf ist.
-// scale = 0 laesst "$scale" weg.
+// origin MUST be the same value that was used for the export: the export
+// bakes it into the .xsi; if it is missing from the script, rebuilding does
+// not subtract it again, and the whole model is off by that amount.
+// makeSkel is the last line of the script: it says WHERE the GLA is created
+// and what it is called. The value is exactly the one in the source GLA's
+// header - for Raven's _humanoid.gla it is
+// "models/players/_humanoid/_humanoid", and that is exactly what its .car
+// says too. Empty = derive from xsiPrefix, which is only a stopgap.
+// scale = 0 omits "$scale".
 //
-// Wichtig fuer Carcass: die BASEPOSE-Werte in der .xsi sind bereits durch
-// die Skelettskalierung geteilt (so wie in Ravens Dateien). Wendet Carcass
-// zusaetzlich "$scale 0.64" an, wird zweimal skaliert — und genau 0,64 mal
-// 0,64 = 0,4096 meldet es als "non-uniform scaling".
+// Important for Carcass: the BASEPOSE values in the .xsi are already divided
+// by the skeleton scale (as in Raven's files). If Carcass additionally
+// applies "$scale 0.64", the scaling happens twice - and exactly 0.64 times
+// 0.64 = 0.4096 is what it reports as "non-uniform scaling".
 car::Script buildScript(const Grouping& g, const std::string& xsiPrefix,
                         const std::optional<std::array<float, 3>>& origin, float scale = 0.0f,
                         bool keepMotion = false, const std::string& makeSkel = {});
 
-// Erzeugt den Inhalt einer dotXSI-Datei fuer den angegebenen Ausschnitt.
+// Produces the contents of a dotXSI file for the given section.
 std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
                            const ExportOptions& opt);
 

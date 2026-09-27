@@ -20,17 +20,17 @@ goto parseargs
 :endargs
 
 REM ===============================================================
-REM  Mantel: haelt das Fenster offen, egal was drinnen passiert.
+REM  Wrapper: keeps the window open, no matter what happens inside.
 REM
-REM  Warum das noetig ist: eine Batchdatei endet SOFORT und wortlos,
-REM  wenn ein "goto" auf eine Marke zeigt, die es nicht gibt. Ein
-REM  "pause" am Dateiende wird dann nie erreicht - das Fenster geht
-REM  zu, und die Meldung, die den Grund nennt, verschwindet mit ihm.
+REM  Why this is necessary: a batch file ends IMMEDIATELY and silently
+REM  when a "goto" points to a label that doesn't exist. A "pause" at
+REM  the end of the file is then never reached - the window closes,
+REM  and the message explaining why disappears with it.
 REM
-REM  "call :main" legt einen eigenen Kontext an. Bricht darin etwas
-REM  ab, kehrt die Ausfuehrung hierher zurueck statt das Fenster zu
-REM  schliessen. Nur ein blankes "exit" kaeme durch - und dass es
-REM  keines gibt, prueft tools/check_batch.py bei jedem Bau.
+REM  "call :main" creates its own context. If something aborts inside
+REM  it, execution returns here instead of closing the window. Only a
+REM  bare "exit" would get through - and tools/check_batch.py verifies
+REM  on every build that there is none.
 REM ===============================================================
 call :main %*
 set "RC=%ERRORLEVEL%"
@@ -55,9 +55,9 @@ echo ============================================================
 echo.
 
 REM ---------------------------------------------------------------
-REM  Pfad auf Klammern pruefen. Runde Klammern im Pfad brechen die
-REM  Blockverarbeitung von cmd.exe. Ein Ordner wie "files(1)", wie
-REM  ihn der Browser beim zweiten Download anlegt, reicht dafuer aus.
+REM  Check the path for parentheses. Parentheses in the path break
+REM  cmd.exe's block processing. A folder like "files(1)", as the
+REM  browser creates on the second download, is enough for that.
 REM ---------------------------------------------------------------
 echo %PROJECT_DIR% | findstr /C:"(" >nul
 if not errorlevel 1 goto badpath
@@ -78,10 +78,10 @@ goto fail
 :pathok
 
 REM ---------------------------------------------------------------
-REM  Liegt das Projekt in einem Unterordner? Beim Entpacken eines
-REM  Archivs entsteht schnell eine Ebene zu viel, waehrend die einzeln
-REM  geladene build.bat daruber liegt. Statt zu meckern, einmal
-REM  nachschauen und selbst hinabsteigen.
+REM  Is the project in a subfolder? Unpacking an archive easily
+REM  creates one level too many, while the separately downloaded
+REM  build.bat sits above it. Instead of complaining, take a look
+REM  and descend on our own.
 REM ---------------------------------------------------------------
 if exist "%PROJECT_DIR%\CMakeLists.txt" goto rootok
 
@@ -110,9 +110,9 @@ echo.
 :rootok
 
 REM ---------------------------------------------------------------
-REM  Vollstaendigkeit pruefen. Wer die Dateien einzeln herunterlaedt,
-REM  bekommt sie flach in einen Ordner - der Build braucht aber die
-REM  Unterordner include\g2, src, tools und tests.
+REM  Check completeness. Downloading the files individually puts them
+REM  flat into one folder - but the build needs the subfolders
+REM  include\g2, src, tools and tests.
 REM ---------------------------------------------------------------
 set "MISSING="
 if not exist "%PROJECT_DIR%\CMakeLists.txt"        set "MISSING=!MISSING! CMakeLists.txt"
@@ -164,7 +164,7 @@ if defined DO_CLEAN (
     echo [OK] Aufgeraeumt
 )
 
-REM -- Visual Studio suchen --
+REM -- Find Visual Studio --
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "CMAKE_GEN=Visual Studio 17 2022"
 set "HAVE_VS=0"
@@ -212,7 +212,7 @@ goto fail
 
 :haveall
 
-REM -- Konfigurieren --
+REM -- Configure --
 if exist "%BUILD_DIR%\CMakeCache.txt" goto configured
 echo Konfiguriere...
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
@@ -231,8 +231,8 @@ echo ============================================================
 echo  Baue Bibliothek und Kommandozeile
 echo ============================================================
 echo.
-REM -- Zuerst nur das Noetigste. Die Oberflaeche kommt getrennt, damit ein
-REM -- Fehler dort nicht die g2c.exe kostet.
+REM -- Only the bare essentials first. The UI is built separately, so that an
+REM -- error there doesn't cost us g2c.exe.
 cmake --build "%BUILD_DIR%" --config %CONFIG% --target g2c
 if errorlevel 1 goto failbuild
 
@@ -240,13 +240,13 @@ echo.
 echo [OK] g2c uebersetzt
 echo.
 
-REM -- Binaries finden. MSVC legt sie in einen Config-Unterordner, MinGW nicht. --
+REM -- Find binaries. MSVC puts them in a config subfolder, MinGW doesn't. --
 set "BIN_DIR=%BUILD_DIR%\%CONFIG%"
 if not exist "%BIN_DIR%\g2c-cli.exe" set "BIN_DIR=%BUILD_DIR%"
 if not exist "%BIN_DIR%\g2c-cli.exe" goto failnobin
 
-REM -- Sofort bereitstellen. Ab hier hat der Nutzer ein brauchbares Werkzeug,
-REM -- egal was in den folgenden Schritten passiert.
+REM -- Deploy right away. From here on the user has a usable tool,
+REM -- no matter what happens in the following steps.
 if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
 copy /Y "%BIN_DIR%\g2c-cli.exe" "%OUTPUT_DIR%\" >nul
 echo [OK] Bereitgestellt: %OUTPUT_DIR%\g2c-cli.exe  (nur Kommandozeile)
@@ -302,18 +302,18 @@ if exist "%BIN_DIR%\g2c-cli.exe" copy /Y "%BIN_DIR%\g2c-cli.exe" "%OUTPUT_DIR%\"
 if exist "%BIN_DIR%\g2_tests.exe" copy /Y "%BIN_DIR%\g2_tests.exe" "%OUTPUT_DIR%\" >nul
 
 
-REM --- Pruefung: haengt die Exe an der Visual-C++-Laufzeit? -----------------
+REM --- Check: does the exe depend on the Visual C++ runtime? ------------------
 REM
-REM Das ist der haeufigste Grund, warum ein weitergegebenes Programm bei
-REM anderen nicht startet: es meldet "VCRUNTIME140.dll wurde nicht gefunden",
-REM und der Empfaenger kann daran nichts aendern.
+REM This is the most common reason why a program that was passed on doesn't
+REM start for others: it reports "VCRUNTIME140.dll was not found", and the
+REM recipient can do nothing about it.
 REM
-REM Die Laufzeit ist in CMakeLists.txt fest eingebaut (/MT). Diese Pruefung
-REM stellt sicher, dass das auch wirklich angekommen ist.
+REM The runtime is linked statically in CMakeLists.txt (/MT). This check
+REM makes sure that this actually took effect.
 REM
-REM Mit Sprungmarken statt verschachtelter Klammern: in Batch werden Bloecke
-REM als Ganzes ausgewertet, und ein "if errorlevel" darin liest leicht den
-REM falschen Wert. Marken sind laenger, aber sie tun, was dasteht.
+REM Using labels instead of nested parentheses: in batch, blocks are
+REM evaluated as a whole, and an "if errorlevel" inside one easily reads the
+REM wrong value. Labels are longer, but they do what they say.
 echo.
 echo Pruefe Abhaengigkeiten...
 if not exist "%OUTPUT_DIR%\g2c.exe" goto depsskip
@@ -370,21 +370,18 @@ echo.
 echo SUCCESS!
 echo.
 
-REM Fenster offen halten - ohne sich auf "pause" zu verlassen.
+REM Keep the window open - without relying on "pause".
 REM
-REM "pause" wartet auf eine Taste, laeuft aber wortlos durch, wenn keine
-REM Tastatureingabe zur Verfuegung steht. Woran das im Einzelfall liegt,
-REM laesst sich von aussen nicht feststellen - und ein Fenster, das nach
-REM dem Bau sofort zugeht, verschluckt genau die Ausgabe, wegen der man
-REM den Bau ueberhaupt beobachtet.
+REM "pause" waits for a key, but silently passes through when no keyboard
+REM input is available. Why that happens in a given case can't be
+REM determined from the outside - and a window that closes right after the
+REM build swallows exactly the output you were watching the build for.
 REM
-REM "cmd /k" startet stattdessen eine Eingabeaufforderung, die offen
-REM bleibt. Sie kann nicht durchlaufen, weil sie auf einen Befehl wartet
-REM statt auf eine Taste. Nebenbei steht man gleich im richtigen Ordner
-REM und kann g2c sofort ausprobieren.
+REM "cmd /k" instead starts a command prompt that stays open. It can't
+REM pass through, because it waits for a command rather than a key. As a
+REM bonus you're already in the right folder and can try g2c right away.
 REM
-REM Fuer den Einsatz in Skripten: "build.bat noshell" beendet sich wie
-REM gewohnt.
+REM For use in scripts: "build.bat noshell" exits as usual.
 exit /b 0
 
 :failconfig

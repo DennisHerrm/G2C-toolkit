@@ -1,9 +1,9 @@
 @echo off
-REM Startet build.bat so, dass das Fenster auf jeden Fall offen bleibt.
+REM Starts build.bat in a way that keeps the window open no matter what.
 REM
-REM "cmd /k" haelt die Eingabeaufforderung nach dem Ende des Skripts offen -
-REM unabhaengig davon, ob "pause" greift, ob Windows das Fenster schliessen
-REM will oder ob die Eingabe umgeleitet ist.
+REM "cmd /k" keeps the command prompt open after the script ends -
+REM regardless of whether "pause" takes effect, whether Windows wants to
+REM close the window, or whether input is redirected.
 REM
-REM Zum Weiterarbeiten: "exit" eintippen.
+REM To move on: type "exit".
 cmd /k ""%~dp0build.bat" %*"

@@ -1,7 +1,7 @@
-// g2/carvalidate.h — Pruefungen und Schreiben von .car-Skripten.
+// g2/carvalidate.h - Checking and writing .car scripts.
 //
-// Bildet nach, was Assimilate vor dem Bauen prueft, und ergaenzt es um die
-// Gegenrichtung, die dort fehlt.
+// Replicates what Assimilate checks before building, and adds the opposite
+// direction, which is missing there.
 
 #pragma once
 
@@ -19,8 +19,8 @@ struct Issue {
 
     Level       level = Level::Error;
     std::string message;
-    std::string sequence;   // leer, wenn nicht sequenzbezogen
-    std::size_t line = 0;   // Zeile in der .car, 0 = unbekannt
+    std::string sequence;   // empty if not sequence-related
+    std::size_t line = 0;   // line in the .car, 0 = unknown
 
     const char* levelName() const {
         switch (level) {
@@ -33,21 +33,21 @@ struct Issue {
 };
 
 struct ValidateOptions {
-    // Ohne Enumtabelle entfallen die beiden Namenspruefungen.
+    // Without an enum table, the two name checks are skipped.
     const anim::EnumTable* enums = nullptr;
 
     std::string baseDir;
 
-    // Framezahlen aus den .xsi lesen. Genauer, aber es muessen alle Dateien
-    // gelesen werden — mit Cache beim zweiten Mal schnell.
+    // Read frame counts from the .xsi files. More accurate, but all files
+    // have to be read - fast the second time thanks to the cache.
     bool        readFrameCounts = false;
     std::string cacheDir;
 
     unsigned threads = 0;
 
-    // Hoechstens so viele Einzelmeldungen "Kein Enum", der Rest als
-    // Sammelzeile. Bei einem Mod mit Hunderten eigener Sequenzen ginge die
-    // Liste sonst in ihnen unter. "validate -all" hebt die Grenze auf.
+    // At most this many individual "No enum" messages, the rest as one
+    // summary line. With a mod that has hundreds of its own sequences, the
+    // list would otherwise drown in them. "validate -all" lifts the limit.
     std::size_t maxEnumWarnings = 20;
 };
 
@@ -65,44 +65,42 @@ struct ValidateResult {
     bool ok() const { return errors == 0; }
 };
 
-// Prueft ein Skript. Reihenfolge der Pruefungen ist die Reihenfolge der
-// Meldungen; sequenzbezogene Meldungen tragen den Namen mit.
+// Checks a script. The order of the checks is the order of the messages;
+// sequence-related messages carry the sequence name.
 ValidateResult validate(const Script& script, const std::string& carPath,
                         const ValidateOptions& opt = {});
 
-// --- Schreiben -------------------------------------------------------------
+// --- Writing ---------------------------------------------------------------
 //
-// Gibt das Skript wieder als Text aus. Grundlage fuer jede Bearbeitung: ohne
-// Schreiben bleibt das Werkzeug ein Betrachter.
+// Outputs the script as text again. The basis for any editing: without
+// writing, the tool remains a viewer.
 //
-// Unveraenderte Zeilen kommen genau so zurueck, wie sie in der Datei standen:
-// Flag-Reihenfolge, Abstaende, Kommentare am Zeilenende. Nur Grabs und die
-// Konvertierungsanweisung, an denen sich etwas geaendert hat, werden neu
-// erzeugt. Kommentarzeilen vor jedem Befehl und am Dateiende bleiben
-// erhalten; $include-Zeilen bleiben $include-Zeilen.
+// Unchanged lines come back exactly as they were in the file: flag order,
+// spacing, end-of-line comments. Only grabs and the convert directive that
+// have changed are regenerated. Comment lines before each command and at the
+// end of the file are preserved; $include lines stay $include lines.
 //
-// Frueher formte jedes Speichern jede Grab-Zeile um und verlor unterwegs
-// Kopfkommentare, unbekannte Flags und -makeskin.
+// Previously every save reformatted every grab line and lost header
+// comments, unknown flags and -makeskin along the way.
 std::string writeScript(const Script& script);
 
-// Legt die Rahmenanweisungen an, zwischen denen die Grabs stehen.
+// Creates the framing directives between which the grabs are placed.
 //
-// writeScript gibt die Grabs NUR nach einem $aseanimgrabinit aus. Ein von
-// Hand zusammengesetztes Skript ohne diese Statements verliert sie beim
-// Schreiben stillschweigend — die Datei sieht vollstaendig aus und enthaelt
-// keine einzige Sequenz.
+// writeScript outputs the grabs ONLY after an $aseanimgrabinit. A script
+// assembled by hand without these statements silently loses them when
+// written - the file looks complete and contains not a single sequence.
 void addGrabFrame(Script& script);
 
-// --- Verzeichnis durchsuchen ----------------------------------------------
+// --- Scanning a directory -------------------------------------------------
 
 struct FoundCar {
     std::string path;
     std::size_t grabs = 0;
-    std::string modelName;   // aus -makeskel, sonst leer
+    std::string modelName;   // from -makeskel, otherwise empty
 };
 
-// Sucht rekursiv nach .car-Dateien. Assimilate bietet dasselbe als
-// "Validate ALL models?" ueber einen Verzeichnisbaum an.
+// Searches recursively for .car files. Assimilate offers the same as
+// "Validate ALL models?" over a directory tree.
 std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDepth = 16);
 
 }  // namespace g2::car

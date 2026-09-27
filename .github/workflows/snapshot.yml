@@ -1,0 +1,49 @@
+# Snapshot: every push to main is built, tested and published as the
+# pre-release "snapshot" - always the latest state of main, replaced on each
+# push. It never becomes the "Latest" release; that stays with tagged versions.
+name: Snapshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "g2c-toolkit/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+# A newer push makes a running snapshot obsolete.
+concurrency:
+  group: snapshot
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: g2c-dist
+          path: dist
+
+      - name: Replace the snapshot release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release delete snapshot --yes --cleanup-tag || echo "no previous snapshot"
+          gh release create snapshot dist/* \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Snapshot ($VERSION)" \
+            --notes "Automatic build of \`main\` at ${GITHUB_SHA::7}. All test suites passed.
+
+          Not a stable release - for that, use the latest version tag.
+          Download \`g2c-$VERSION-win64.zip\`, or just \`g2c.exe\`."

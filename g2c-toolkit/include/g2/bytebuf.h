@@ -1,8 +1,8 @@
-// g2/bytebuf.h — Kleiner Little-Endian-Schreibpuffer.
+// g2/bytebuf.h - Small little-endian write buffer.
 //
-// Ghoul2-Dateien sind durchgehend little-endian. Explizites Byteweise-Schreiben
-// statt memcpy von Structs macht den Code portabel und unabhaengig von
-// Padding-Annahmen des Compilers.
+// Ghoul2 files are little-endian throughout. Writing explicitly byte by byte
+// instead of memcpy'ing structs keeps the code portable and independent of
+// the compiler's padding assumptions.
 
 #pragma once
 
@@ -54,10 +54,10 @@ public:
         data_.insert(data_.end(), b, b + n);
     }
 
-    // Fester Stringpuffer, null-terminiert und mit Nullen aufgefuellt.
-    // Zu lange Namen sind ein harter Fehler statt einer stillen Kuerzung —
-    // Carcass warnt hier zwar (Cmd_XSIConvertMDX bei 0x41d350), schreibt aber
-    // trotzdem weiter.
+    // Fixed-size string buffer, null-terminated and padded with zeros.
+    // Names that are too long are a hard error rather than silently
+    // truncated - Carcass does warn here (Cmd_XSIConvertMDX at 0x41d350), but
+    // keeps writing anyway.
     void fixedString(const std::string& s, std::size_t width, const char* what) {
         if (s.size() >= width) {
             throw std::runtime_error(std::string(what) + ": Name \"" + s + "\" ist " +
@@ -70,13 +70,13 @@ public:
 
     void pad(std::size_t n) { data_.insert(data_.end(), n, 0); }
 
-    // Auf ein Vielfaches von n auffuellen. Zwischen Frame-Indizes und
-    // Bone-Pool braucht die GLA ein 4-Byte-Alignment.
+    // Pads up to a multiple of n. The GLA needs 4-byte alignment between the
+    // frame indices and the bone pool.
     void alignTo(std::size_t n) {
         while (data_.size() % n) data_.push_back(0);
     }
 
-    // Platzhalter fuer spaeter bekannte Offsets.
+    // Placeholder for offsets that are only known later.
     std::size_t reserveI32() {
         const std::size_t at = data_.size();
         i32(0);

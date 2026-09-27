@@ -10,6 +10,16 @@ One file. No installer, no runtime package, no dependencies.
 
 ▶ **[Watch on YouTube](https://www.youtube.com/watch?v=NWsVS_ckK_o)**
 
+## Download
+
+**[→ Latest release](https://github.com/DennisHerrm/G2C-toolkit/releases/latest)** — download `g2c.exe` and run it. That is all.
+
+Want the newest changes before the next version? The **[snapshot](https://github.com/DennisHerrm/G2C-toolkit/releases/tag/snapshot)** is rebuilt automatically on every change to `main` — only after all tests pass — but it has not been through a release check.
+
+Each download also comes as `g2c-<version>-win64.zip` with the command-line build `g2c-cli.exe` and the documentation.
+
+**Updates are built in.** g2c checks GitHub at startup and offers a newer version in a bar at the top - one click downloads it, verifies its SHA-256 checksum and swaps the exe, a second click restarts. Nothing is installed without asking; the check can be switched off in the settings. From the command line: `g2c update`.
+
 ---
 
 ## Why
@@ -121,12 +131,14 @@ Interface in **German, English, 中文 and 日本語**, switchable at runtime.
 ## Building
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -S g2c-toolkit -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 ./build/g2_tests
 ```
 
 On Windows, `build.bat` does the same and checks that the result is redistributable.
+
+GitHub Actions runs exactly this on every push to `main` and every version tag — see [`.github/workflows`](.github/workflows).
 
 Needs a C++20 compiler. Dear ImGui 1.92.1 is vendored; there are no other dependencies.
 

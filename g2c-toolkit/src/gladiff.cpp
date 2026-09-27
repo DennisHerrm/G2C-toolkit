@@ -47,7 +47,7 @@ DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
                     const std::vector<car::Sequence>& sequences, const DiffOptions& opt) {
     DiffResult res;
 
-    // --- Skelett zuerst. Stimmt das nicht, ist der Rest bedeutungslos. ---
+    // --- Skeleton first. If that doesn't match, the rest is meaningless. ---
     const int nbA = static_cast<int>(a.skeleton.bones.size());
     const int nbB = static_cast<int>(b.skeleton.bones.size());
 
@@ -85,9 +85,9 @@ DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
     const int framesA = a.numFrames;
     const int framesB = b.numFrames;
 
-    // Ein negativer Versatz wuerde B vor seinem ersten Frame lesen. Er ist
-    // auch nie noetig: statt B nach hinten verschiebt man A mit vertauschten
-    // Dateien.
+    // A negative offset would read B before its first frame. It is never
+    // needed either: instead of shifting B backwards, shift A by swapping the
+    // files.
     if (opt.frameOffsetB < 0)
         throw std::runtime_error("Frameversatz darf nicht negativ sein (Dateien vertauschen)");
 
@@ -104,9 +104,9 @@ DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
     for (int i = 0; i < nb; ++i)
         res.perBone[static_cast<std::size_t>(i)].name = a.skeleton.bones[static_cast<std::size_t>(i)].name;
 
-    // Pro Bone gesammelt, damit die Threads sich nicht in die Quere kommen:
-    // jeder Thread bearbeitet ganze Frames, die Zusammenfuehrung laeuft
-    // ueber ein Mutex nur einmal je Frame.
+    // Collected per bone so the threads don't get in each other's way:
+    // each thread processes whole frames, and merging goes through a mutex
+    // only once per frame.
     std::mutex merge;
     double sumTrans = 0.0;
     double sumRot = 0.0;
@@ -163,7 +163,7 @@ DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
         res.meanRotationDeg = sumRot / static_cast<double>(res.instances);
     }
 
-    // --- Zuordnung zu Sequenzen ------------------------------------------
+    // --- Mapping to sequences --------------------------------------------
     if (!sequences.empty()) {
         for (const auto& s : sequences) {
             if (s.frameCount <= 0 || s.targetFrame >= frames) continue;
