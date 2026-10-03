@@ -33,7 +33,8 @@ namespace g2 {
 // returns data based on the old understanding - a bug that disguises itself
 // as "the fix doesn't work" and is hard to find.
 // 4: SI_Scene range stored as well, for the mismatch warning.
-inline constexpr std::uint32_t kAnimCacheVersion = 4;
+// 5: key range stored; values per key and CONSTANT (stepped) curves honoured.
+inline constexpr std::uint32_t kAnimCacheVersion = 5;
 
 struct AnimCacheStats {
     std::uint64_t hits = 0;

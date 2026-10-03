@@ -66,7 +66,7 @@ build\g2_tests.exe
 ## Erwartete Ausgabe
 
 ```
-448/448 Pruefungen bestanden
+522/522 Pruefungen bestanden
 ```
 
 ## Oberflaeche automatisch durchklicken
@@ -84,8 +84,14 @@ build\Release\g2_gui_driver.exe C:\temp\g2c_gui <assetwurzel> <referenz.gla> <an
 Alles wird unter dem ersten Ordner geschrieben, `%APPDATA%` wird fuer den
 Lauf dorthin umgelenkt. Die uebergebenen Dateien werden nur gelesen; die
 .car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`
-(144 Pruefungen mit Daten, 42 ohne - darunter die Update-Leiste gegen einen
-nachgebauten GitHub-Server).
+(191 Pruefungen mit Daten, 80 ohne - darunter die Update-Leiste gegen einen
+nachgebauten GitHub-Server und der Abgleich mit Assimilate: Ziel und Speed
+von zehn _humanoid-Zeilen muessen die Zahlen ergeben, die Assimilate 3.1
+zeigt).
+
+Regressionstests sind mit `REGRESSION` markiert. Sie wurden gegengeprueft:
+mit dem alten Fehler wieder eingebaut schlagen sie fehl (Speed-Feld: "ist 1"
+statt 26).
 
 Nur mit dem Arbeitsordner laeuft der Teil, der keine Spieldaten braucht.
 So laeuft er auch in GitHub Actions.

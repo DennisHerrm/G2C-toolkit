@@ -81,8 +81,17 @@ struct AnimFile {
     // in M!!", g2c builds with the keys and warns.
     int sceneFirst = 0;
     int sceneLast = 0;
+
+    // Smallest and largest key over all curves. The range above takes the end
+    // from SI_Scene when the keys stop earlier, so keys that end early (the
+    // last frames then repeat the final pose) were invisible to the check.
+    int keyFirst = 0;
+    int keyLast = 0;
+    bool haveKeys = false;
+
     bool sceneRangeDiffers() const {
-        return hasScene && (sceneFirst != firstFrame || sceneLast != lastFrame);
+        return hasScene && (sceneFirst != firstFrame || sceneLast != lastFrame ||
+                            (haveKeys && (keyFirst != sceneFirst || keyLast != sceneLast)));
     }
 
     int frameCount() const { return lastFrame - firstFrame + 1; }

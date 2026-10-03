@@ -132,6 +132,21 @@ enum class S {
     UpdErrNetwork, UpdErrNoRelease, UpdErrBadAnswer, UpdErrNoAsset, UpdErrUntrusted,
     UpdErrChecksum, UpdErrWrite,
 
+    // Assimilate parity: table, speed
+    ColTarget, TipSpeedColumn, TipLoopDefault, TipSpeedFromXsi, TipPartLine, SetSpeedRows,
+    SpeedResetToXsi, SpeedFromXsi, SpeedDefault, PartDetails, SetSpeedTitle, SetSpeedHead,
+    SetSpeedHint, LogSpeedSet, Apply, SpeedAllFromXsi,
+
+    // Assimilate parity: model dialog, files, picker
+    SaveAs, Recent, RecentClear, WriteCfgOnly, BuildDependents, ModelSettingsMenu, OpenInModView,
+    BtnModel, ModelViewPath, LogCfgWritten, LogSavedAs, SaveAsTaken, LogModelChanged, ModelTitle,
+    ModelSecConvert, ModelFromInclude, ModelNoConvert, ModelRoot, ModelOwnSkel, ModelOrigin,
+    ModelMakeSkin, ModelLoseDup, ModelSmooth, ModelCarcassOnly, ModelSecSkeleton, ModelScale,
+    ModelKeepMotion, ModelKeepMotionTip, ModelSecPcj, ModelPcjTip, ModelPcjAdd, ModelPcjRemove,
+    LogNoDependents, LogDependents, LogGlmMissing, LogModViewMissing, LogModViewStarted,
+    PickerAll, PickerOther, PickerHideUsed, PickerUsedHint,
+    TipSpeedDefault,
+
     Count
 };
 

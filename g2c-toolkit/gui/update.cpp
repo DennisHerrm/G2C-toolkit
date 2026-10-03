@@ -552,6 +552,15 @@ std::string replaceFile(const fs::path& target, const fs::path& staged) {
         const std::string why = ec.message();
         std::error_code undo;
         if (hadTarget) fs::rename(old, target, undo);
+        // Undo failed as well: the exe is only there as .old now. Try a copy
+        // instead of a rename; if even that fails, say exactly where things are.
+        if (hadTarget && (undo || !fs::exists(target, undo))) {
+            std::error_code cp;
+            fs::copy_file(old, target, fs::copy_options::overwrite_existing, cp);
+            if (cp || !fs::exists(target, cp))
+                return why + " - " + target.filename().string() + " liegt jetzt als " +
+                       old.filename().string() + " daneben";
+        }
         return why;
     }
     return {};
@@ -662,8 +671,16 @@ void Updater::runCheck(Channel ch) {
     if (res.status != 200) return fail(Error::Network, "HTTP " + std::to_string(res.status));
     auto rel = parseRelease(res.body);
     if (!rel) return fail(Error::BadAnswer);
-    const bool newer = isNewer(build_, *rel, ch);
+    bool newer = isNewer(build_, *rel, ch);
     std::lock_guard lock(mutex_);
+    // Already installed in this session and only waiting for the restart:
+    // offering it again downloaded everything and then failed on the
+    // locked .old file.
+    if (newer && !installedId_.empty() && rel->tag + "|" + rel->commit == installedId_) {
+        status_.release = std::move(*rel);
+        status_.phase = Phase::Installed;
+        return;
+    }
     status_.release = std::move(*rel);
     status_.phase = newer ? Phase::Available : Phase::UpToDate;
 }
@@ -701,6 +718,9 @@ bool Updater::fetchVerified(const Asset& a, const std::string& sums, const fs::p
         return false;
     };
     if (cancel_.load()) return discard(Error::Cancelled, {});
+    // "write:" from the platform = the target folder is not writable
+    // (Program Files). That is not a connection problem.
+    if (err.rfind("write:", 0) == 0) return discard(Error::Write, err.substr(6));
     if (!err.empty()) return discard(Error::Network, err);
 
     const std::uint64_t size = fs::file_size(dest, ec);
@@ -755,7 +775,9 @@ void Updater::runInstall(Release r) {
     }
 
     if (const std::string err = replaceFile(exe_, stagedMain); !err.empty()) {
-        fs::remove(stagedMain, ec);
+        // Keep the verified new file if the exe is gone - it is then the only
+        // working copy (the old code deleted it).
+        if (fs::exists(exe_, ec)) fs::remove(stagedMain, ec);
         fs::remove(stagedCli, ec);
         return fail(Error::Write, err);
     }
@@ -771,6 +793,7 @@ void Updater::runInstall(Release r) {
     std::lock_guard lock(mutex_);
     status_.phase = Phase::Installed;
     status_.detail = std::move(note);
+    installedId_ = r.tag + "|" + r.commit;
 }
 
 }  // namespace g2::gui::update

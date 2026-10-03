@@ -67,7 +67,7 @@ cmake --build build
 build\g2_tests.exe
 ```
 
-Erwartete Ausgabe am Ende: `448/448 Pruefungen bestanden`.
+Erwartete Ausgabe am Ende: `522/522 Pruefungen bestanden`.
 
 Es entstehen `libg2` (statische Bibliothek), `g2c` (Kommandozeilenwerkzeug)
 und `g2_tests`.
@@ -3791,3 +3791,54 @@ Pruefregeln gelten weiter fuer die urspruenglichen Adressen. So ist der
 ganze Ablauf - Suchen, Laden, Pruefen, Ersetzen der laufenden Exe,
 Neustart - gegen einen nachgebauten Server getestet, inklusive falscher
 Pruefsumme, fremder Adressen und fehlender Verbindung.
+
+## 71. Was Assimilate konnte - und wo es in g2c steht
+
+Abgeglichen am 2026-10-03 mit Assimilate 3.1: alle Menues, alle Dialoge und
+jedes Steuerelement aus der Exe ausgelesen, dann mit einer Kopie des
+_humanoid.car durchgeklickt.
+
+| Assimilate | g2c |
+|---|---|
+| Baum mit "Target, Count, Loop, Speed" je Zeile | Tabelle: Spalten Ziel, Frames, Loop, Speed |
+| Speed immer als Zahl | Speed-Spalte: weiss = `-framespeed`, grau = aus der .xsi (SI_Scene), sonst 30 |
+| Teile in Klammern neben der Animation | Spalte "Teile", mit Ansicht > Details der Teile auch `T:18 C:1 L:-1 S:-10` |
+| Sequence-Dialog: Loop, Frame Speed, Enum, Additional #1-#5 | Doppelklick: dasselbe, beliebig viele Teile; Speed zeigt den echten Wert, "Wie in der .xsi" setzt zurueck |
+| - | Rechtsklick > Framespeed setzen: fuer alle markierten Zeilen auf einmal |
+| Model-Dialog | Bauen > Modell-Einstellungen bzw. Knopf "Modell" |
+| Animation Picker: LEGS/TORSO/BOTH/FACE/VM, `*` = benutzt, "Filter-out used" | Enum-Auswahl: dieselben Gruppen, `*`, "Benutzte ausblenden", dazu Suchfeld |
+| Save As, zuletzt geoeffnete Dateien | Datei > Speichern unter, Datei > Zuletzt geoeffnet |
+| Write Config Data | Bauen > Nur animation.cfg schreiben |
+| Build dependant models | Bauen > Abhaengige Modelle bauen |
+| View current model via ModView | Bauen > In ModView oeffnen (Pfad in den Einstellungen) |
+| Validate / Build / Build all | Pruefen, Bauen, Alle bauen; alle .car eines Baums ueber Ordner oeffnen |
+| Undo, Cut, Copy, Paste | in Assimilate ausgegraut; in g2c funktionieren Kopieren, Ausschneiden, Einfuegen |
+
+Bewusst nicht uebernommen: Drucken; GenLoopFrame (lehnt Carcass selbst ab:
+"'-genloopframe' is no longer supported"); "res" (aendert in 3.1 nichts mehr);
+Start Frame und Frame Count der Master-Sequenz (Assimilate speichert diese
+Felder gar nicht - ausprobiert).
+
+### Model-Dialog
+
+Bearbeitet den Kopf des Skripts, wie Assimilates "Model":
+
+- **Konvertierung**: Mesh-Root, eigenes Skelett (`-makeskel`), Origin
+  (`-origin`), `.skin` (`-makeskin`), `-losedupverts`, `-smooth`
+- **Skelett**: Scale (`$scale`), Motion-Bone (`$keepmotion`)
+- **PCJ-Liste** (`$pcj`): hinzufuegen, entfernen
+
+Nur geaenderte Zeilen werden umgeschrieben, Zeilenendkommentare bleiben.
+Neue Zeilen kommen dahin, wo Raven sie hat: nach den Grabs, vor
+`$aseanimgrabfinalize`.
+
+Was g2c davon selbst auswertet: Scale, Origin, `-makeskel`, `-makeskin`.
+`$keepmotion` braucht g2c nicht (die Wurzelbewegung wird immer wie in Ravens
+GLA uebernommen), die PCJ-Liste braucht nur Carcass beim Erzeugen eines neuen
+Skeletts, und `-losedupverts`/`-smooth` setzt derzeit nur Carcass um. Der
+Dialog sagt das jeweils dazu.
+
+### Nur animation.cfg
+
+Laeuft den vollen Bau, schreibt aber nur die animation.cfg - die GLA bleibt
+unangetastet. Geprueft: die Datei ist byte-gleich mit der aus dem vollen Bau.

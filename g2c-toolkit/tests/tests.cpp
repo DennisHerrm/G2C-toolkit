@@ -13,6 +13,7 @@
 #include "g2/carscript.h"
 #include "g2/readfile.h"
 #include "g2/gladiff.h"
+#include "g2/xsi_mesh.h"
 
 #include <cmath>
 #include <algorithm>
@@ -186,7 +187,8 @@ void testOutOfRangeClamping() {
     // And here: a -512 unit translation jump in the original.
     const float backXlat = g2::unsquashXlatComponent(
         g2::squashXlatComponent(9000.0f, g2::Rounding::Nearest, stats));
-    checkNear(backXlat, 511.0, 1e-2, "Translation 9000 wird auf +511 geklemmt, nicht auf -512");
+    // The largest value the format can hold: raw 65535 = 511.984375.
+    checkNear(backXlat, 511.984375, 1e-3, "Translation 9000 wird auf den Hoechstwert geklemmt, nicht auf -512");
     check(stats.xlatClamped == 1, "Translationsklemmung wird gezaehlt");
 
     // NaN must not slip through.
@@ -2826,6 +2828,557 @@ void testRobustness() {
     }
 }
 
+// Assimilate's "Model" dialog: $scale, $keepmotion and $pcj are edited in
+// place. Unchanged lines must come back byte for byte, changed ones keep their
+// end-of-line comment, new ones go where Raven's scripts have them.
+void testModelSettings() {
+    using namespace g2::car;
+    const std::string src =
+        "$aseanimgrabinit\r\n"
+        "$aseanimgrab models/a.xsi -loop -1\r\n"
+        "$aseanimgrab models/b.xsi -framespeed 30\r\n"
+        "$scale 0.64  // Massstab\r\n"
+        "// Bewegung\r\n"
+        "$keepmotion\r\n"
+        "$pcj $flatten\r\n"
+        "$pcj upper_lumbar  // Ruecken\r\n"
+        "$pcj cranium\r\n"
+        "$aseanimgrabfinalize\r\n"
+        "$aseanimconvertmdx_noask models/root -makeskel models/x/_humanoid -origin 0 0 24\r\n";
+
+    section("Modell-Einstellungen lesen");
+    Script s = parse(src);
+    ModelSettings m = modelSettingsOf(s);
+    check(m.scale && *m.scale == 0.64, "Scale gelesen");
+    check(m.keepMotion, "$keepmotion gelesen");
+    check((m.pcj == std::vector<std::string>{"$flatten", "upper_lumbar", "cranium"}), "PCJ-Liste in Reihenfolge, $flatten dabei");
+
+    section("Unveraendert anwenden aendert keine Zeile");
+    applyModelSettings(s, m);
+    check(writeScript(s) == src, "Datei byte-gleich");
+
+    section("Scale aendern");
+    {
+        Script t = parse(src);
+        ModelSettings n = modelSettingsOf(t);
+        n.scale = 0.5;
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out.find("$scale 0.5  // Massstab\r\n") != std::string::npos, "neuer Wert, Kommentar bleibt");
+        check(out.find("0.64") == std::string::npos, "alter Wert weg");
+        check(t.scale && *t.scale == 0.5, "Bauwert mitgezogen");
+        check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
+        std::string expect = src;
+        expect.replace(expect.find("$scale 0.64"), 11, "$scale 0.5");
+        check(out == expect, "nur diese Zeile geaendert");
+    }
+
+    section("$keepmotion entfernen, Kommentar darueber bleibt");
+    {
+        Script t = parse(src);
+        ModelSettings n = modelSettingsOf(t);
+        n.keepMotion = false;
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out.find("$keepmotion") == std::string::npos, "Zeile weg");
+        check(out.find("// Bewegung\r\n$pcj $flatten") != std::string::npos, "Kommentar wandert zur naechsten Zeile");
+        check(!t.keepMotion, "Bauwert mitgezogen");
+    }
+
+    section("PCJ-Liste aendern");
+    {
+        Script t = parse(src);
+        ModelSettings n = modelSettingsOf(t);
+        n.pcj = {"$flatten", "cranium", "pelvis"};
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out.find("$pcj $flatten\r\n$pcj cranium\r\n$pcj pelvis\r\n$aseanimgrabfinalize") != std::string::npos,
+              "neue Reihenfolge an alter Stelle");
+        check(out.find("upper_lumbar") == std::string::npos, "entfernter Eintrag weg");
+        check((t.pcjBones == std::vector<std::string>{"cranium", "pelvis"}) && t.pcjFlatten, "Bauwerte mitgezogen");
+        check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
+
+        Script u = parse(src);
+        ModelSettings k = modelSettingsOf(u);
+        k.pcj = {"$flatten", "upper_lumbar"};
+        applyModelSettings(u, k);
+        check(writeScript(u).find("$pcj upper_lumbar  // Ruecken\r\n") != std::string::npos,
+              "behaltener Eintrag behaelt seine Zeile samt Kommentar");
+    }
+
+    section("Neu anlegen: vor $aseanimgrabfinalize, Reihenfolge wie bei Raven");
+    {
+        const std::string bare =
+            "$aseanimgrabinit\r\n"
+            "$aseanimgrab models/a.xsi\r\n"
+            "$aseanimgrabfinalize\r\n"
+            "$aseanimconvertmdx_noask models/root -makeskel models/x/_humanoid\r\n";
+        Script t = parse(bare);
+        ModelSettings n;
+        n.scale = 0.64;
+        n.keepMotion = true;
+        n.pcj = {"$flatten", "cranium"};
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out == "$aseanimgrabinit\r\n$aseanimgrab models/a.xsi\r\n$scale 0.64\r\n$keepmotion\r\n"
+                     "$pcj $flatten\r\n$pcj cranium\r\n$aseanimgrabfinalize\r\n"
+                     "$aseanimconvertmdx_noask models/root -makeskel models/x/_humanoid\r\n",
+              "an der richtigen Stelle angelegt");
+        check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
+
+        // And everything off again: back to the original file.
+        Script v = parse(out);
+        applyModelSettings(v, ModelSettings{});
+        check(writeScript(v) == bare, "alles abgeschaltet = Ausgangsdatei");
+    }
+
+    section("Konvertierungszeile");
+    {
+        Script t = parse(src);
+        t.convert->origin.reset();
+        t.convert->makeSkin = true;
+        t.convert->extraArgs.push_back("-smooth");
+        const std::string out = writeScript(t);
+        const ConvertDirective c = *parse(out).convert;
+        check(!c.origin && c.makeSkin && c.makeSkel == "models/x/_humanoid", "-origin weg, -makeskin dazu");
+        check(std::find(c.extraArgs.begin(), c.extraArgs.end(), "-smooth") != c.extraArgs.end(), "-smooth bleibt erhalten");
+    }
+}
+
+// Regression tests for the findings of the code review of 2026-10-03.
+// Each one failed (or crashed) with the code before the fix.
+void testReviewBinary() {
+    section("REGRESSION: Translation zwischen -512 und -511 bleibt erhalten");
+    {
+        g2::CompressStats st;
+        const float back = g2::unsquashXlatComponent(g2::squashXlatComponent(-511.5f, g2::Rounding::Nearest, st));
+        checkNear(back, -511.5, 1.0 / 64.0, "-511.5 kommt als -511.5 zurueck (vorher -511)");
+        check(st.xlatClamped == 0, "und gilt nicht als geklemmt");
+        const float lo = g2::unsquashXlatComponent(g2::squashXlatComponent(-512.0f, g2::Rounding::Nearest, st));
+        checkNear(lo, -512.0, 1e-6, "-512 ist darstellbar");
+    }
+
+    section("REGRESSION: skalierte Bone-Matrix behaelt ihren Winkel");
+    {
+        const auto rx = [](float deg, float scale) {
+            const float r = deg * 3.14159265f / 180.0f;
+            g2::Mat3x4 m = g2::Mat3x4::identity();
+            m.m[1][1] = std::cos(r) * scale; m.m[1][2] = -std::sin(r) * scale;
+            m.m[2][1] = std::sin(r) * scale; m.m[2][2] = std::cos(r) * scale;
+            m.m[0][0] = scale;
+            return m;
+        };
+        const auto angleOf = [](const g2::Mat3x4& m) {
+            return g2::angleBetweenDeg(g2::matrixToQuat(m), g2::Quat{});
+        };
+        g2::CompressOptions opt;
+        for (float sc : {0.64f, 1.5625f}) {
+            g2::CompressStats st;
+            const g2::Mat3x4 back = g2::uncompressBone(g2::compressBone(rx(90.0f, sc), opt, st));
+            // Same angle as the unscaled rotation (the helper measures in its own
+            // convention, so compare against the clean case, not a number).
+            checkNear(angleOf(back), angleOf(rx(90.0f, 1.0f)), 0.05,
+                      "Rx(90) mit Skalierung " + std::to_string(sc) + " behaelt den Winkel (vorher 76/101 Grad)");
+            check(st.nonUnitQuat == 1, "als skaliert gezaehlt");
+        }
+        {
+            g2::CompressStats st;
+            g2::Mat3x4 zero = g2::Mat3x4::identity();
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c) zero.m[r][c] = 0.0f;
+            const g2::Mat3x4 back = g2::uncompressBone(g2::compressBone(zero, opt, st));
+            checkNear(angleOf(back), 0.0, 0.05, "Nullskalierung wird keine Drehung (vorher 180 Grad um Z)");
+        }
+        {
+            g2::CompressStats st;
+            g2::Mat3x4 mirror = g2::Mat3x4::identity();
+            mirror.m[2][2] = -1.0f;
+            g2::compressBone(mirror, opt, st);
+            check(st.nonUnitQuat == 1, "Spiegelung wird gemeldet (vorher nicht)");
+        }
+        {
+            // A clean rotation must come out exactly as before the fix.
+            g2::CompressStats st;
+            const g2::Mat3x4 clean = rx(33.0f, 1.0f);
+            const auto a = g2::compressBone(clean, opt, st);
+            g2::Quat q = g2::matrixToQuat(clean);
+            if (q.w < 0) { q.w = -q.w; q.x = -q.x; q.y = -q.y; q.z = -q.z; }
+            const g2::Mat3x4 viaQuat = g2::uncompressBone(a);
+            checkNear(angleOf(viaQuat), angleOf(clean), 0.05, "saubere Drehung unveraendert");
+            check(st.nonUnitQuat == 0, "saubere Drehung nicht gezaehlt");
+        }
+    }
+
+    section("REGRESSION: kaputte GLA-Koepfe");
+    {
+        const g2::Skeleton skel = makeSkeleton(3);
+        g2::AnimationFrames frames;
+        frames.resize(2, 3);
+        for (auto& m : frames.matrices) m = g2::Mat3x4::identity();
+        const auto w = g2::writeMdxa(skel, frames);
+
+        // Two billion bones in a file of a few hundred bytes.
+        std::vector<std::uint8_t> huge = w.data;
+        const std::int32_t many = 0x7FFFFFFF;
+        std::memcpy(huge.data() + 84, &many, 4);   // mdxaHeader.numBones
+        bool clearError = false;
+        try {
+            g2::readMdxa(huge);
+        } catch (const std::bad_alloc&) {
+            clearError = false;
+        } catch (const std::exception&) {
+            clearError = true;
+        }
+        check(clearError, "riesige Bone-Anzahl: klare Fehlermeldung statt bad_alloc");
+
+        // Parent cycle 1 -> 2 -> 1.
+        std::vector<std::uint8_t> cyc = w.data;
+        const std::size_t headerEnd = 100;
+        std::int32_t rel1 = 0, rel2 = 0;
+        std::memcpy(&rel1, cyc.data() + headerEnd + 4, 4);
+        std::memcpy(&rel2, cyc.data() + headerEnd + 8, 4);
+        const std::int32_t p1 = 2, p2 = 1;
+        std::memcpy(cyc.data() + headerEnd + rel1 + 68, &p1, 4);
+        std::memcpy(cyc.data() + headerEnd + rel2 + 68, &p2, 4);
+        bool cycleCaught = false;
+        try {
+            g2::readMdxa(cyc);
+        } catch (const std::exception& e) {
+            cycleCaught = std::string(e.what()).find("Kreis") != std::string::npos;
+        }
+        check(cycleCaught, "Parent-Kreis wird erkannt (vorher still als Nullmatrizen)");
+
+        // Diff with a negative target frame in the cfg.
+        const g2::MdxaFile f = g2::readMdxa(w.data);
+        std::vector<g2::car::Sequence> seqs(2);
+        seqs[0].name = "NEG"; seqs[0].targetFrame = -5; seqs[0].frameCount = 10;
+        seqs[1].name = "BIG"; seqs[1].targetFrame = 1; seqs[1].frameCount = 0x7FFFFFFF;
+        bool survived = true;
+        try {
+            const auto d = g2::diffMdxa(f, f, seqs);
+            // Same file on both sides: no sequence deviates (perSequence lists
+            // only deviating ones). The point is that it gets here at all.
+            survived = d.perSequence.empty();
+        } catch (const std::exception& e) {
+            std::printf("  Ausnahme: %s\n", e.what());
+            survived = false;
+        }
+        check(survived, "Diff mit negativem Startframe und riesiger Anzahl: kein Absturz");
+    }
+}
+
+
+void testReviewXsi() {
+    const auto curve = [](const std::string& interp, int perKey, int keys, const std::string& body) {
+        return "xsi 0300txt 0032\n"
+               "SI_Scene s { \"FRAMES\", 0.000000, 20.000000, 20.000000, }\n"
+               "SI_Model MDL-a {\n"
+               "  SI_FCurve { \"a\", \"ROTATION-X\", \"" + interp + "\", 1, " + std::to_string(perKey) + ", " +
+               std::to_string(keys) + ", " + body + " }\n}\n";
+    };
+    const auto keysOf = [](const g2::xsi::AnimFile& a) -> const std::map<int, float>* {
+        if (a.nodes.empty()) return nullptr;
+        const auto it = a.nodes[0].channels.find("ROTATION-X");
+        return it == a.nodes[0].channels.end() ? nullptr : &it->second;
+    };
+
+    section("REGRESSION: Kurven mit mehreren Werten pro Key (CUBIC)");
+    {
+        // frame, value, then four tangent values per key.
+        const auto a = g2::xsi::loadAnimation(g2::xsi::parse(curve("CUBIC", 5, 2, "0, 10, 0, 0, 0, 0, 20, 30, 0, 0, 0, 0,")));
+        const auto* k = keysOf(a);
+        check(k && k->size() == 2 && k->at(0) == 10.0f && k->at(20) == 30.0f,
+              "zwei Keys 0->10 und 20->30 (vorher wurden Tangenten zu Keys)");
+    }
+
+    section("REGRESSION: CONSTANT ist gestuft");
+    {
+        const auto a = g2::xsi::loadAnimation(g2::xsi::parse(curve("CONSTANT", 1, 3, "0, 0, 10, 90, 20, -45,")));
+        const auto* k = keysOf(a);
+        check(k && k->count(5) && k->at(5) == 0.0f && k->at(15) == 90.0f,
+              "zwischen den Keys haelt der Wert (vorher linear: 45 bei Frame 5)");
+        const auto lin = g2::xsi::loadAnimation(g2::xsi::parse(curve("LINEAR", 1, 3, "0, 0, 10, 90, 20, -45,")));
+        const auto* kl = keysOf(lin);
+        check(kl && kl->size() == 3, "LINEAR bleibt wie es war");
+    }
+
+    section("REGRESSION: beschaedigte Kurven werden gemeldet");
+    {
+        bool threw = false;
+        try {
+            g2::xsi::loadAnimation(g2::xsi::parse(curve("LINEAR", 1, 5, "0, 0, 10, 90,")));
+        } catch (const std::exception& e) {
+            threw = std::string(e.what()).find("beschaedigt") != std::string::npos;
+        }
+        check(threw, "abgeschnittene Kurve: Fehler statt still stehender Bone");
+        threw = false;
+        try {
+            g2::xsi::loadAnimation(g2::xsi::parse(curve("LINEAR", 1, 2, "0, 0, 10, \"-1.#IND00\",")));
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        check(threw, "NaN-Wert aus 3ds Max: Fehler statt still verworfenem Key");
+        threw = false;
+        try {
+            g2::xsi::loadAnimation(g2::xsi::parse(
+                "xsi 0300txt 0032\nSI_Scene s { \"FRAMES\", 0.0, 1000000000.0, 20.0, }\n"
+                "SI_Model MDL-a { SI_FCurve { \"a\", \"ROTATION-X\", \"LINEAR\", 1, 1, 1, 0, 0, } }\n"));
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        check(threw, "SI_Scene mit einer Milliarde Frames: Fehler statt Terabyte-Anforderung");
+    }
+
+    section("REGRESSION: Keys kuerzer als SI_Scene werden gemeldet");
+    {
+        const auto a = g2::xsi::loadAnimation(g2::xsi::parse(curve("LINEAR", 1, 2, "0, 0, 12, 90,")));
+        check(a.sceneRangeDiffers(), "Keys 0..12, SI_Scene 0..20: Warnung (vorher still eingefrorene Frames)");
+        const auto full = g2::xsi::loadAnimation(g2::xsi::parse(curve("LINEAR", 1, 2, "0, 0, 20, 90,")));
+        check(!full.sceneRangeDiffers(), "passende Keys: keine Warnung");
+    }
+
+    section("REGRESSION: Datei mit UTF-8-BOM");
+    {
+        bool ok = true;
+        try {
+            g2::xsi::parse("\xEF\xBB\xBF" + curve("LINEAR", 1, 2, "0, 0, 20, 90,"));
+        } catch (const std::exception&) {
+            ok = false;
+        }
+        check(ok, "BOM am Anfang wird ignoriert");
+    }
+
+    section("REGRESSION: Mesh mit mehreren Dreieckslisten, COLOR-Block, abgeschnittenem Block");
+    {
+        const std::string head =
+            "xsi 0300txt 0032\n"
+            "SI_Model MDL-mesh_root {\n"
+            "  SI_Model MDL-quad {\n"
+            "    SI_Mesh MSH-quad {\n"
+            "      SI_Shape SHP-quad-ORG {\n"
+            "        3, \"ORDERED\",\n"
+            "        4, \"POSITION\", 0,0,0, 1,0,0, 1,1,0, 0,1,0,\n"
+            "        1, \"NORMAL\", 0,0,1,\n"
+            "        4, \"TEX_COORD_UV\", 0,0, 1,0, 1,1, 0,1,\n"
+            "      }\n";
+        const std::string tail = "    }\n  }\n}\n";
+        g2::xsi::MeshImportOptions mo;
+        mo.scale = 1.0f;
+
+        const auto two = g2::xsi::importMesh(g2::xsi::parse(head +
+            "      SI_TriangleList t1 { 1, \"NORMAL\", \"m1\", 0,1,2, 0,0,0, }\n"
+            "      SI_TriangleList t2 { 1, \"NORMAL\", \"m2\", 0,2,3, 0,0,0, }\n" + tail), mo);
+        check(!two.mesh.lods.empty() && two.mesh.lods[0].surfaces.size() == 1 &&
+                  two.mesh.lods[0].surfaces[0].triangles.size() == 2,
+              "beide Dreieckslisten eingelesen (vorher nur die erste)");
+
+        const auto color = g2::xsi::importMesh(g2::xsi::parse(head +
+            "      SI_TriangleList t1 { 1, \"NORMAL|COLOR|TEX_COORD_UV\", \"m\", 0,1,2, 0,0,0, 9,9,9, 1,2,3, }\n" + tail), mo);
+        bool uvOk = false;
+        if (!color.mesh.lods.empty() && !color.mesh.lods[0].surfaces.empty()) {
+            const auto& sf = color.mesh.lods[0].surfaces[0];
+            uvOk = sf.vertices.size() == 3 && sf.vertices[0].uv[0] == 1.0f && sf.vertices[0].uv[1] == 1.0f;
+        }
+        check(uvOk, "COLOR-Block uebersprungen, UVs aus dem richtigen Block (vorher Farbindizes als UV)");
+
+        bool noCrash = true;
+        g2::xsi::MeshImportResult cut;
+        try {
+            cut = g2::xsi::importMesh(g2::xsi::parse(head +
+                "      SI_TriangleList t1 { 1, \"NORMAL|TEX_COORD_UV\", \"m\", 0,1,2, 0,0,0, }\n"
+                "      SI_TriangleList t2 { 1, \"NORMAL\", \"m\", 0,2,3, 0,0,0, }\n" + tail), mo);
+        } catch (const std::exception&) {
+            noCrash = false;
+        }
+        bool warned = false;
+        for (const auto& w : cut.stats.warnings) warned = warned || w.find("abgeschnitten") != std::string::npos;
+        check(noCrash && warned && !cut.mesh.lods.empty() && cut.mesh.lods[0].surfaces[0].triangles.size() == 1,
+              "fehlender UV-Block: Warnung, die heile Liste bleibt (vorher Lesen hinter dem Ende)");
+    }
+
+    section("REGRESSION: Surface ueber der Grenze des Spiels");
+    {
+        // 1002 separate vertices in one surface: Jedi Academy refuses the model.
+        std::string src = "xsi 0300txt 0032\nSI_Model MDL-mesh_root {\n  SI_Model MDL-big {\n    SI_Mesh MSH-big {\n"
+                          "      SI_Shape SHP-big-ORG {\n        2, \"ORDERED\",\n        1002, \"POSITION\",\n";
+        for (int k = 0; k < 1002; ++k) src += "        " + std::to_string(k) + ",0,0,\n";
+        src += "        1, \"NORMAL\", 0,0,1,\n      }\n      SI_TriangleList t { 334, \"NORMAL\", \"m\",\n";
+        for (int k = 0; k < 1002; ++k) src += std::to_string(k) + ",";
+        for (int k = 0; k < 1002; ++k) src += "0,";
+        src += " }\n    }\n  }\n}\n";
+        g2::xsi::MeshImportOptions mo;
+        mo.scale = 1.0f;
+        const auto r = g2::xsi::importMesh(g2::xsi::parse(src), mo);
+        bool warned = false;
+        for (const auto& w : r.stats.warnings) warned = warned || w.find("hoechstens 1000") != std::string::npos;
+        check(warned, "1002 Vertices in einer Surface: Warnung (vorher still geschrieben, Spiel laedt nicht)");
+    }
+}
+
+void testReviewScript() {
+    using namespace g2::car;
+    const auto same = [](const std::string& src) { return writeScript(parse(src)) == src; };
+
+    section("REGRESSION: alles hinter $exit bleibt beim Speichern erhalten");
+    {
+        const std::string src = "$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$exit\r\n"
+                                "$aseanimgrab geparkt.xsi -loop 5\r\n// Notiz\r\n$aseanimgrabfinalize\r\n";
+        check(same(src), "Datei bytegleich (vorher fehlten die Zeilen nach $exit)");
+        check(parse(src).grabs.size() == 1, "Carcass-Verhalten: nach $exit wird nichts gebaut");
+    }
+
+    section("REGRESSION: Leerzeilen, Einrueckung, LF-Dateien");
+    {
+        check(same("$aseanimgrabinit\r\n$keepmotion\r\n\r\n$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n"),
+              "Leerzeile ohne Kommentar bleibt");
+        check(same("$aseanimgrabinit\r\n    // eingerueckt\r\n$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n"),
+              "eingerueckter Kommentar bleibt eingerueckt");
+        check(same("$aseanimgrabinit\n$aseanimgrab a.xsi\n// Ende\n$aseanimgrabfinalize\n"),
+              "reine LF-Datei bleibt LF");
+        check(same("$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n\r\n\r\n"),
+              "Leerzeilen am Dateiende bleiben");
+        // ... and blank layout lines do not become comment rows.
+        const auto sc = parse("$aseanimgrabinit\r\n\r\n// Kopf\r\n$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n");
+        check(sc.grabs.size() == 1 && sc.grabs[0].commentsBefore.size() == 1,
+              "Leerzeile davor ist Layout, kein Kommentar der Animation");
+    }
+
+    section("REGRESSION: Kommentar ueber $aseanimgrabfinalize bleibt dort");
+    {
+        check(same("$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$scale 0.64\r\n$pcj cranium\r\n"
+                   "// Ende\r\n$aseanimgrabfinalize\r\n"),
+              "nach $scale/$pcj: Kommentar springt nicht hinter die letzte Animation");
+    }
+
+    section("REGRESSION: mehrere Konvertierungszeilen, Zeilen zwischen Grabs");
+    {
+        check(same("$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n"
+                   "$aseanimconvertmdx_noask models/a/root -makeskel models/a/a\r\n"
+                   "$aseanimconvertmdx_noask models/b/root -makeskel models/b/b\r\n"),
+              "beide Konvertierungszeilen bleiben (vorher nur die letzte, an Stelle der ersten)");
+        check(same("$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$foo x\r\n$aseanimgrab b.xsi\r\n"
+                   "$aseanimgrabfinalize\r\n"),
+              "unbekannte Zeile zwischen zwei Grabs bleibt dazwischen");
+        Script t = parse("$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n"
+                         "$aseanimconvertmdx_noask models/a/root -makeskel models/a/a\r\n"
+                         "$aseanimconvertmdx_noask models/b/root -makeskel models/b/b\r\n");
+        t.convert->makeSkin = true;
+        const std::string out = writeScript(t);
+        check(out.find("models/a/root -makeskel models/a/a\r\n") != std::string::npos &&
+                  out.find("models/b/root -makeskin -makeskel models/b/b") != std::string::npos,
+              "Aenderung landet in der letzten, die erste bleibt wie sie war");
+    }
+
+    section("REGRESSION: // mitten in einem Pfad ist kein Kommentar");
+    {
+        const auto sc = parse("$aseanimgrabinit\r\n$aseanimgrab models/p//x.xsi -loop 0\r\n$aseanimgrabfinalize\r\n");
+        check(sc.grabs.size() == 1 && sc.grabs[0].trailingComment.empty() && sc.grabs[0].loop == 0,
+              "kein Zeilenkommentar erkannt, -loop gelesen");
+        const auto sc2 = parse("$aseanimgrabinit\r\n$aseanimgrab a.xsi -loop 0 // echt\r\n$aseanimgrabfinalize\r\n");
+        check(sc2.grabs[0].trailingComment == "// echt", "echter Zeilenkommentar weiter erkannt");
+    }
+
+    section("REGRESSION: Zahlen ausserhalb des Bereichs");
+    {
+        for (const char* bad : {"-loop nan", "-loop 1e10", "-framespeed inf", "-additional 0 1e12 -1 20 X"}) {
+            bool threw = false;
+            try {
+                parse(std::string("$aseanimgrabinit\r\n$aseanimgrab a.xsi ") + bad + "\r\n$aseanimgrabfinalize\r\n");
+            } catch (const std::exception&) {
+                threw = true;
+            }
+            check(threw, std::string("abgelehnt: ") + bad + " (vorher INT_MIN in animation.cfg)");
+        }
+    }
+
+    section("REGRESSION: Modell-Dialog und $include");
+    {
+        namespace fs = std::filesystem;
+        const fs::path d = fs::temp_directory_path() / uniqueTestDir("modelinclude");
+        fs::create_directories(d);
+        {
+            std::ofstream inc(d / "pcj.car", std::ios::binary);
+            inc << "$pcj $flatten\r\n$pcj upper_lumbar\r\n$keepmotion\r\n";
+        }
+        const std::string mainSrc = "$aseanimgrabinit\r\n$include pcj.car\r\n$aseanimgrab a.xsi\r\n"
+                                    "// Ruecken\r\n$pcj cranium\r\n$aseanimgrabfinalize\r\n";
+        {
+            std::ofstream m(d / "main.car", std::ios::binary);
+            m << mainSrc;
+        }
+        Script t = parseFile((d / "main.car").string());
+        ModelSettings own = modelSettingsOf(t);
+        check(own.pcj == std::vector<std::string>{"cranium"} && !own.keepMotion,
+              "eigene Zeilen: nur cranium, kein $keepmotion (das steht im include)");
+        check(t.pcjFlatten && t.keepMotion && t.pcjBones.size() == 2, "Bau sieht alles, include eingeschlossen");
+        applyModelSettings(t, own);
+        check(writeScript(t) == mainSrc, "unveraendert angewendet: Datei bytegleich (vorher $flatten verdoppelt)");
+
+        // Remove the own entry: its comment must not get lost.
+        own.pcj.clear();
+        applyModelSettings(t, own);
+        const std::string out = writeScript(t);
+        check(out.find("$pcj cranium") == std::string::npos && out.find("// Ruecken") != std::string::npos,
+              "eigener Eintrag weg, Kommentar darueber bleibt (vorher verschluckt)");
+        check(t.pcjFlatten && t.pcjBones.size() == 1 && t.keepMotion, "Bauwerte = was in den Dateien steht");
+        std::error_code ec;
+        fs::remove_all(d, ec);
+    }
+
+    section("REGRESSION: Kommentar ueber geloeschtem $keepmotion vor dem ersten Grab");
+    {
+        Script t = parse("$aseanimgrabinit\r\n$scale 0.64\r\n// Wurzel behalten\r\n$keepmotion\r\n"
+                         "$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n");
+        ModelSettings m = modelSettingsOf(t);
+        m.keepMotion = false;
+        applyModelSettings(t, m);
+        check(writeScript(t).find("// Wurzel behalten\r\n$aseanimgrab a.xsi") != std::string::npos,
+              "Kommentar wandert zur Animation statt zu verschwinden");
+    }
+
+    section("REGRESSION: doppelte Namen nur einmal gemeldet");
+    {
+        const auto sc = parse("$aseanimgrabinit\r\n$aseanimgrab a.xsi -enum BOTH_A1\r\n"
+                              "$aseanimgrab b.xsi -enum BOTH_A1\r\n$aseanimgrabfinalize\r\n");
+        ValidateOptions vo;
+        const auto r = validate(sc, "x.car", vo);
+        std::size_t dupe = 0;
+        for (const auto& is : r.issues)
+            if (is.sequence == "BOTH_A1") ++dupe;
+        check(dupe == 1, "eine Meldung fuer BOTH_A1 (vorher zwei, Fehlerzahl doppelt): " + std::to_string(dupe));
+    }
+
+    section("REGRESSION: -additional ausserhalb der Datei wird beim Bauen gemeldet");
+    {
+        namespace fs = std::filesystem;
+        const fs::path d = fs::temp_directory_path() / uniqueTestDir("addrange");
+        fs::create_directories(d / "models");
+        {
+            std::ofstream f(d / "models" / "w.xsi");
+            f << "xsi 0350txt 0032\nSI_Scene s { \"FRAMES\", 1.0, 5.0, 20.0, }\n"
+                 "SI_Model MDL-rig.root {\n  SI_Model MDL-rig.a {\n"
+                 "    SI_FCurve { \"rig.a\", \"ROTATION-Z\", \"LINEAR\", 1, 1, 5, 1,0, 2,1, 3,2, 4,3, 5,4, }\n  }\n}\n";
+        }
+        {
+            std::ofstream c(d / "t.car");
+            c << "$aseanimgrabinit\n$aseanimgrab models/w.xsi -additional 3 4 -1 20 ZU_LANG\n$aseanimgrabfinalize\n";
+        }
+        g2::Skeleton ref;
+        ref.name = "x";
+        ref.scale = 1.0f;
+        ref.bones.push_back({"root", -1, g2::Mat3x4::identity(), 0});
+        ref.bones.push_back({"a", 0, g2::Mat3x4::identity(), 0});
+        BuildOptions bo;
+        bo.baseDir = d.string();
+        const auto br = build(parseFile((d / "t.car").string()), ref, (d / "t.car").string(), bo);
+        bool warned = false;
+        for (const auto& w : br.warnings) warned = warned || w.find("ZU_LANG") != std::string::npos;
+        check(warned, "Teil 3..6 einer 5-Frame-Datei: Warnung (vorher still)");
+        std::error_code ec;
+        fs::remove_all(d, ec);
+    }
+}
+
 int main() {
     // Unbuffered output. Otherwise, on a hang or crash you can't tell where it
     // happened: the last printed text is still stuck in the buffer, and the
@@ -2882,6 +3435,10 @@ int main() {
     run("testAnimEval", testAnimEval);
     run("testXsiExport", testXsiExport);
     run("testRobustness", testRobustness);
+    run("testModelSettings", testModelSettings);
+    run("testReviewBinary", testReviewBinary);
+    run("testReviewXsi", testReviewXsi);
+    run("testReviewScript", testReviewScript);
 
 
     g_currentTest.store("(fertig)");

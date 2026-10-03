@@ -110,6 +110,66 @@ static std::string releaseJson(const std::string& tag, const std::string& commit
   return j;
 }
 
+
+// Regression tests for the GUI findings of the code review (2026-10-03).
+static void testReviewGui() {
+  const fs::path root = fs::temp_directory_path() / "g2c_review_gui";
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  const fs::path eq = root / "a=b";   // a folder name with '=' in it
+  fs::create_directories(eq);
+  fs::create_directories(root / "c");
+  const auto writeCar = [](const fs::path& f) {
+    std::ofstream o(f);
+    o << "$aseanimgrabinit\n$aseanimgrab anims/x.xsi -enum BOTH_STAND1\n$aseanimgrabfinalize\n";
+  };
+  const fs::path A = eq / "a.car", B = root / "c" / "b.car", C = root / "c" / "c.car";
+  writeCar(A); writeCar(B); writeCar(C);
+
+  {
+    g2::gui::App app{g2::gui::Platform{}};
+    while (!app.documents().empty()) app.closeDocument(0);
+    app.openCar(A.string());
+    app.openCar(B.string());
+    app.openCar(C.string());
+    app.documents()[0].outputDir = (root / "outA").string();
+    app.documents()[1].outputDir = (root / "outB").string();
+    app.activate(1);                    // B active
+    app.closeDocument(0);               // A closed - its folder must stay known
+    app.activate(0);                    // B again (index shifted)
+  }
+  fs::remove(C, ec);                    // C is gone on the next start
+  {
+    g2::gui::App app{g2::gui::Platform{}};
+    ck(app.documents().size() == 1, "B wiederhergestellt, C fehlt auf der Platte");
+    ck(!app.documents().empty() && fs::path(app.documents()[app.activeTab()].path).filename() == "b.car",
+       "REGRESSION: der aktive Tab kommt nach Pfad zurueck");
+    app.openCar(A.string());
+    ck(app.documents().back().outputDir == (root / "outA").string(),
+       "REGRESSION: Ausgabeordner eines geschlossenen Skripts im Ordner 'a=b' bleibt erhalten");
+    while (!app.documents().empty()) app.closeDocument(0);
+  }
+
+  // Active tab by path when an earlier tab's file is gone.
+  writeCar(C);
+  {
+    g2::gui::App app{g2::gui::Platform{}};
+    while (!app.documents().empty()) app.closeDocument(0);
+    app.openCar(A.string());
+    app.openCar(B.string());
+    app.openCar(C.string());
+    app.activate(1);   // B
+  }
+  fs::remove(A, ec);   // the FIRST tab disappears
+  {
+    g2::gui::App app{g2::gui::Platform{}};
+    ck(app.documents().size() == 2 && fs::path(app.documents()[app.activeTab()].path).filename() == "b.car",
+       "REGRESSION: erster Tab fehlt -> trotzdem B aktiv (vorher C)");
+    while (!app.documents().empty()) app.closeDocument(0);
+  }
+  fs::remove_all(root, ec);
+}
+
 static void testUpdater() {
   // Versions: the example ordering from the semver 2.0 specification.
   {
@@ -386,6 +446,39 @@ static void testUpdater() {
   failCase("Ratenlimit", upd::Error::Network, [&](FakeServer& s, upd::Updater&) {
     s.pages[upd::apiUrl(upd::Channel::Stable)] = {403, "{\"message\": \"API rate limit exceeded\"}"};
   });
+  // REGRESSION: a folder without write access is not a network problem.
+  {
+    FakeServer srv;
+    setup(srv, goodSums, newExe);
+    auto net = srv.network();
+    net.download = [](const std::string&, const fs::path& dest,
+                      const std::function<bool(std::uint64_t, std::uint64_t)>&) {
+      return std::string("write:") + dest.parent_path().string();
+    };
+    upd::Updater u(net, {"1.0.0", ""}, dir / "g2c.exe");
+    u.check(upd::Channel::Stable, false);
+    u.wait();
+    u.install();
+    u.wait();
+    ck(u.status().phase == upd::Phase::Failed && u.status().error == upd::Error::Write,
+       "REGRESSION: Ordner nicht beschreibbar = Schreibfehler, nicht 'keine Verbindung'");
+  }
+  // REGRESSION: installed, "Later", check again -> not offered a second time.
+  {
+    FakeServer srv;
+    setup(srv, goodSums, newExe);
+    upd::Updater u(srv.network(), {"1.0.0", ""}, dir / "g2c.exe");
+    u.check(upd::Channel::Stable, true);
+    u.wait();
+    u.install();
+    u.wait();
+    u.dismiss();
+    const int downloads = srv.downloads;
+    u.check(upd::Channel::Stable, true);
+    u.wait();
+    ck(u.status().phase == upd::Phase::Installed && srv.downloads == downloads,
+       "REGRESSION: schon installiert -> Neustart anbieten statt erneut laden");
+  }
   failCase("Antwort kein JSON", upd::Error::BadAnswer, [&](FakeServer& s, upd::Updater&) {
     s.pages[upd::apiUrl(upd::Channel::Stable)] = {200, "<html>captive portal</html>"};
   });
@@ -1579,6 +1672,7 @@ int main(){
   }
 
   testUpdater();
+  testReviewGui();
 
   ck(!app.buildRunning(),"kein Bau aktiv");
   ck(app.logLines().size()>0,"Protokoll gefuellt");

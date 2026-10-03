@@ -46,8 +46,15 @@ App::App(Platform platform) : platform_(std::move(platform)) {
         if (openCar(t)) ++restored;
     }
     if (restored) {
-        if (savedActive_ >= 0 && savedActive_ < static_cast<int>(docs_.size()))
-            activate(savedActive_);
+        // By path: the index shifted whenever a file of an earlier tab was
+        // gone, and the wrong tab came up.
+        int want = -1;
+        for (std::size_t k = 0; k < docs_.size(); ++k)
+            if (!savedActivePath_.empty() && docs_[k].path == savedActivePath_) want = static_cast<int>(k);
+        if (want < 0 && savedActivePath_.empty() && savedActive_ >= 0 &&
+            savedActive_ < static_cast<int>(docs_.size()))
+            want = savedActive_;
+        if (want >= 0) activate(want);
         log(LogLine::Kind::Good, trf(S::LogRestored, restored));
     } else {
         log(LogLine::Kind::Info, tr(S::LogReady));
@@ -275,6 +282,9 @@ void App::saveSettings() const {
     f << "backup=" << (settings_.keepBackup ? 1 : 0) << "\n";
     f << "readframes=" << (settings_.readFrameCounts ? 1 : 0) << "\n";
     f << "dark=" << (settings_.darkMode ? 1 : 0) << "\n";
+    f << "partdetails=" << (settings_.partDetails ? 1 : 0) << "\n";
+    if (!settings_.modelViewPath.empty()) f << "modelview=" << settings_.modelViewPath << "\n";
+    for (const auto& r : recent_) f << "recent=" << r << "\n";
     f << "lang=" << settings_.language << "\n";
     f << "updates=" << (settings_.checkUpdates ? 1 : 0) << "\n";
     f << "updchannel=" << settings_.updateChannel << "\n";
@@ -292,13 +302,23 @@ void App::saveSettings() const {
 
     // Output locations per script. That way the mapping is kept even if the
     // tabs are opened differently on the next start.
-    for (const auto& d : docs_)
-        if (!d.outputDir.empty()) f << "out:" << d.path << "=" << d.outputDir << "\n";
+    // "outp=<script>|<folder>": '|' can't occur in a Windows path, '=' can -
+    // "out:C:\a=b\x.car=D:\out" was split at the wrong '='. Closed scripts keep
+    // their folder too; it used to be forgotten as soon as the tab closed.
+    {
+        std::map<std::string, std::string> outs = savedOutputs_;
+        for (const auto& d : docs_)
+            if (!d.outputDir.empty()) outs[d.path] = d.outputDir;
+        for (const auto& [script, folder] : outs)
+            if (!folder.empty()) f << "outp=" << script << "|" << folder << "\n";
+    }
 
     // Open tabs and the active one. On the next start the same state is back -
     // with twenty scripts that's the difference between "keep working" and
     // "first reopen everything".
     f << "active=" << active_ << "\n";
+    if (active_ >= 0 && active_ < static_cast<int>(docs_.size()))
+        f << "activepath=" << docs_[static_cast<std::size_t>(active_)].path << "\n";
     for (const auto& d : docs_) f << "tab=" << d.path << "\n";
 
     // Last used folder per file dialog.
@@ -345,6 +365,9 @@ void App::loadSettings() {
         }
         else if (key == "readframes") settings_.readFrameCounts = asBool();
         else if (key == "dark") settings_.darkMode = asBool();
+        else if (key == "partdetails") settings_.partDetails = asBool();
+        else if (key == "modelview") settings_.modelViewPath = val;
+        else if (key == "recent") { if (recent_.size() < 12) recent_.push_back(val); }
         else if (key == "updates") settings_.checkUpdates = asBool();
         else if (key == "updchannel") {
             const int v = std::atoi(val.c_str());
@@ -360,7 +383,12 @@ void App::loadSettings() {
         }
         // "threads" is deliberately ignored: older settings files might
         // contain a limit that is no longer supposed to exist.
-        else if (key.rfind("out:", 0) == 0) savedOutputs_[key.substr(4)] = val;
+        else if (key == "outp") {
+            const std::size_t bar = val.find('|');
+            if (bar != std::string::npos) savedOutputs_[val.substr(0, bar)] = val.substr(bar + 1);
+        }
+        else if (key.rfind("out:", 0) == 0) savedOutputs_[key.substr(4)] = val;   // older files
+        else if (key == "activepath") savedActivePath_ = val;
         else if (key == "tab") savedTabs_.push_back(val);
         else if (key.rfind("dir:", 0) == 0) lastDirs_[key.substr(4)] = val;
         else if (key == "active") { try { savedActive_ = std::stoi(val); } catch (...) {} }
@@ -432,10 +460,25 @@ bool App::openCar(const std::string& path) {
         }
     }
     log(LogLine::Kind::Good, trf(S::LogOpened, d.title.c_str(), d.script.grabs.size()));
+    addRecent(d.path);
     docs_.push_back(std::move(d));
     activate(static_cast<int>(docs_.size()) - 1);
     refreshTabTitles();
     return true;
+}
+
+void App::addRecent(const std::string& path) {
+    std::error_code ec;
+    const std::string abs = fs::absolute(path, ec).string();
+    const std::string p = ec ? path : abs;
+    const auto same = [&](const std::string& q) {
+        std::error_code e2;
+        return q == p || (fs::exists(q, e2) && fs::equivalent(q, p, e2));
+    };
+    recent_.erase(std::remove_if(recent_.begin(), recent_.end(), same), recent_.end());
+    recent_.push_front(p);
+    // Twelve, like Assimilate's list.
+    while (recent_.size() > 12) recent_.pop_back();
 }
 
 // Unique tab titles.
@@ -847,6 +890,7 @@ void App::runExport(const std::vector<std::size_t>& rows, bool withCar) {
 
 void App::drawOverwriteDialog() {
     if (!pendingExport_.active || pendingExport_.existing.empty()) return;
+    if (otherModalOpen("###overwrite")) return;
     if (!ImGui::IsPopupOpen("###overwrite")) ImGui::OpenPopup("###overwrite");
     if (!ImGui::BeginPopupModal((std::string(tr(S::Overwrite)) + "###overwrite").c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
@@ -904,8 +948,12 @@ std::size_t App::openFolder(const std::string& root) {
 }
 
 void App::closeDocument(std::size_t index) {
+    resetRowState();
     if (index >= docs_.size()) return;
     const std::string path = docs_[index].path;
+    // Its output folder outlives the tab: reopened later (or next session) it
+    // is there again. It used to be forgotten as soon as the tab closed.
+    if (!docs_[index].outputDir.empty()) savedOutputs_[path] = docs_[index].outputDir;
     // Close dialogs that refer to this script right along with it.
     if (editDocPath_ == path) {
         editOpen_ = false;
@@ -957,9 +1005,47 @@ bool App::requestQuit() {
     return false;
 }
 
+// Framespeed for several rows at once.
+void App::drawSpeedDialog() {
+    if (speedRows_.empty()) return;
+    std::size_t di = docs_.size();
+    for (std::size_t k = 0; k < docs_.size(); ++k)
+        if (docs_[k].path == speedDocPath_) di = k;
+    if (di == docs_.size()) {   // script closed in the meantime
+        speedRows_.clear();
+        return;
+    }
+    if (otherModalOpen("###speeddlg")) return;
+    if (!ImGui::IsPopupOpen("###speeddlg")) ImGui::OpenPopup("###speeddlg");
+    if (!ImGui::BeginPopupModal((std::string(tr(S::SetSpeedTitle)) + "###speeddlg").c_str(), nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    ImGui::TextUnformatted(trf(S::SetSpeedHead, speedRows_.size()).c_str());
+    ImGui::SetNextItemWidth(140 * settings_.dpiScale);
+    ImGui::InputInt("##speed", &speedValue_);
+    ImGui::TextDisabled("%s", tr(S::SetSpeedHint));
+    ImGui::Spacing();
+    const auto done = [&](std::optional<int> v) {
+        const std::size_t n = setFrameSpeed(di, speedRows_, v);
+        log(LogLine::Kind::Info, trf(S::LogSpeedSet, n));
+        speedRows_.clear();
+        ImGui::CloseCurrentPopup();
+    };
+    if (ImGui::Button(tr(S::Apply))) done(speedValue_);
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::SpeedAllFromXsi))) done(std::nullopt);
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::BtnCancel)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        speedRows_.clear();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 // Unsaved changes: save, discard or cancel.
 void App::drawCloseDialog() {
     if (pendingClose_.empty()) return;
+    if (otherModalOpen("###closedlg")) return;
     if (!ImGui::IsPopupOpen("###closedlg")) ImGui::OpenPopup("###closedlg");
     if (!ImGui::BeginPopupModal((std::string(tr(S::CloseTab)) + "###closedlg").c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
@@ -1158,10 +1244,65 @@ std::size_t App::addXsiFolder(const std::string& folder, bool toAll) {
     return addXsiFiles(files, toAll);
 }
 
+// The relative path alone is not unique: a script resolves its files next to
+// itself too, so the folder of the script is part of the key. The lookups
+// below use the folder of the script on screen.
+static std::string infoKey(const std::string& carDir, const std::string& rel) {
+    return carDir + "|" + rel;
+}
+
 int App::frameCountOf(const std::string& relPath) const {
     std::lock_guard<std::mutex> lock(frameMutex_);
-    const auto it = frameCounts_.find(relPath);
-    return it == frameCounts_.end() ? -1 : it->second;
+    const auto it = xsiInfo_.find(infoKey(frameWorkerCarDir_, relPath));
+    return it == xsiInfo_.end() ? -1 : it->second.frames;
+}
+
+int App::xsiRateOf(const std::string& relPath) const {
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    const auto it = xsiInfo_.find(infoKey(frameWorkerCarDir_, relPath));
+    if (it == xsiInfo_.end()) return -1;
+    return it->second.frames < 0 ? 0 : it->second.rate;
+}
+
+int App::effectiveSpeed(const car::GrabDirective& g) const {
+    if (g.frameSpeed) return *g.frameSpeed;
+    const int rate = xsiRateOf(g.file);
+    if (rate < 0) return 0;
+    // The same fallback as the build (car::BuildOptions::defaultFrameSpeed).
+    return rate > 0 ? rate : car::BuildOptions{}.defaultFrameSpeed;
+}
+
+std::vector<int> App::targetFrames(const Document& d) const {
+    std::vector<int> out(d.script.grabs.size(), -1);
+    int cursor = 0;
+    for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
+        const int n = frameCountOf(d.script.grabs[i].file);
+        out[i] = cursor;
+        // A missing or unread file makes every following start unknown - just
+        // like in the build, where it shifts all following sequences.
+        if (n < 0) {
+            for (std::size_t k = i + 1; k < out.size(); ++k) out[k] = -1;
+            break;
+        }
+        cursor += n;
+    }
+    return out;
+}
+
+std::size_t App::setFrameSpeed(std::size_t docIndex, const std::vector<std::size_t>& rows,
+                               std::optional<int> speed) {
+    if (docIndex >= docs_.size()) return 0;
+    Document& d = docs_[docIndex];
+    std::size_t n = 0;
+    for (const std::size_t r : rows) {
+        if (r >= d.script.grabs.size()) continue;
+        auto& g = d.script.grabs[r];
+        if (g.frameSpeed == speed) continue;
+        g.frameSpeed = speed;
+        ++n;
+    }
+    if (n) d.dirty = true;
+    return n;
 }
 
 void App::stopFrameWorker() {
@@ -1171,6 +1312,37 @@ void App::stopFrameWorker() {
     frameWorkerStop_.store(false);
 }
 
+void App::resetRowState() {
+    editCommentGrab_ = -1;
+    editCommentLine_ = -1;
+    editTrailGrab_ = -1;
+    selAnchor_ = -1;
+    rangeSelecting_ = false;
+}
+
+void App::queueOpen(std::vector<std::string> paths) {
+    pendingOpen_.insert(pendingOpen_.end(), paths.begin(), paths.end());
+}
+
+void App::openPathsNow(const std::vector<std::string>& paths) {
+    std::vector<std::string> xsi;
+    for (const std::string& p : paths) {
+        std::string lower = p;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
+            xsi.push_back(p);
+        else
+            openPath(p);
+    }
+    if (!xsi.empty()) addXsiFiles(xsi, false);
+}
+
+bool App::otherModalOpen(const char* mine) const {
+    for (const char* id : {"###closedlg", "###overwrite", "###speeddlg", "###modeldlg", "confirmdel"})
+        if (std::strcmp(id, mine) != 0 && ImGui::IsPopupOpen(id)) return true;
+    return false;
+}
+
 // Load frame counts in the background.
 //
 // The first time, every .xsi has to be read - with 1289 files that takes a
@@ -1178,25 +1350,35 @@ void App::stopFrameWorker() {
 // runs alongside and the column fills in gradually. The second time
 // everything comes from the cache and is there practically instantly.
 void App::startFrameWorker(const Document& d) {
+    // The folder of the script on screen - set even while the reader is busy
+    // with another script, so the lookups never use the wrong folder.
+    frameWorkerCarDir_ = fs::path(d.path).parent_path().string();
     if (frameWorkerRunning_.load()) return;
-    if (settings_.baseDir.empty()) return;
+    // No early exit without an asset root: the files are also found next to
+    // the .car, just like the build finds them. The dialog showed 30 where
+    // the build wrote the file's 20.
 
     // Asset root changed? Then the previous counts are no longer valid.
     // If the root was guessed wrong at first, "missing" showed everywhere -
     // and stayed that way until restart, even after it was corrected.
+    // Switching tabs keeps everything: entries are per script folder.
     if (!frameWorkerBaseDir_.empty() && frameWorkerBaseDir_ != settings_.baseDir) {
         std::lock_guard<std::mutex> lock(frameMutex_);
-        frameCounts_.clear();
+        xsiInfo_.clear();
     }
     frameWorkerBaseDir_ = settings_.baseDir;
+    const bool recheck = frameRecheck_;
+    frameRecheck_ = false;
 
     // Collect the missing ones so the thread doesn't have to access the
     // document list - it can change underneath it.
     std::vector<std::string> todo;
     {
         std::lock_guard<std::mutex> lock(frameMutex_);
+        // On a recheck all of them: the worker compares size and time and only
+        // re-reads what changed on disk.
         for (const auto& g : d.script.grabs)
-            if (!frameCounts_.count(g.file)) todo.push_back(g.file);
+            if (recheck || !xsiInfo_.count(infoKey(frameWorkerCarDir_, g.file))) todo.push_back(g.file);
     }
     if (todo.empty()) return;
 
@@ -1217,21 +1399,39 @@ void App::startFrameWorker(const Document& d) {
         std::size_t missing = 0;
         for (const auto& rel : todo) {
             if (frameWorkerStop_.load()) break;
-            int frames = -2;   // not found
+            XsiInfo info;   // frames -2 = not found
             const std::string full = car::resolveAssetPath(rel, baseDir, carDir);
+            if (!full.empty()) {
+                std::error_code sec;
+                info.size = fs::file_size(full, sec);
+                info.mtime = static_cast<long long>(fs::last_write_time(full, sec).time_since_epoch().count());
+                {
+                    std::lock_guard<std::mutex> lock(frameMutex_);
+                    const auto old = xsiInfo_.find(infoKey(carDir, rel));
+                    if (old != xsiInfo_.end() && old->second.frames >= 0 &&
+                        old->second.size == info.size && old->second.mtime == info.mtime)
+                        continue;   // unchanged since it was read
+                }
+            }
             if (!full.empty()) {
                 try {
                     const xsi::AnimFile a =
                         cache.enabled() ? cache.loadOrParse(full) : xsi::loadAnimationFile(full);
-                    frames = a.frameCount();
+                    const auto keepSize = info.size;
+                    const auto keepTime = info.mtime;
+                    info.frames = a.frameCount();
+                    info.size = keepSize;
+                    info.mtime = keepTime;
+                    // Same rule as the build: only a real SI_Scene rate counts.
+                    info.rate = (a.hasScene && a.frameRate > 0.0f) ? static_cast<int>(a.frameRate) : 0;
                 } catch (const std::exception&) {
-                    frames = -2;
+                    info = XsiInfo{};
                 }
             }
-            if (frames == -2) ++missing;
+            if (info.frames == -2) ++missing;
             {
                 std::lock_guard<std::mutex> lock(frameMutex_);
-                frameCounts_[rel] = frames;
+                xsiInfo_[infoKey(carDir, rel)] = info;
             }
         }
         if (missing == todo.size() && !todo.empty())
@@ -1255,6 +1455,7 @@ std::size_t App::assignDefaultOutputs(bool onlyEmpty) {
 // --- Reordering and deleting sequences -------------------------------------
 
 bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
+    resetRowState();
     if (docIndex >= docs_.size()) return false;
     Document& d = docs_[docIndex];
     const std::size_t n = d.script.grabs.size();
@@ -1291,6 +1492,7 @@ bool App::isRootGrab(const car::GrabDirective& g) {
 
 std::size_t App::moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
                            std::size_t before) {
+    resetRowState();
     if (docIndex >= docs_.size() || rows.empty()) return 0;
     Document& d = docs_[docIndex];
     const std::size_t n = d.script.grabs.size();
@@ -1356,6 +1558,7 @@ bool App::keepRootLast(std::size_t docIndex) {
 
 std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
                              bool keepComments) {
+    resetRowState();
     if (docIndex >= docs_.size() || rows.empty()) return 0;
     Document& d = docs_[docIndex];
 
@@ -1530,7 +1733,7 @@ bool App::writeOutput(const std::string& title, const std::string& path, const s
     }
 }
 
-void App::buildOne(const Document& d, const Settings& st) {
+void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
     if (!d.loadError.empty()) return;
     try {
         if (d.outputDir.empty())
@@ -1667,9 +1870,10 @@ void App::buildOne(const Document& d, const Settings& st) {
                 // Pass the names along: the caller enters them as messages so
                 // that clicking one jumps to the rows.
                 {
+                    // Per script path: with "Build all" every script keeps its
+                    // own list, and two tabs with the same title don't mix.
                     std::lock_guard<std::mutex> lock(dupMutex_);
-                    pendingDuplicates_ = doppelt;
-                    pendingDupDoc_ = d.title;
+                    pendingDuplicates_[d.path] = doppelt;
                 }
                 throw std::runtime_error(trf(S::BuildStoppedDup, doppelt.size()));
             }
@@ -1699,7 +1903,6 @@ void App::buildOne(const Document& d, const Settings& st) {
             outSkel.name = ms;
         }
 
-        const auto res = writeMdxa(outSkel, br.frames, wo);
 
         const fs::path outDir(d.outputDir);
         std::error_code ec;
@@ -1717,13 +1920,18 @@ void App::buildOne(const Document& d, const Settings& st) {
         // ofstreams wrote directly to the target - if the GLA was locked (game
         // or ModView open) or the disk full, the log still said "built", and
         // the old file had already been truncated to zero.
-        const fs::path gla = outDir / (stem + ".gla");
-        if (!writeOutput(d.title, gla.string(),
-                         std::string(reinterpret_cast<const char*>(res.data.data()),
-                                     res.data.size())))
-            return;
-        log(LogLine::Kind::Good, d.title + " -> " + gla.string() + " (" +
-                                     std::to_string(br.totalFrames()) + " Frames)");
+        // "Only animation.cfg": the same build, so the cfg is exactly the one a
+        // full build writes - but the GLA on disk stays as it is.
+        if (!cfgOnly) {
+            const auto res = writeMdxa(outSkel, br.frames, wo);
+            const fs::path gla = outDir / (stem + ".gla");
+            if (!writeOutput(d.title, gla.string(),
+                             std::string(reinterpret_cast<const char*>(res.data.data()),
+                                         res.data.size())))
+                return;
+            log(LogLine::Kind::Good, d.title + " -> " + gla.string() + " (" +
+                                         std::to_string(br.totalFrames()) + " Frames)");
+        }
 
         {
             std::ostringstream head;
@@ -1735,6 +1943,9 @@ void App::buildOne(const Document& d, const Settings& st) {
             // folder. For .car files, which are edited by hand, that's
             // different - the backup stays there.
             if (!writeOutput(d.title, (outDir / "animation.cfg").string(), cfg)) return;
+            if (cfgOnly)
+                log(LogLine::Kind::Good,
+                    trf(S::LogCfgWritten, (outDir / "animation.cfg").string().c_str()));
         }
         log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
 
@@ -1744,7 +1955,7 @@ void App::buildOne(const Document& d, const Settings& st) {
             lastOutputDir_ = outDir.string();
         }
 
-        if (st.writeFrames && !br.frameBlocks.empty()) {
+        if (!cfgOnly && st.writeFrames && !br.frameBlocks.empty()) {
             std::vector<FrameEntry> fe;
             for (const auto& b : br.frameBlocks) {
                 FrameEntry e;
@@ -1758,7 +1969,7 @@ void App::buildOne(const Document& d, const Settings& st) {
             writeOutput(d.title, (outDir / (stem + ".frames")).string(), writeFrames(fe));
         }
 
-        if (st.writeMesh && d.script.convert && !d.script.convert->root.empty()) {
+        if (!cfgOnly && st.writeMesh && d.script.convert && !d.script.convert->root.empty()) {
             const std::string carDir = fs::path(d.path).parent_path().string();
             std::string xsi;
             for (const char* ext : {".xsi", ".XSI"}) {
@@ -1792,10 +2003,7 @@ void App::buildOne(const Document& d, const Settings& st) {
     }
 }
 
-void App::startBuild(bool allTabs) {
-    if (job_.running.load()) return;
-    job_.join();
-
+void App::startBuild(bool allTabs, bool cfgOnly) {
     std::vector<std::size_t> which;
     if (allTabs) {
         for (std::size_t i = 0; i < docs_.size(); ++i)
@@ -1803,6 +2011,12 @@ void App::startBuild(bool allTabs) {
     } else if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
         which.push_back(static_cast<std::size_t>(active_));
     }
+    startBuildIndices(std::move(which), cfgOnly);
+}
+
+void App::startBuildIndices(std::vector<std::size_t> which, bool cfgOnly) {
+    if (job_.running.load()) return;
+    job_.join();
 
     // Save modified scripts before building - here, on the main thread.
     //
@@ -1870,14 +2084,14 @@ void App::startBuild(bool allTabs) {
 
     // Copies of the documents AND the settings, so the UI stays usable during
     // the build and nothing gets edited away underneath the worker thread.
-    job_.worker = std::thread([this, targets = std::move(targets), st = settings_] {
+    job_.worker = std::thread([this, targets = std::move(targets), st = settings_, cfgOnly] {
         for (const auto& d : targets) {
             if (job_.cancel.load()) break;
             {
                 std::lock_guard<std::mutex> lock(job_.currentMutex);
                 job_.current = d.title;
             }
-            buildOne(d, st);
+            buildOne(d, st, cfgOnly);
             job_.done.fetch_add(1);
         }
         job_.running.store(false);
@@ -1957,6 +2171,22 @@ void App::drawMenuBar() {
             saveDocument(static_cast<std::size_t>(active_));
         if (ImGui::MenuItem(withIcon(ICON_SAVE_ALL, tr(S::SaveAll)), "Ctrl+Shift+S", false, !docs_.empty()))
             saveAllDocuments();
+        if (ImGui::MenuItem(tr(S::SaveAs), nullptr, false, !docs_.empty())) {
+            const std::string p = askSaveFile("car", tr(S::SaveAs), "Carcass-Skript (*.car)\0*.car\0", "car");
+            if (!p.empty()) saveDocumentAs(static_cast<std::size_t>(active_), p);
+        }
+        ImGui::Separator();
+        if (ImGui::BeginMenu(tr(S::Recent), !recent_.empty())) {
+            std::string pick;
+            for (const auto& r : recent_) {
+                std::error_code ec;
+                if (ImGui::MenuItem(r.c_str(), nullptr, false, fs::exists(r, ec))) pick = r;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(tr(S::RecentClear))) recent_.clear();
+            ImGui::EndMenu();
+            if (!pick.empty()) openCar(pick);
+        }
         ImGui::Separator();
         if (ImGui::MenuItem(tr(S::CloseTab), "Ctrl+W", false, !docs_.empty()))
             requestClose({static_cast<std::size_t>(active_)});
@@ -1973,8 +2203,17 @@ void App::drawMenuBar() {
             startBuild(false);
         if (ImGui::MenuItem(tr(S::BuildAll), "Shift+F5", false, !docs_.empty() && !buildRunning()))
             startBuild(true);
+        if (ImGui::MenuItem(tr(S::WriteCfgOnly), nullptr, false, !docs_.empty() && !buildRunning()))
+            writeConfigOnly(false);
+        if (ImGui::MenuItem(tr(S::BuildDependents), nullptr, false, !docs_.empty() && !buildRunning()))
+            buildDependents(static_cast<std::size_t>(active_));
         ImGui::Separator();
         if (ImGui::MenuItem(tr(S::ValidateAll), "F7", false, !docs_.empty())) validateAll();
+        ImGui::Separator();
+        if (ImGui::MenuItem(tr(S::ModelSettingsMenu), nullptr, false, !docs_.empty()))
+            openModelDialog(static_cast<std::size_t>(active_));
+        if (ImGui::MenuItem(tr(S::OpenInModView), nullptr, false, !docs_.empty()))
+            openInModView(static_cast<std::size_t>(active_));
         ImGui::EndMenu();
     }
 
@@ -2004,6 +2243,7 @@ void App::drawMenuBar() {
         }
         ImGui::Separator();
         ImGui::MenuItem(withIcon(ICON_SETTINGS, tr(S::Settings)), nullptr, &showSettings_);
+        ImGui::MenuItem(tr(S::PartDetails), nullptr, &settings_.partDetails);
         ImGui::Separator();
         if (updater_ && ImGui::MenuItem(tr(S::UpdCheckNow), nullptr, false, !updater_->busy()))
             checkForUpdates(true);
@@ -2037,6 +2277,9 @@ void App::drawToolbar() {
     if (iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuildAll))) startBuild(true);
     ImGui::SameLine();
     if (iconButton(ICON_VALIDATE, kIconWarn, tr(S::BtnValidate))) validateAll();
+    ImGui::SameLine();
+    if (iconButton(ICON_SETTINGS, kIconInfo, tr(S::BtnModel)))
+        openModelDialog(static_cast<std::size_t>(active_));
     ImGui::EndDisabled();
 
     ImGui::SameLine();
@@ -2057,17 +2300,19 @@ void App::drawToolbar() {
         // Several folders at once: for a model with animations from ten
         // sources, clicking ten times is the actual work.
         const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        for (const auto& d : dirs) addXsiFolder(d, false);
+        std::size_t files = 0;
+        for (const auto& d : dirs) files += addXsiFolder(d, false);
         if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), std::size_t{0}));
+            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
     }
     ImGui::SameLine();
     if (iconButton(ICON_FOLDER, kIconAccent, tr(S::BtnAddXsiFolderAll)) &&
         (platform_.pickFolders || platform_.pickFolder)) {
         const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        for (const auto& d : dirs) addXsiFolder(d, true);
+        std::size_t files = 0;
+        for (const auto& d : dirs) files += addXsiFolder(d, true);
         if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), std::size_t{0}));
+            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
     }
     ImGui::SameLine();
     if (iconButton(ICON_ADD, kIconAccent, tr(S::BtnAddXsiAll)) && platform_.openFiles) {
@@ -2129,6 +2374,8 @@ void App::drawSettingsPanel() {
         ImGui::SameLine();
         ImGui::TextDisabled(tr(S::ChooserCount), enums_.size());
     }
+    pathRow("modelview", tr(S::ModelViewPath), settings_.modelViewPath, false,
+            "ModView (*.exe)\0*.exe\0");
 
     ImGui::Spacing();
     ImGui::TextDisabled("%s", tr(S::OutputPerScript));
@@ -2314,6 +2561,18 @@ namespace {
 constexpr ImGuiDragDropFlags kDropFlags =
     ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
 
+// Selectable with free text as its label. ImGui ends the visible label at
+// "##": a comment "// ### Walk ###" showed as "// ". Such text is drawn by
+// hand; everything else stays an ordinary label (the GUI driver finds rows
+// by it).
+bool textSelectable(const std::string& text, ImGuiSelectableFlags flags) {
+    if (text.find("##") == std::string::npos) return ImGui::Selectable(text.c_str(), false, flags);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool hit = ImGui::Selectable("##freetext", false, flags, ImVec2(0, ImGui::GetTextLineHeight()));
+    ImGui::GetWindowDrawList()->AddText(pos, ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
+    return hit;
+}
+
 bool dropBelow() {
     const float mid = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
     return ImGui::GetMousePos().y > mid;
@@ -2342,7 +2601,11 @@ bool App::rowVisible(const Document& d, std::size_t i) const {
     if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
-    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos;
+    // Split part names too, exactly like the table: rows shown only because
+    // of a part were skipped by Shift-click and drag-select.
+    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos ||
+           std::any_of(g.additional.begin(), g.additional.end(),
+                       [&](const auto& a) { return a.name.find(filter_) != std::string::npos; });
 }
 
 void App::drawSequenceTable(Document& d) {
@@ -2435,33 +2698,43 @@ void App::drawSequenceTable(Document& d) {
     // TableSetupColumn calls - otherwise ImGui reports
     // "Called TableSetupColumn() too many times", and the extra column slips
     // into a row of its own.
-    if (!ImGui::BeginTable("seqs", 8, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
+    if (!ImGui::BeginTable("seqs", 9, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
         return;
 
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn(tr(S::ColSequence), ImGuiTableColumnFlags_WidthStretch, 2.0f);
+    // Start frame in the GLA, like Assimilate's "Target".
+    ImGui::TableSetupColumn(tr(S::ColTarget), ImGuiTableColumnFlags_WidthFixed, 60);
     ImGui::TableSetupColumn(tr(S::ColFrames), ImGuiTableColumnFlags_WidthFixed, 65);
     ImGui::TableSetupColumn(tr(S::ColLoop), ImGuiTableColumnFlags_WidthFixed, 55);
     ImGui::TableSetupColumn(tr(S::ColSpeed), ImGuiTableColumnFlags_WidthFixed, 60);
-    ImGui::TableSetupColumn(tr(S::ColExtra), ImGuiTableColumnFlags_WidthFixed, 60);
-    ImGui::TableSetupColumn(tr(S::ColSource), ImGuiTableColumnFlags_WidthStretch, 3.0f);
+    // The split parts by name - Assimilate lists them next to the animation,
+    // a mere count said nothing.
+    ImGui::TableSetupColumn(tr(S::ColExtra), ImGuiTableColumnFlags_WidthStretch, 2.5f);
+    ImGui::TableSetupColumn(tr(S::ColSource), ImGuiTableColumnFlags_WidthStretch, 2.5f);
     ImGui::TableSetupColumn(tr(S::ColEnum), ImGuiTableColumnFlags_WidthFixed, 70);
     // Row comment on the far right: it's a note, not information you need
     // when skimming.
     ImGui::TableSetupColumn(tr(S::ColComment), ImGuiTableColumnFlags_WidthStretch, 1.5f);
     ImGui::TableHeadersRow();
-    if (ImGui::TableGetHoveredColumn() == 6 && ImGui::IsItemHovered())
+    if (ImGui::TableGetHoveredColumn() == 7 && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::TipEnumColumn));
+    if (ImGui::TableGetHoveredColumn() == 4 && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", tr(S::TipSpeedColumn));
 
     const std::string needle = filter_;
     const bool hasFilter = !needle.empty();
     if (d.selected.size() != d.script.grabs.size()) d.syncSelection();
+    const std::vector<int> targets = targetFrames(d);
 
     for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
         auto& g = d.script.grabs[i];
         const std::string name = g.enumName ? *g.enumName : g.derivedName();
         if (!needle.empty() && name.find(needle) == std::string::npos &&
-            g.file.find(needle) == std::string::npos)
+            g.file.find(needle) == std::string::npos &&
+            std::none_of(g.additional.begin(), g.additional.end(), [&](const auto& a) {
+                return a.name.find(needle) != std::string::npos;
+            }))
             continue;
 
         // Show comment lines above the sequence.
@@ -2517,9 +2790,8 @@ void App::drawSequenceTable(Document& d) {
             } else {
                 const std::string& c = g.commentsBefore[ci];
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
-                ImGui::Selectable(c.empty() ? " " : c.c_str(), false,
-                                  ImGuiSelectableFlags_SpanAllColumns |
-                                      ImGuiSelectableFlags_AllowDoubleClick);
+                textSelectable(c.empty() ? " " : c,
+                               ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
                 ImGui::PopStyleColor();
 
                 // Drag like a sequence.
@@ -2804,6 +3076,19 @@ void App::drawSequenceTable(Document& d) {
                 d.dirty = true;
             }
 
+            // Framespeed for every row at once - Assimilate only had it per
+            // sequence in the dialog.
+            {
+                char lbl[128];
+                std::snprintf(lbl, sizeof(lbl), tr(S::SetSpeedRows), rows.size());
+                if (ImGui::MenuItem(lbl)) {
+                    speedRows_ = rows;
+                    speedDocPath_ = d.path;
+                    const int sp = effectiveSpeed(d.script.grabs[rows.front()]);
+                    speedValue_ = sp > 0 ? sp : car::BuildOptions{}.defaultFrameSpeed;
+                }
+            }
+
             ImGui::Separator();
             if (ImGui::MenuItem(tr(S::Copy))) {
                 const std::size_t n = copyGrabs(static_cast<std::size_t>(active_), rows);
@@ -2842,6 +3127,9 @@ void App::drawSequenceTable(Document& d) {
         }
 
         ImGui::TableNextColumn();
+        if (targets[i] >= 0) ImGui::Text("%d", targets[i]);
+        else ImGui::TextDisabled("...");
+        ImGui::TableNextColumn();
         {
             const int fc = frameCountOf(g.file);
             if (fc == -1) ImGui::TextDisabled("...");
@@ -2849,13 +3137,60 @@ void App::drawSequenceTable(Document& d) {
             else ImGui::Text("%d", fc);
         }
         ImGui::TableNextColumn();
-        ImGui::Text("%d", g.loop.value_or(0));
+        // Without -loop the build writes 0, exactly as Carcass does (checked
+        // against Raven's animation.cfg) - shown greyed, because it is not in
+        // the script.
+        if (g.loop) ImGui::Text("%d", *g.loop);
+        else ImGui::TextDisabled("0");
+        if (!g.loop && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::TipLoopDefault));
         ImGui::TableNextColumn();
-        if (g.frameSpeed) ImGui::Text("%d", *g.frameSpeed);
-        else ImGui::TextDisabled("%s", tr(S::SpeedAuto));
+        {
+            // The real number, as the build writes it. Greyed when it comes
+            // from the .xsi rather than from -framespeed in the script.
+            const int sp = effectiveSpeed(g);
+            if (g.frameSpeed) ImGui::Text("%d", sp);
+            else if (sp > 0) ImGui::TextDisabled("%d", sp);
+            else ImGui::TextDisabled("...");
+            if (!g.frameSpeed && sp > 0 && ImGui::IsItemHovered()) {
+                // From the file only if the file has a rate; otherwise it is
+                // the build's default, and the tooltip used to claim the file.
+                if (xsiRateOf(g.file) > 0) ImGui::SetTooltip(tr(S::TipSpeedFromXsi), sp);
+                else ImGui::SetTooltip(tr(S::TipSpeedDefault), sp);
+            }
+        }
         ImGui::TableNextColumn();
-        if (g.additional.empty()) ImGui::TextDisabled("-");
-        else ImGui::Text("%zu", g.additional.size());
+        if (g.additional.empty()) {
+            ImGui::TextDisabled("-");
+        } else {
+            // Names, like Assimilate; with "details" also start (in the GLA),
+            // count, loop and speed of each part.
+            std::string parts;
+            for (const auto& a : g.additional) {
+                if (!parts.empty()) parts += ", ";
+                parts += a.name;
+                if (settings_.partDetails) {
+                    char det[96];
+                    const int t = targets[i] >= 0 ? targets[i] + a.targetOffset : -1;
+                    if (t >= 0)
+                        std::snprintf(det, sizeof(det), " (T:%d C:%d L:%d S:%d)", t, a.frameCount,
+                                      a.loopFrame, a.frameSpeed);
+                    else
+                        std::snprintf(det, sizeof(det), " (+%d C:%d L:%d S:%d)", a.targetOffset,
+                                      a.frameCount, a.loopFrame, a.frameSpeed);
+                    parts += det;
+                }
+            }
+            ImGui::TextUnformatted(parts.c_str());
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                for (const auto& a : g.additional) {
+                    const int t = targets[i] >= 0 ? targets[i] + a.targetOffset : -1;
+                    ImGui::Text(tr(S::TipPartLine), a.name.c_str(), t, a.frameCount, a.loopFrame,
+                                a.frameSpeed);
+                }
+                ImGui::EndTooltip();
+            }
+        }
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(g.file.c_str());
         ImGui::TableNextColumn();
@@ -2905,8 +3240,7 @@ void App::drawSequenceTable(Document& d) {
                 const std::string& tc = d.script.grabs[i].trailingComment;
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       ImVec4(0.55f, 0.55f, 0.58f, tc.empty() ? 0.45f : 0.95f));
-                ImGui::Selectable(tc.empty() ? "..." : tc.c_str(), false,
-                                  ImGuiSelectableFlags_AllowDoubleClick);
+                textSelectable(tc.empty() ? "..." : tc, ImGuiSelectableFlags_AllowDoubleClick);
                 ImGui::PopStyleColor();
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
                     editTrailGrab_ = static_cast<int>(i);
@@ -2973,8 +3307,7 @@ void App::drawSequenceTable(Document& d) {
         ImGui::PushID(static_cast<int>(ti));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
         const std::string& c = d.script.trailingComments[ti];
-        ImGui::Selectable(c.empty() ? " " : c.c_str(), false,
-                          ImGuiSelectableFlags_SpanAllColumns);
+        textSelectable(c.empty() ? " " : c, ImGuiSelectableFlags_SpanAllColumns);
         ImGui::PopStyleColor();
 
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
@@ -3664,18 +3997,28 @@ void App::drawIssues() {
     // doesn't jump anywhere.
     {
         std::lock_guard<std::mutex> lock(dupMutex_);
-        if (!pendingDuplicates_.empty() && pendingDupDoc_ == d.title) {
-            for (const auto& name : pendingDuplicates_) {
+        const auto it = pendingDuplicates_.find(d.path);
+        if (it != pendingDuplicates_.end()) {
+            // Replace the duplicate messages of an earlier attempt instead of
+            // adding a second copy (F5 twice listed every name twice).
+            auto& iss = d.validation.issues;
+            for (std::size_t k = iss.size(); k-- > 0;)
+                for (const auto& name : it->second)
+                    if (iss[k].sequence == name && iss[k].message == trf(S::DupIssue, name.c_str())) {
+                        iss.erase(iss.begin() + static_cast<long>(k));
+                        if (d.validation.errors) --d.validation.errors;
+                        break;
+                    }
+            for (const auto& name : it->second) {
                 car::Issue is;
                 is.level = car::Issue::Level::Error;
                 is.sequence = name;
                 is.message = trf(S::DupIssue, name.c_str());
-                d.validation.issues.push_back(std::move(is));
+                iss.push_back(std::move(is));
                 ++d.validation.errors;
             }
             d.validated = true;
-            pendingDuplicates_.clear();
-            pendingDupDoc_.clear();
+            pendingDuplicates_.erase(it);
         }
     }
 
@@ -3783,7 +4126,7 @@ void App::drawIssues() {
 // that doesn't exist in the game code - and that only shows up in the game,
 // as an animation that doesn't play. Assimilate does it the same way:
 // pick or delete, nothing in between.
-bool App::drawEnumChooser(const char* popupId, std::string& target) {
+bool App::drawEnumChooser(const char* popupId, std::string& target, const Document* d) {
     bool chosen = false;
     if (!ImGui::BeginPopup(popupId)) return false;
 
@@ -3794,22 +4137,63 @@ bool App::drawEnumChooser(const char* popupId, std::string& target) {
         return false;
     }
 
+    // Names this script already uses, as master or as split part. Assimilate
+    // marks them with "*" and can hide them - picking one twice gives two
+    // sequences with the same name, and the engine only uses the last.
+    std::set<std::string> used;
+    if (d)
+        for (const auto& g : d->script.grabs) {
+            used.insert(g.enumName ? *g.enumName : g.derivedName());
+            for (const auto& a : g.additional) used.insert(a.name);
+        }
+
     ImGui::SetNextItemWidth(320 * settings_.dpiScale);
     ImGui::InputTextWithHint("##ef", tr(S::ChooserFilter), enumFilter_, sizeof(enumFilter_));
     ImGui::SameLine();
     ImGui::TextDisabled(tr(S::ChooserCount), enums_.size());
 
+    // The same groups as Assimilate's picker, plus "all" and "other".
+    static const char* kPrefix[] = {"", "BOTH_", "LEGS_", "TORSO_", "FACE_", "VM_", nullptr};
+    for (int c = 0; c < 7; ++c) {
+        if (c) ImGui::SameLine();
+        const char* lbl = c == 0 ? tr(S::PickerAll) : c == 6 ? tr(S::PickerOther) : kPrefix[c];
+        if (ImGui::RadioButton(lbl, enumCategory_ == c)) enumCategory_ = c;
+    }
+    ImGui::Checkbox(tr(S::PickerHideUsed), &enumHideUsed_);
+    if (d) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", tr(S::PickerUsedHint));
+    }
+
+    const auto inCategory = [&](const std::string& e) {
+        if (enumCategory_ == 0) return true;
+        if (enumCategory_ == 6) {
+            for (int c = 1; c < 6; ++c)
+                if (e.rfind(kPrefix[c], 0) == 0) return false;
+            return true;
+        }
+        return e.rfind(kPrefix[enumCategory_], 0) == 0;
+    };
+
     const std::string needle = enumFilter_;
-    ImGui::BeginChild("elist", ImVec2(420 * settings_.dpiScale, 320 * settings_.dpiScale));
+    ImGui::BeginChild("elist", ImVec2(460 * settings_.dpiScale, 340 * settings_.dpiScale));
     std::size_t shown = 0;
     for (const auto& e : enums_.names) {
         if (e.rfind("MAX_", 0) == 0) continue;
         if (!needle.empty() && e.find(needle) == std::string::npos) continue;
+        if (!inCategory(e)) continue;
+        const bool isUsed = used.count(e) > 0;
+        if (isUsed && enumHideUsed_ && e != target) continue;
         if (++shown > 500) {
             ImGui::TextDisabled("%s", tr(S::ChooserNarrow));
             break;
         }
-        if (ImGui::Selectable(e.c_str(), e == target)) {
+        // Unused entries keep their plain name; only used ones get the "*".
+        const std::string label = (isUsed ? "* " : "") + e;
+        if (isUsed) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        const bool hit = ImGui::Selectable((label + "##" + e).c_str(), e == target);
+        if (isUsed) ImGui::PopStyleColor();
+        if (hit) {
             target = e;
             chosen = true;
             ImGui::CloseCurrentPopup();
@@ -3818,6 +4202,325 @@ bool App::drawEnumChooser(const char* popupId, std::string& target) {
     ImGui::EndChild();
     ImGui::EndPopup();
     return chosen;
+}
+
+// --- Model settings, save as, dependants, ModView ---------------------------
+
+App::ModelEdit App::modelEditOf(std::size_t docIndex) const {
+    ModelEdit e;
+    if (docIndex >= docs_.size()) return e;
+    const car::Script& s = docs_[docIndex].script;
+    // Own lines for editing, but the effective values on display: a $scale or
+    // $keepmotion from an $include is what the build uses.
+    e.head = car::modelSettingsOf(s);
+    e.head.keepMotion = s.keepMotion;
+    e.scale = s.scale.value_or(1.0);
+    if (s.convert) {
+        const auto& c = *s.convert;
+        e.haveConvert = true;
+        e.convertFromInclude = c.fromInclude >= 0;
+        e.root = c.root;
+        e.ownSkeleton = !c.makeSkel.empty();
+        e.skeleton = c.makeSkel;
+        e.haveOrigin = c.origin.has_value();
+        if (c.origin)
+            for (int k = 0; k < 3; ++k) e.origin[static_cast<std::size_t>(k)] = static_cast<float>((*c.origin)[static_cast<std::size_t>(k)]);
+        e.makeSkin = c.makeSkin;
+        for (const auto& x : c.extraArgs) {
+            std::string l = x;
+            std::transform(l.begin(), l.end(), l.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (l == "-losedupverts") e.loseDupVerts = true;
+            if (l == "-smooth") e.smooth = true;
+        }
+    }
+    return e;
+}
+
+bool App::applyModelEdit(std::size_t docIndex, const ModelEdit& e) {
+    if (docIndex >= docs_.size()) return false;
+    Document& d = docs_[docIndex];
+    const std::string before = car::writeScript(d.script);
+
+    // Unchanged against what the build sees -> leave the own lines alone. That
+    // way a value coming from an $include is not copied into this file.
+    const car::ModelSettings own = car::modelSettingsOf(d.script);
+    car::ModelSettings head = e.head;
+    if (e.scale == d.script.scale.value_or(1.0))
+        head.scale = own.scale;
+    else
+        // 1.0 is the default: no line for it, unless the script had one.
+        head.scale = (e.scale == 1.0 && !own.scale) ? std::nullopt : std::optional<double>(e.scale);
+    if (e.head.keepMotion == d.script.keepMotion) head.keepMotion = own.keepMotion;
+    car::applyModelSettings(d.script, head);
+
+    if (!e.convertFromInclude && (d.script.convert || !e.root.empty())) {
+        if (!d.script.convert) {
+            car::ConvertDirective c;
+            c.noAsk = true;
+            d.script.convert = c;
+        }
+        auto& c = *d.script.convert;
+        c.root = e.root;
+        c.makeSkel = e.ownSkeleton ? e.skeleton : std::string();
+        // The dialog edits floats. If they still equal the script's values in
+        // float precision, the script's doubles stay - otherwise OK without a
+        // change rewrote "-origin 0.1 0 24" and marked the script modified.
+        const bool sameOrigin =
+            c.origin && static_cast<float>((*c.origin)[0]) == e.origin[0] &&
+            static_cast<float>((*c.origin)[1]) == e.origin[1] && static_cast<float>((*c.origin)[2]) == e.origin[2];
+        if (!e.haveOrigin)
+            c.origin.reset();
+        else if (!sameOrigin)
+            c.origin = std::array<double, 3>{e.origin[0], e.origin[1], e.origin[2]};
+        c.makeSkin = e.makeSkin;
+        const auto setFlag = [&](const char* flag, bool on) {
+            auto it = std::find_if(c.extraArgs.begin(), c.extraArgs.end(), [&](const std::string& x) {
+                std::string l = x;
+                std::transform(l.begin(), l.end(), l.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                return l == flag;
+            });
+            if (on && it == c.extraArgs.end()) c.extraArgs.push_back(flag);
+            if (!on && it != c.extraArgs.end()) c.extraArgs.erase(it);
+        };
+        setFlag("-losedupverts", e.loseDupVerts);
+        setFlag("-smooth", e.smooth);
+    }
+
+    const bool changed = car::writeScript(d.script) != before;
+    if (changed) {
+        d.dirty = true;
+        d.validated = false;
+        log(LogLine::Kind::Info, trf(S::LogModelChanged, d.title.c_str()));
+    }
+    return changed;
+}
+
+void App::openModelDialog(std::size_t docIndex) {
+    if (docIndex >= docs_.size()) return;
+    modelEdit_ = modelEditOf(docIndex);
+    modelDocPath_ = docs_[docIndex].path;
+    modelOpen_ = true;
+    pcjInput_[0] = '\0';
+    pcjSel_ = -1;
+}
+
+void App::drawModelDialog() {
+    if (!modelOpen_) return;
+    std::size_t di = docs_.size();
+    for (std::size_t k = 0; k < docs_.size(); ++k)
+        if (docs_[k].path == modelDocPath_) di = k;
+    if (di == docs_.size()) {
+        modelOpen_ = false;
+        return;
+    }
+    ModelEdit& e = modelEdit_;
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    if (otherModalOpen("###modeldlg")) return;
+    if (!ImGui::IsPopupOpen("###modeldlg")) ImGui::OpenPopup("###modeldlg");
+    ImGui::SetNextWindowSize(ImVec2(620 * k, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal((trf(S::ModelTitle, docs_[di].title.c_str()) + "###modeldlg").c_str(),
+                                nullptr, ImGuiWindowFlags_None))
+        return;
+
+    const auto carcassOnly = [&] {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ModelCarcassOnly));
+    };
+    const auto text = [&](const char* id, std::string& v) {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "%s", v.c_str());
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText(id, buf, sizeof(buf))) v = buf;
+    };
+
+    ImGui::SeparatorText(tr(S::ModelSecConvert));
+    if (e.convertFromInclude) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", tr(S::ModelFromInclude));
+    else if (!e.haveConvert) ImGui::TextDisabled("%s", tr(S::ModelNoConvert));
+    ImGui::BeginDisabled(e.convertFromInclude);
+    ImGui::TextUnformatted(tr(S::ModelRoot));
+    text("##root", e.root);
+    ImGui::Checkbox(tr(S::ModelOwnSkel), &e.ownSkeleton);
+    ImGui::BeginDisabled(!e.ownSkeleton);
+    text("##skel", e.skeleton);
+    ImGui::EndDisabled();
+    ImGui::Checkbox(tr(S::ModelOrigin), &e.haveOrigin);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!e.haveOrigin);
+    ImGui::SetNextItemWidth(260 * k);
+    ImGui::InputFloat3("##origin", e.origin.data(), "%g");
+    ImGui::EndDisabled();
+    ImGui::Checkbox(tr(S::ModelMakeSkin), &e.makeSkin);
+    ImGui::Checkbox(tr(S::ModelLoseDup), &e.loseDupVerts);
+    carcassOnly();
+    ImGui::Checkbox(tr(S::ModelSmooth), &e.smooth);
+    carcassOnly();
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText(tr(S::ModelSecSkeleton));
+    ImGui::SetNextItemWidth(140 * k);
+    ImGui::InputDouble(tr(S::ModelScale), &e.scale, 0.0, 0.0, "%g");
+    if (e.scale <= 0.0) e.scale = 1.0;
+    ImGui::Checkbox(tr(S::ModelKeepMotion), &e.head.keepMotion);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ModelKeepMotionTip));
+
+    ImGui::SeparatorText(tr(S::ModelSecPcj));
+    ImGui::TextDisabled("%s", tr(S::ModelPcjTip));
+    if (ImGui::BeginListBox("##pcj", ImVec2(-1, 150 * k))) {
+        for (int i = 0; i < static_cast<int>(e.head.pcj.size()); ++i)
+            if (ImGui::Selectable((e.head.pcj[static_cast<std::size_t>(i)] + "##" + std::to_string(i)).c_str(),
+                                  pcjSel_ == i))
+                pcjSel_ = i;
+        ImGui::EndListBox();
+    }
+    ImGui::SetNextItemWidth(240 * k);
+    const bool enter = ImGui::InputText("##pcjnew", pcjInput_, sizeof(pcjInput_),
+                                        ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button(tr(S::ModelPcjAdd)) || enter) && pcjInput_[0]) {
+        e.head.pcj.emplace_back(pcjInput_);
+        pcjInput_[0] = '\0';
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(pcjSel_ < 0 || pcjSel_ >= static_cast<int>(e.head.pcj.size()));
+    if (ImGui::Button(tr(S::ModelPcjRemove))) {
+        e.head.pcj.erase(e.head.pcj.begin() + pcjSel_);
+        pcjSel_ = -1;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Separator();
+    if (ImGui::Button("OK")) {
+        applyModelEdit(di, e);
+        modelOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::BtnCancel)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        modelOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+bool App::saveDocumentAs(std::size_t index, const std::string& path) {
+    if (index >= docs_.size() || path.empty()) return false;
+    for (std::size_t k = 0; k < docs_.size(); ++k) {
+        std::error_code ec;
+        if (k != index && (docs_[k].path == path || (fs::exists(path, ec) && fs::equivalent(docs_[k].path, path, ec)))) {
+            log(LogLine::Kind::Bad, trf(S::SaveAsTaken, path.c_str()));
+            return false;
+        }
+    }
+    Document& d = docs_[index];
+    try {
+        writeFileChecked(path, car::writeScript(d.script));
+    } catch (const std::exception& ex) {
+        log(LogLine::Kind::Bad, trf(S::LogWriteFailed, path.c_str(), ex.what()));
+        return false;
+    }
+    // The tab now belongs to the new file. Its output folder goes with it -
+    // a copy is usually made to build somewhere else, and that folder is
+    // chosen anew; keeping the old one would overwrite the original's GLA.
+    d.path = path;
+    d.title = fs::path(path).filename().string();
+    d.dirty = false;
+    d.outputDir.clear();
+    if (editDocPath_ == path) editOpen_ = false;
+    addRecent(path);
+    refreshTabTitles();
+    log(LogLine::Kind::Good, trf(S::LogSavedAs, path.c_str()));
+    return true;
+}
+
+std::vector<std::string> App::findDependents(std::size_t docIndex) const {
+    std::vector<std::string> out;
+    if (docIndex >= docs_.size() || settings_.baseDir.empty()) return out;
+    const auto& me = docs_[docIndex];
+    if (!me.script.convert || me.script.convert->makeSkel.empty()) return out;
+    const auto norm = [](std::string p) {
+        std::replace(p.begin(), p.end(), '\\', '/');
+        std::transform(p.begin(), p.end(), p.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (p.size() > 4 && p.compare(p.size() - 4, 4, ".gla") == 0) p.resize(p.size() - 4);
+        while (!p.empty() && p.front() == '/') p.erase(p.begin());
+        return p;
+    };
+    const std::string skel = norm(me.script.convert->makeSkel);
+    for (const auto& f : car::scanDirectory(settings_.baseDir)) {
+        std::error_code ec;
+        if (fs::equivalent(f.path, me.path, ec)) continue;
+        try {
+            car::ParseOptions po;
+            po.followIncludes = false;
+            const car::Script s = car::parseFile(f.path, po);
+            for (const auto& st : s.statements)
+                if ((st.cmd == car::Cmd::AseAnimGrabGla || st.cmd == car::Cmd::AseAnimRefGla) &&
+                    !st.args.empty() && norm(st.args[0]) == skel) {
+                    out.push_back(f.path);
+                    break;
+                }
+        } catch (const std::exception&) {
+            // An unreadable script can't depend on anything we know of.
+        }
+    }
+    return out;
+}
+
+std::size_t App::buildDependents(std::size_t docIndex) {
+    if (docIndex >= docs_.size()) return 0;
+    const std::string title = docs_[docIndex].title;
+    const auto deps = findDependents(docIndex);
+    if (deps.empty()) {
+        log(LogLine::Kind::Info, trf(S::LogNoDependents, title.c_str()));
+        return 0;
+    }
+    std::vector<std::size_t> which;
+    for (const auto& p : deps) {
+        openCar(p);
+        for (std::size_t k = 0; k < docs_.size(); ++k) {
+            std::error_code ec;
+            if (fs::equivalent(docs_[k].path, p, ec) &&
+                std::find(which.begin(), which.end(), k) == which.end())
+                which.push_back(k);
+        }
+    }
+    assignDefaultOutputs(true);
+    log(LogLine::Kind::Info, trf(S::LogDependents, which.size(), title.c_str()));
+    startBuildIndices(which, false);
+    return which.size();
+}
+
+bool App::openInModView(std::size_t docIndex) {
+    if (docIndex >= docs_.size()) return false;
+    const Document& d = docs_[docIndex];
+    std::string stem = "out";
+    if (d.script.convert && !d.script.convert->makeSkel.empty()) {
+        const std::string& ms = d.script.convert->makeSkel;
+        const std::size_t sl = ms.find_last_of("/\\");
+        stem = sl == std::string::npos ? ms : ms.substr(sl + 1);
+    }
+    const fs::path glm = fs::path(d.outputDir.empty() ? "." : d.outputDir) / (stem + ".glm");
+    std::error_code ec;
+    if (d.outputDir.empty() || !fs::exists(glm, ec)) {
+        log(LogLine::Kind::Warn, trf(S::LogGlmMissing, glm.string().c_str()));
+        return false;
+    }
+    if (settings_.modelViewPath.empty() || !fs::exists(settings_.modelViewPath, ec)) {
+        const auto f = askFiles("modelview", tr(S::ModelViewPath), "ModView (*.exe)\0*.exe\0", false);
+        if (f.empty()) {
+            log(LogLine::Kind::Warn, tr(S::LogModViewMissing));
+            return false;
+        }
+        settings_.modelViewPath = f.front();
+    }
+    if (!platform_.launch || !platform_.launch(settings_.modelViewPath, glm.string())) {
+        log(LogLine::Kind::Bad, tr(S::LogModViewMissing));
+        return false;
+    }
+    log(LogLine::Kind::Info, trf(S::LogModViewStarted, glm.string().c_str()));
+    return true;
 }
 
 // Edit dialog for a sequence, opened by double-click as in Assimilate.
@@ -3889,7 +4592,7 @@ void App::drawSequenceDialog(Document& d) {
         ImGui::TextUnformatted("Enum");
 
         std::string picked = name;
-        if (drawEnumChooser("enum_master", picked)) {
+        if (drawEnumChooser("enum_master", picked, &d)) {
             g.enumName = picked;
             d.dirty = true;
             d.validated = false;
@@ -3900,16 +4603,32 @@ void App::drawSequenceDialog(Document& d) {
             else ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", tr(S::DlgNotInAnims));
         }
 
-        int loop = g.loop.value_or(-1);
+        // Without -loop the build writes 0 (as Carcass does). The dialog used
+        // to show -1 - a value that was then not built.
+        int loop = g.loop.value_or(0);
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
         if (ImGui::InputInt(tr(S::DlgLoopFrame), &loop)) { g.loop = loop; d.dirty = true; }
 
-        int speed = g.frameSpeed.value_or(0);
+        // The real speed, as it is built - not 0 for "from the file".
+        const int fileRate = xsiRateOf(g.file);
+        int speed = effectiveSpeed(g);
+        if (speed <= 0) speed = car::BuildOptions{}.defaultFrameSpeed;
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
         if (ImGui::InputInt(tr(S::DlgFrameSpeed), &speed)) {
-            if (speed == 0) g.frameSpeed.reset();
-            else g.frameSpeed = speed;
+            g.frameSpeed = speed;
             d.dirty = true;
+        }
+        ImGui::SameLine();
+        if (g.frameSpeed) {
+            const int back = fileRate > 0 ? fileRate : car::BuildOptions{}.defaultFrameSpeed;
+            char lbl[96];
+            std::snprintf(lbl, sizeof(lbl), tr(S::SpeedResetToXsi), back);
+            if (ImGui::SmallButton(lbl)) {
+                g.frameSpeed.reset();
+                d.dirty = true;
+            }
+        } else {
+            ImGui::TextDisabled("%s", fileRate > 0 ? tr(S::SpeedFromXsi) : tr(S::SpeedDefault));
         }
     }
 
@@ -3943,7 +4662,7 @@ void App::drawSequenceDialog(Document& d) {
                 enumFilter_[0] = '\0';
                 ImGui::OpenPopup("enum_add");
             }
-            if (drawEnumChooser("enum_add", ad.name)) { d.dirty = true; d.validated = false; }
+            if (drawEnumChooser("enum_add", ad.name, &d)) { d.dirty = true; d.validated = false; }
             if (!enums_.empty() && !enums_.contains(ad.name)) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "!");
@@ -4018,7 +4737,8 @@ void App::drawSequenceDialog(Document& d) {
         a.name = name + "_2";
         a.frameCount = 1;
         a.loopFrame = -1;
-        a.frameSpeed = g.frameSpeed.value_or(20);
+        // The master's real speed (it used to be a fixed 20).
+        a.frameSpeed = effectiveSpeed(g) > 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
         g.additional.push_back(std::move(a));
         d.dirty = true;
         d.validated = false;
@@ -4183,6 +4903,9 @@ void App::drawStatusBar() {
 // Previously only Ctrl+N and Ctrl+S were implemented. Ctrl+O, Ctrl+Shift+O,
 // Ctrl+W, F5, Shift+F5 and F7 were shown in the menu but did nothing.
 void App::handleShortcuts() {
+    // Not while a text field has the keyboard: Ctrl+O/Ctrl+W during an
+    // in-place edit switched the script under the field.
+    if (ImGui::GetIO().WantTextInput) return;
     // While a confirmation prompt is open, no further actions.
     if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
 
@@ -4208,6 +4931,12 @@ void App::handleShortcuts() {
 
 void App::draw() {
     if (!styleApplied_) applyStyle();
+
+    if (!pendingOpen_.empty()) {
+        std::vector<std::string> paths;
+        paths.swap(pendingOpen_);
+        openPathsNow(paths);
+    }
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -4321,7 +5050,8 @@ void App::draw() {
 
         // Confirm deletion. There is no undo, and a slipped right-click
         // shouldn't cost a sequence.
-        if (!pendingDelete_.empty()) ImGui::OpenPopup("confirmdel");
+        if (!pendingDelete_.empty() && !otherModalOpen("confirmdel") && !ImGui::IsPopupOpen("confirmdel"))
+            ImGui::OpenPopup("confirmdel");
         if (ImGui::BeginPopupModal("confirmdel", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text(tr(S::ConfirmDelete), pendingDelete_.size());
             ImGui::Spacing();
@@ -4350,6 +5080,8 @@ void App::draw() {
 
         drawCloseDialog();
         drawOverwriteDialog();
+        drawSpeedDialog();
+        drawModelDialog();
     }
     ImGui::End();
 }
