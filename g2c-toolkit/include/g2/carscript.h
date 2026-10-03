@@ -220,6 +220,27 @@ struct Script {
         const std::function<int(const std::string&)>& frameCountOf = {}) const;
 };
 
+// The header commands Assimilate's "Model" dialog edits. The convert line
+// (-makeskel, -origin, -makeskin, ...) is edited directly in Script::convert.
+struct ModelSettings {
+    std::optional<double>    scale;            // $scale; nullopt = no such line
+    bool                     keepMotion = false;
+    // $pcj entries in file order. "$flatten" is an entry like any other, as
+    // in Assimilate's PCJ list.
+    std::vector<std::string> pcj;
+
+    bool operator==(const ModelSettings&) const = default;
+};
+
+ModelSettings modelSettingsOf(const Script& s);
+
+// Writes the settings into the script's statements. Only lines whose value
+// changes are rewritten (keeping their end-of-line comment); new lines go
+// where Raven's scripts have them - after the grabs, before
+// $aseanimgrabfinalize - in the order $scale, $keepmotion, $pcj. Lines from
+// $include files are not touched.
+void applyModelSettings(Script& s, const ModelSettings& m);
+
 // Writes an animation.cfg in Carcass's format.
 std::string writeAnimationCfg(const std::vector<Sequence>& seqs, const std::string& headerComment);
 

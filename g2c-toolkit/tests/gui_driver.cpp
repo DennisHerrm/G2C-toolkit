@@ -47,6 +47,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -658,6 +659,11 @@ int main(int argc, char** argv) {
         return f;
     };
     plat.revealInExplorer = [&](const std::string& p) { revealed.push_back(p); };
+    std::vector<std::pair<std::string, std::string>> launched;
+    plat.launch = [&](const std::string& exe, const std::string& arg) {
+        launched.emplace_back(exe, arg);
+        return true;
+    };
 
     // Sample data when there is no real data: one animation with motion,
     // a second one, a root.
@@ -1636,6 +1642,401 @@ int main(int argc, char** argv) {
         for (std::size_t k = 0; same && k < a.grabs.size(); ++k)
             same = a.grabs[k].file == b.grabs[k].file && a.grabs[k].additional.size() == b.grabs[k].additional.size();
         check(same, "grosses Skript gespeichert und wieder gelesen: alle Grabs gleich");
+    });
+
+    // =====================================================================
+    // Assimilate parity. The numbers in the real-data part are what Assimilate
+    // 3.1 itself showed for the same _humanoid.car (Target / Speed per row),
+    // read off its window on 2026-10-03.
+    step("16b. Wie Assimilate: Speed, Ziel, Teile, Modell, Picker, Dateien");
+    guardedStep("Assimilate", [&] {
+        auto& st = app->settings();
+        const std::string oldBase = st.baseDir, oldEnums = st.enumPath;
+
+        // ---- A small script with its own .xsi files: runs without game data.
+        const fs::path mini = work / "mini";
+        const fs::path anims = mini / "models" / "anims";
+        fs::create_directories(anims);
+        const auto anim = [&](const char* name, int frames, int rate) {
+            std::ostringstream f;
+            f << "xsi 0350txt 0032\n";
+            if (rate > 0)
+                f << "SI_Scene s {\n  \"FRAMES\",\n  1.000000,\n  " << frames << ".000000,\n  " << rate
+                  << ".000000,\n}\n";
+            f << "SI_Model MDL-rig.root {\n  SI_Model MDL-rig.a {\n"
+              << "    SI_FCurve { \"rig.a\", \"ROTATION-Z\", \"LINEAR\", 1, 1, " << frames << ",\n";
+            for (int k = 1; k <= frames; ++k) f << "      " << k << "," << k << ",\n";
+            f << "    }\n  }\n}\n";
+            writeText(anims / name, f.str());
+        };
+        anim("walk.xsi", 10, 25);   // SI_Scene rate 25
+        anim("run.xsi", 6, 0);      // no SI_Scene: the build's default 30
+        anim("jump.xsi", 4, 12);    // rate 12, but -framespeed 7 in the script
+        writeText(mini / "mini.car",
+                  "$aseanimgrabinit\n"
+                  "$aseanimgrab models/anims/walk.xsi -enum BOTH_WALK1\n"
+                  "$aseanimgrab models/anims/run.xsi -enum BOTH_RUN1 -additional 2 3 -1 -10 BOTH_RUN1_PART\n"
+                  "$aseanimgrab models/anims/jump.xsi -framespeed 7 -enum BOTH_JUMP1\n"
+                  "$aseanimgrabfinalize\n"
+                  "$aseanimconvertmdx_noask models/root -makeskel models/mini/mini\n");
+        // A model that animates against mini's skeleton: a "dependant".
+        writeText(mini / "dep" / "dep.car",
+                  "$aseanimgrab_gla models/mini/mini\n$aseanimgrabinit\n$aseanimgrabfinalize\n");
+        writeText(mini / "anims.h",
+                  "typedef enum //# animNumber_e\n{\n\tBOTH_WALK1,\n\tBOTH_RUN1,\n\tBOTH_RUN1_PART,\n"
+                  "\tBOTH_JUMP1,\n\tBOTH_STAND1,\n\tFACE_ALERT,\n\tFACE_SMILE,\n\tLEGS_TURN1,\n"
+                  "\tTORSO_DROPWEAP1,\n\tMAX_ANIMATIONS\n} animNumber_t;\n");
+
+        st.baseDir = mini.string();
+        app->loadEnums((mini / "anims.h").string());
+        app->openCar((mini / "mini.car").string());
+        const std::size_t mi = app->documents().size() - 1;
+        // All three, not just one: the reader goes through them in sorted
+        // order, so jump.xsi is done before walk.xsi.
+        for (int k = 0; k < 600 && (app->frameCountOf("models/anims/jump.xsi") < 0 ||
+                                    app->frameCountOf("models/anims/run.xsi") < 0 ||
+                                    app->frameCountOf("models/anims/walk.xsi") < 0);
+             ++k) {
+            D.frames(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        D.frames(3);
+        auto& md = app->documents()[mi];
+        auto& G = md.script.grabs;
+
+        check(app->effectiveSpeed(G[0]) == 25, "Speed ohne -framespeed = Rate aus SI_Scene (25), nicht 0/auto");
+        check(app->effectiveSpeed(G[1]) == 30, "ohne SI_Scene: 30 wie der Bau");
+        check(app->effectiveSpeed(G[2]) == 7, "-framespeed hat Vorrang vor der Rate (12)");
+        {
+            const auto tg = app->targetFrames(md);
+            check(tg.size() == 3 && tg[0] == 0 && tg[1] == 10 && tg[2] == 16, "Ziel-Frames 0, 10, 16");
+        }
+
+        // ---- REGRESSION: the speed in the sequence dialog.
+        //
+        // The field used to show 0 ("from SI_Scene") instead of the real 25.
+        // Its "+" therefore turned 0 into 1: one click and the walk played at
+        // 1 frame per second. Now it starts at the real value.
+        D.doubleClick(D.row("BOTH_WALK1"));
+        D.frames(2);
+        check(D.windowOpen("###seqdlg"), "Sequenzdialog offen");
+        ImGui::SetWindowSize("###seqdlg", ImVec2(1200, 1150));
+        ImGui::SetWindowPos("###seqdlg", ImVec2(360, 60));
+        D.frames(3);
+        {
+            std::vector<const Item*> plus;
+            for (const Item& it : g_last)
+                if (it.window.find("seqdlg") != std::string::npos && it.label == "+") plus.push_back(&it);
+            // Loop field first, speed field second.
+            check(plus.size() >= 2, "Plus-Knoepfe fuer Loop und Speed da");
+            if (plus.size() >= 2) {
+                D.click(plus[1]);
+                D.frames(2);
+                check(G[0].frameSpeed && *G[0].frameSpeed == 26,
+                      "REGRESSION Speed-Feld: + macht aus 25 eine 26 (Fehler: aus 0 eine 1), ist " +
+                          (G[0].frameSpeed ? std::to_string(*G[0].frameSpeed) : std::string("leer")));
+            }
+        }
+        // Typed in.
+        D.click(D.find(tr(S::DlgFrameSpeed), "seqdlg"));
+        D.key(ImGuiKey_A, true);
+        D.type("12");
+        D.key(ImGuiKey_Enter);
+        check(G[0].frameSpeed && *G[0].frameSpeed == 12, "Speed eingetippt: 12");
+        {
+            char lbl[96];
+            std::snprintf(lbl, sizeof(lbl), tr(S::SpeedResetToXsi), 25);
+            D.click(D.find(lbl, "seqdlg"));
+            D.frames(2);
+            check(!G[0].frameSpeed, "\"Wie in der .xsi (25)\": -framespeed wieder entfernt");
+        }
+        // Loop: without -loop the build writes 0, the dialog used to show -1.
+        {
+            std::vector<const Item*> minus;
+            for (const Item& it : g_last)
+                if (it.window.find("seqdlg") != std::string::npos && it.label == "-") minus.push_back(&it);
+            if (!minus.empty()) {
+                D.click(minus[0]);
+                D.frames(2);
+                check(G[0].loop && *G[0].loop == -1,
+                      "REGRESSION Loop-Feld: - macht aus 0 (wie gebaut) eine -1 (Fehler: aus -1 eine -2)");
+            }
+            G[0].loop.reset();
+        }
+        D.click(D.find(tr(S::DlgClose), "###seqdlg"));
+        D.frames(2);
+
+        // ---- Speed for several rows at once (right-click).
+        D.clickRow(D.row("BOTH_WALK1"));
+        D.clickRow(D.row("BOTH_JUMP1"), false, true);
+        D.click(D.row("BOTH_RUN1"), 1);
+        D.frames(2);
+        {
+            char lbl[128];
+            std::snprintf(lbl, sizeof(lbl), tr(S::SetSpeedRows), std::size_t{3});
+            D.click(D.find(lbl));
+            D.frames(2);
+            check(D.popupOpen(), "Framespeed fuer 3 Zeilen: Dialog offen");
+            D.click(D.findIf([](const Item& i) { return i.label == "##speed"; }));
+            D.key(ImGuiKey_A, true);
+            D.type("15");
+            D.frames(1);
+            D.click(D.find(tr(S::Apply)));
+            D.frames(2);
+            check(G[0].frameSpeed == 15 && G[1].frameSpeed == 15 && G[2].frameSpeed == 15,
+                  "alle drei auf 15 gesetzt");
+            app->saveDocument(mi);
+            std::ifstream f(mini / "mini.car");
+            const std::string txt((std::istreambuf_iterator<char>(f)), {});
+            std::size_t n = 0;
+            for (std::size_t p = txt.find("-framespeed 15"); p != std::string::npos;
+                 p = txt.find("-framespeed 15", p + 1))
+                ++n;
+            check(n == 3, "gespeichert: dreimal -framespeed 15 in der .car");
+
+            D.click(D.row("BOTH_RUN1"), 1);
+            D.frames(2);
+            D.click(D.find(lbl));
+            D.frames(2);
+            D.click(D.find(tr(S::SpeedAllFromXsi)));
+            D.frames(2);
+            check(!G[0].frameSpeed && !G[1].frameSpeed && !G[2].frameSpeed,
+                  "\"Wie in der .xsi\" fuer alle: -framespeed entfernt");
+        }
+
+        // ---- Split parts shown by name, details on demand.
+        check(G[1].additional.size() == 1 && G[1].additional[0].name == "BOTH_RUN1_PART", "Teil gelesen");
+        D.menu(tr(S::MenuView), tr(S::PartDetails));
+        D.frames(2);
+        check(st.partDetails, "Ansicht > Details der Teile an");
+        D.menu(tr(S::MenuView), tr(S::PartDetails));
+        D.frames(2);
+
+        // ---- Animation picker: categories, used marks, hide used.
+        D.doubleClick(D.row("BOTH_JUMP1"));
+        D.frames(2);
+        ImGui::SetWindowSize("###seqdlg", ImVec2(1200, 1150));
+        ImGui::SetWindowPos("###seqdlg", ImVec2(360, 60));
+        D.frames(3);
+        D.click(D.findLabel(std::string(tr(S::DlgChoose)) + "##m"));
+        D.frames(2);
+        check(D.popupOpen(), "Picker offen");
+        const auto listed = [&] {
+            std::vector<std::string> v;
+            for (const Item& i : g_last)
+                // Only list entries - the scrollbar is an item without a label.
+                if (i.window.find("elist") != std::string::npos && !displayOf(i.label).empty())
+                    v.push_back(displayOf(i.label));
+            return v;
+        };
+        const auto joined = [](const std::vector<std::string>& v) {
+            std::string r;
+            for (const auto& x : v) r += (r.empty() ? "" : "|") + x;
+            return r;
+        };
+        D.click(D.find("FACE_"));
+        D.frames(2);
+        {
+            const auto v = listed();
+            check(v.size() == 2 && v[0].find("FACE_ALERT") != std::string::npos,
+                  "Kategorie FACE_: nur FACE_ALERT, FACE_SMILE (" + joined(v) + ")");
+        }
+        D.click(D.find("BOTH_"));
+        D.frames(2);
+        {
+            const auto v = listed();
+            const bool marked = std::any_of(v.begin(), v.end(), [](const std::string& s) { return s == "* BOTH_WALK1"; });
+            const bool free = std::any_of(v.begin(), v.end(), [](const std::string& s) { return s == "BOTH_STAND1"; });
+            check(v.size() == 5 && marked && free, "Kategorie BOTH_: benutzte mit *, freie ohne (" + joined(v) + ")");
+        }
+        D.click(D.find(tr(S::PickerHideUsed)));
+        D.frames(2);
+        {
+            const auto v = listed();
+            // BOTH_JUMP1 is the current one and stays; the other used ones go.
+            check(v.size() == 2, "Benutzte ausgeblendet: BOTH_STAND1 und der eigene bleiben (" + joined(v) + ")");
+        }
+        D.click(D.find(tr(S::PickerHideUsed)));
+        D.click(D.find(tr(S::PickerAll)));
+        D.escape();
+        D.frames(2);
+        D.click(D.find(tr(S::DlgClose), "###seqdlg"));
+        D.frames(2);
+
+        // ---- Model dialog.
+        D.menu(tr(S::MenuBuild), tr(S::ModelSettingsMenu));
+        D.frames(3);
+        check(D.windowOpen("###modeldlg"), "Modell-Dialog offen");
+        ImGui::SetWindowSize("###modeldlg", ImVec2(1000, 1100));
+        ImGui::SetWindowPos("###modeldlg", ImVec2(400, 80));
+        D.frames(3);
+        D.click(D.find(tr(S::ModelKeepMotion), "modeldlg"));
+        D.click(D.find(tr(S::ModelScale), "modeldlg"));
+        D.key(ImGuiKey_A, true);
+        D.type("0.5");
+        D.key(ImGuiKey_Enter);
+        D.click(D.findIf([](const Item& i) { return i.label == "##pcjnew"; }));
+        D.type("cranium");
+        D.click(D.find(tr(S::ModelPcjAdd), "modeldlg"));
+        D.click(D.find(tr(S::ModelMakeSkin), "modeldlg"));
+        D.click(D.find("OK", "modeldlg"));
+        D.frames(3);
+        check(!D.windowOpen("###modeldlg"), "Modell-Dialog mit OK geschlossen");
+        check(md.script.keepMotion && md.script.scale && *md.script.scale == 0.5 &&
+                  md.script.pcjBones == std::vector<std::string>{"cranium"} && md.script.convert->makeSkin && md.dirty,
+              "uebernommen: $keepmotion, $scale 0.5, $pcj cranium, -makeskin");
+        app->saveDocument(mi);
+        {
+            const auto back = g2::car::parseFile((mini / "mini.car").string());
+            check(back.keepMotion && back.scale == 0.5 && back.pcjBones.size() == 1 && back.convert->makeSkin,
+                  "gespeichert und wieder gelesen");
+        }
+        D.menu(tr(S::MenuBuild), tr(S::ModelSettingsMenu));
+        D.frames(3);
+        ImGui::SetWindowSize("###modeldlg", ImVec2(1000, 1100));
+        D.frames(2);
+        D.click(D.find(tr(S::ModelKeepMotion), "modeldlg"));
+        D.click(D.find(tr(S::BtnCancel), "modeldlg"));
+        D.frames(2);
+        check(md.script.keepMotion && !md.dirty, "Abbrechen aendert nichts");
+
+        // ---- Dependent models.
+        {
+            const auto deps = app->findDependents(mi);
+            check(deps.size() == 1 && fs::path(deps[0]).filename() == "dep.car",
+                  "abhaengiges Modell gefunden ($aseanimgrab_gla)");
+        }
+
+        // ---- ModView with the built .glm.
+        md.outputDir = (mini / "out").string();
+        writeText(mini / "out" / "mini.glm", "x");
+        writeText(mini / "ModView.exe", "x");
+        st.modelViewPath = (mini / "ModView.exe").string();
+        launched.clear();
+        D.menu(tr(S::MenuBuild), tr(S::OpenInModView));
+        D.frames(2);
+        check(launched.size() == 1 && launched[0].second.find("mini.glm") != std::string::npos,
+              "ModView mit der .glm gestartet");
+
+        // ---- Save as and recent files.
+        nextFiles.push_back({(mini / "kopie.car").string()});
+        D.menu(tr(S::MenuFile), tr(S::SaveAs));
+        D.frames(2);
+        check(fs::exists(mini / "kopie.car") && fs::path(md.path).filename() == "kopie.car",
+              "Speichern unter: Tab gehoert jetzt zu kopie.car");
+        check(!app->recentFiles().empty() && fs::path(app->recentFiles().front()).filename() == "kopie.car",
+              "zuletzt geoeffnet: kopie.car oben");
+
+        st.baseDir = oldBase;
+        if (!oldEnums.empty()) app->loadEnums(oldEnums);
+
+        // ---- Real data: the same numbers Assimilate shows, and the round trip
+        // dialog -> .car -> animation.cfg.
+        if (!real || bigCar.empty()) return;
+        std::size_t bi = app->documents().size();
+        for (std::size_t k = 0; k < app->documents().size(); ++k)
+            if (fs::path(app->documents()[k].path).parent_path().filename() == "big") bi = k;
+        check(bi < app->documents().size(), "grosses Skript offen");
+        if (bi >= app->documents().size()) return;
+        app->activate(static_cast<int>(bi));
+        for (int k = 0; k < 6000; ++k) {
+            D.frames(1);
+            const auto tg = app->targetFrames(app->documents()[bi]);
+            if (!tg.empty() && tg.back() >= 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        auto& bd = app->documents()[bi];
+        const auto tg = app->targetFrames(bd);
+        const auto idx = [&](const std::string& n) -> std::size_t {
+            for (std::size_t k = 0; k < bd.script.grabs.size(); ++k) {
+                const auto& g = bd.script.grabs[k];
+                if ((g.enumName ? *g.enumName : g.derivedName()) == n) return k;
+            }
+            return bd.script.grabs.size();
+        };
+        struct Row { const char* name; int target; int speed; };
+        const Row expect[] = {{"FACE_ALERT", 0, 1},       {"FACE_TALK1", 10, 5},       {"BOTH_A1_BL_TR", 18, 30},
+                              {"BOTH_A1_SPECIAL", 30, 20}, {"BOTH_A1_TR_BL", 93, 20},  {"BOTH_A2_BL_TR", 120, 50},
+                              {"BOTH_A2_SPECIAL", 149, 20}, {"BOTH_A2_STABBACK1", 205, 30},
+                              {"BOTH_A3_SPECIAL", 352, 20}, {"BOTH_A3_T__B_", 424, 40}};
+        int same = 0;
+        for (const auto& r : expect) {
+            const std::size_t k = idx(r.name);
+            const bool ok = k < bd.script.grabs.size() && tg[k] == r.target &&
+                            app->effectiveSpeed(bd.script.grabs[k]) == r.speed;
+            if (!ok)
+                out("    %s: g2c Ziel %d Speed %d, Assimilate Ziel %d Speed %d\n", r.name,
+                    k < tg.size() ? tg[k] : -9, k < bd.script.grabs.size() ? app->effectiveSpeed(bd.script.grabs[k]) : -9,
+                    r.target, r.speed);
+            same += ok;
+        }
+        check(same == 10, "Ziel und Speed wie in Assimilate: " + std::to_string(same) + " von 10 Zeilen");
+        {
+            const std::size_t k = idx("BOTH_A1_BL_TR");
+            const auto& a = bd.script.grabs[k].additional;
+            check(a.size() == 2 && tg[k] + a[0].targetOffset == 18 && a[0].frameSpeed == -10 &&
+                      tg[k] + a[1].targetOffset == 23 && a[1].frameSpeed == 30,
+                  "Teile wie Assimilate: BOTH_B1_BL___ T:18 S:-10, BOTH_D1_TR___ T:23 S:30");
+        }
+
+        // Round trip: new speed via the dialog, then build. It has to arrive in
+        // the .car AND in animation.cfg.
+        const std::size_t sk = idx("BOTH_A1_SPECIAL");
+        bd.outputDir = (work / "big" / "out").string();
+        D.doubleClick(D.row("BOTH_A1_SPECIAL"));
+        D.frames(2);
+        ImGui::SetWindowSize("###seqdlg", ImVec2(1200, 1150));
+        ImGui::SetWindowPos("###seqdlg", ImVec2(360, 60));
+        D.frames(3);
+        D.click(D.find(tr(S::DlgFrameSpeed), "seqdlg"));
+        D.key(ImGuiKey_A, true);
+        D.type("33");
+        D.key(ImGuiKey_Enter);
+        D.click(D.find(tr(S::DlgClose), "###seqdlg"));
+        D.frames(2);
+        check(bd.script.grabs[sk].frameSpeed == 33, "BOTH_A1_SPECIAL im Dialog auf 33");
+
+        const auto cfgSpeed = [&](const std::string& text, const char* name) {
+            std::istringstream is(text);
+            std::string line;
+            while (std::getline(is, line)) {
+                std::istringstream ls(line);
+                std::string n;
+                int t = 0, c = 0, l = 0, s = 0;
+                if (ls >> n >> t >> c >> l >> s && n == name) return s;
+            }
+            return -999;
+        };
+        const auto readAll = [](const fs::path& p) {
+            std::ifstream f(p, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(f)), {});
+        };
+        const fs::path outDir = work / "big" / "out";
+        std::error_code ec;
+        fs::remove_all(outDir, ec);
+        D.menu(tr(S::MenuBuild), tr(S::WriteCfgOnly));
+        D.waitBuild(600.0);
+        const std::string cfgOnly = readAll(outDir / "animation.cfg");
+        check(cfgSpeed(cfgOnly, "BOTH_A1_SPECIAL") == 33, "Nur animation.cfg: BOTH_A1_SPECIAL mit Speed 33");
+        check(cfgSpeed(cfgOnly, "BOTH_A3_T__B_") == 40 && cfgSpeed(cfgOnly, "FACE_TALK1") == 5,
+              "uebrige Zeilen unveraendert (40, 5)");
+        bool anyGla = false;
+        for (const auto& e : fs::directory_iterator(outDir, ec))
+            if (e.path().extension() == ".gla") anyGla = true;
+        check(!anyGla, "Nur animation.cfg: keine GLA geschrieben");
+        {
+            const std::string car = readAll(bd.path);
+            check(car.find("both_a1_special.xsi -loop -1 -framespeed 33") != std::string::npos,
+                  ".car vor dem Bauen gespeichert, mit -framespeed 33");
+        }
+        D.menu(tr(S::MenuBuild), tr(S::BuildCurrent));
+        D.waitBuild(600.0);
+        const std::string cfgFull = readAll(outDir / "animation.cfg");
+        check(!cfgFull.empty() && cfgFull == cfgOnly, "voller Bau schreibt dieselbe animation.cfg wie 'Nur animation.cfg'");
+        bool gla = false;
+        for (const auto& e : fs::directory_iterator(outDir, ec))
+            if (e.path().extension() == ".gla") gla = true;
+        check(gla, "voller Bau: GLA geschrieben");
     });
 
     // =====================================================================
