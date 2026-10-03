@@ -697,6 +697,7 @@ int main(){
     g2::gui::Platform pN;
     g2::gui::App aN(std::move(pN));
     aN.settings().baseDir = xd.string();
+    ck(g2::gui::Settings{}.onlyNewXsi,"Nur neue XSI ist von Haus aus an");
     aN.settings().onlyNewXsi = true;
     aN.openCar((rc/"m.car").string());
     const auto gm = [&]() -> const g2::gui::Document& {

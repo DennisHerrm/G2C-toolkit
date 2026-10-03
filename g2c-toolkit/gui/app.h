@@ -134,8 +134,11 @@ struct Settings {
     int  frameStep = 1;
 
     // Adding .xsi (files, folders, drag and drop) skips every file the script
-    // already grabs - pick the whole folder, only the new ones go in.
-    bool onlyNewXsi = false;
+    // already grabs - pick the whole folder, only the new ones go in. On by
+    // default: the same file twice from adding is practically always a
+    // mistake (deliberate duplicates with another frame range come from
+    // copy/paste or the sequence dialog, which this does not touch).
+    bool onlyNewXsi = true;
 
     // Create a .car.bak on the first save.
     //
