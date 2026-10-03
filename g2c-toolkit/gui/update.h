@@ -218,6 +218,7 @@ private:
     BuildInfo             build_;
     std::filesystem::path exe_;
     bool                  justUpdated_ = false;
+    std::string           installedId_;   // tag|commit installed in this session
 
     mutable std::mutex         mutex_;
     Status                     status_;

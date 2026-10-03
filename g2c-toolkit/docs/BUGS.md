@@ -202,3 +202,75 @@ Alle behoben; die Tests dazu stehen in `tests/`.
 | GUI | Loop ohne `-loop` im Dialog als -1 | gebaut wird 0 (wie Carcass, geprueft an Ravens animation.cfg); "-" machte -2 daraus |
 | GUI | Split-Teile (`-additional`) nur als Anzahl | Namen jetzt in der Tabelle, Details (Ziel, Frames, Loop, Speed) per Ansicht-Menue, wie Assimilate |
 | Bauen (CMake) | `-DG2C_VERSION=v1.2.0` ungequotet aus PowerShell | PowerShell teilt am Punkt, die Exe hiess "1". Jetzt Abbruch mit Hinweis; Workflow quotet |
+
+## Code-Review Oktober 2026
+
+Fuenf Pruefer haben den Code nach Bereichen durchsucht (Skript und Bau,
+Binaerformate, dotXSI, Oberflaeche, Updater und Kommandozeile). Jeder Fund
+wurde am Code und, wo moeglich, an den echten Daten nachgeprueft. Fuer jeden
+behobenen gibt es einen Regressionstest (`REGRESSION` in der Ausgabe); gegen
+den alten Code laufen gelassen schlagen sie fehl - 30 in den Unit-Tests (der
+Block mit kaputten GLA-Koepfen haengt dort sogar), 6 von 6 an der
+Kommandozeile.
+
+Der _humanoid baut nach allen Aenderungen weiter bitgleich, alle 45 .car-Dateien
+kommen beim Speichern byte-gleich zurueck.
+
+| Bereich | Fehler | Folge |
+|---|---|---|
+| Skript | alles hinter `$exit` | beim Speichern geloescht |
+| Skript | Leerzeilen ohne Kommentar, eingerueckte Kommentare, reine LF-Dateien | verloren bzw. jede Zeile auf CRLF umgeschrieben |
+| Skript | Kommentar ueber `$aseanimgrabfinalize` hinter `$scale`/`$pcj` | sprang hinter die letzte Animation |
+| Skript | zwei `$aseanimconvertmdx`-Zeilen | die erste ging verloren |
+| Skript | Zeile zwischen zwei Grabs | wanderte hinter den letzten Grab |
+| Skript | `//` mitten in einem Pfad | als Kommentar genommen, landete in animation.cfg und wuchs bei jeder Bearbeitung |
+| Skript | `-loop nan`, `1e10`, `inf` | INT_MIN in animation.cfg |
+| Modell-Dialog | `$pcj`/`$scale`/`$keepmotion` aus `$include` | ins Hauptskript kopiert; Kommentar ueber geloeschter Zeile verschwand |
+| Pruefen | doppelter Name | zweimal gemeldet, Fehlerzahl doppelt |
+| Bauen | `-additional` ausserhalb der Datei | ohne Warnung in die animation.cfg |
+| GLA | skalierte oder gespiegelte Bone-Matrix | falscher Winkel (0.64 * 90 Grad -> 76), Nullskalierung -> 180 Grad |
+| GLA | Translation zwischen -512 und -511 | um bis zu 1 verschoben |
+| GLA lesen | riesige Bone-Anzahl, Parent-Kreis | 200 GB Anforderung bzw. still Nullmatrizen |
+| Diff | negativer Startframe in der cfg | Lesen vor der Frametabelle |
+| Cache | Datei waehrend des Lesens geaendert | halbe Animation dauerhaft im Cache |
+| dotXSI | Kurven mit mehreren Werten pro Key (CUBIC) | Tangenten als Keys gelesen |
+| dotXSI | `CONSTANT` mit Luecken | linear statt gestuft (in keiner der 2729 Dateien hier) |
+| dotXSI | abgeschnittene Kurve, NaN-Wert | Bone still in Ruhepose |
+| dotXSI | Keys kuerzer als SI_Scene | eingefrorene Frames ohne Warnung |
+| dotXSI | SI_Scene mit Milliarden Frames | Terabyte-Anforderung |
+| dotXSI | BOM am Dateianfang | abgelehnt |
+| Mesh | mehrere TriangleLists, COLOR-Block, kurzer Indexblock | Dreiecke fehlten, falsche UVs, Lesen hinter dem Ende |
+| Mesh | Gewichte auf Bones ausserhalb des Skeletts, ungueltiger Index | still verworfen bzw. Vertex im Ursprung - jetzt Warnung |
+| Mesh | mehr als 1000 Vertices pro Surface | Spiel laedt das Modell nicht - jetzt Warnung |
+| GUI | Datei von zweitem g2c waehrend offenem Dialog | Schreiben in freigegebenen Speicher |
+| GUI | Kommentar-Bearbeitung beim Tabwechsel | landete im anderen Skript |
+| GUI | zwei Dialoge gleichzeitig (z. B. Fenster schliessen bei offenem Framespeed-Dialog) | beide unsichtbar, nichts klickbar |
+| GUI | Ausgabeordner geschlossener Skripte, Pfade mit `=` | vergessen |
+| GUI | aktiver Tab beim Start, wenn eine fruehere Datei fehlt | falscher Tab |
+| GUI | Doppelnamen vom Bauen | beim zweiten Bauen doppelt, bei gleichem Titel im falschen Tab |
+| GUI | Framezahlen | ohne Assetwurzel nie gelesen; nach Neu-Export veraltet; Tabwechsel las alles neu |
+| GUI | Umschalt-Auswahl | Anker aus anderem Tab; Filter auf Teilnamen uebersprungen |
+| GUI | Kommentar mit `##` | nur bis zum `##` angezeigt |
+| GUI | Monitor mit anderer Skalierung | Schrift und Abstaende blieben |
+| Updater | Ruecknahme beim Austausch scheitert auch | geprueftes neues Exe geloescht, keines mehr da |
+| Updater | nach "Spaeter" erneut gesucht | dasselbe Update noch einmal geladen, dann Fehler |
+| Updater | Ordner nicht beschreibbar | als "keine Verbindung" gemeldet |
+| Updater | Test-Umleitung per Umgebungsvariable | auch auf fremde Server - jetzt nur 127.0.0.1/localhost |
+| CLI | neue GLA neben der Referenz | deren animation.cfg ohne Sicherung ersetzt |
+| CLI | `export` | ueberschrieb .car und .xsi ohne Rueckfrage - jetzt nur mit `-force` |
+| CLI | `-threads -1` | "bad allocation" erst nach dem ganzen Bau |
+| CLI | `export -only BOTH_RUN1` | exportierte auch BOTH_RUN1_* (11 statt 1) |
+
+Bewusst nicht geaendert:
+
+- **Translation der Wurzel im exportierten Bind-Pose-Block bei Skalierung**: ohne
+  eigenen Carcass-Versuch mit verschobener Wurzel nicht sicher zu entscheiden;
+  `model_root` liegt bei JKA im Ursprung.
+- **Bone-Namen mit Punkt/Leerzeichen, gespiegelte Bind-Posen beim Export**:
+  kommen bei JKA-Skeletten nicht vor; Umbenennen wuerde die Zuordnung brechen.
+- **Stromausfall direkt nach dem Ersetzen einer Datei**: das Schreiben ueber
+  Nebendatei und Umbenennen schuetzt vor Abbruch und Absturz, nicht vor
+  Stromausfall (dafuer fehlt ein Flush auf die Platte).
+- **GLA und animation.cfg an der Kommandozeile** sind zwei getrennte Schreibvorgaenge.
+- **g2c-cli.exe**, deren Austausch beim Update scheitert, bleibt bis zum naechsten
+  Release alt; das Update meldet es.

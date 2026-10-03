@@ -651,8 +651,11 @@ int main(int argc, char** argv) {
         nextFiles.erase(nextFiles.begin());
         return f;
     };
+    // Runs while the "dialog" is open - for things that happen meanwhile.
+    std::function<void()> onPickFolder;
     plat.pickFolder = [&](const char* title, const std::string&) {
         dialogTitles.emplace_back(title ? title : "");
+        if (onPickFolder) onPickFolder();
         if (nextFolder.empty()) return std::string();
         auto f = nextFolder.front();
         nextFolder.erase(nextFolder.begin());
@@ -1693,12 +1696,14 @@ int main(int argc, char** argv) {
         const std::size_t mi = app->documents().size() - 1;
         // All three, not just one: the reader goes through them in sorted
         // order, so jump.xsi is done before walk.xsi.
-        for (int k = 0; k < 600 && (app->frameCountOf("models/anims/jump.xsi") < 0 ||
+        // Up to a minute: with real data the reader may still be busy with the
+        // 1854 files of the big script from the step before.
+        for (int k = 0; k < 6000 && (app->frameCountOf("models/anims/jump.xsi") < 0 ||
                                     app->frameCountOf("models/anims/run.xsi") < 0 ||
                                     app->frameCountOf("models/anims/walk.xsi") < 0);
              ++k) {
             D.frames(1);
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         D.frames(3);
         auto& md = app->documents()[mi];
@@ -2037,6 +2042,107 @@ int main(int argc, char** argv) {
         for (const auto& e : fs::directory_iterator(outDir, ec))
             if (e.path().extension() == ".gla") gla = true;
         check(gla, "voller Bau: GLA geschrieben");
+    });
+
+    // =====================================================================
+    // Regression tests for the GUI findings of the code review of 2026-10-03.
+    step("16c. Code-Review: Regressionen der Oberflaeche");
+    guardedStep("Review", [&] {
+        const fs::path rv = work / "review";
+        fs::create_directories(rv / "a");
+        fs::create_directories(rv / "b");
+        writeText(rv / "a" / "ra.car",
+                  "$aseanimgrabinit\n// Kommentar A\n$aseanimgrab anims/x.xsi -enum BOTH_RA\n"
+                  "// ### Walk ###\n$aseanimgrab anims/y.xsi -enum BOTH_RA2\n$aseanimgrabfinalize\n");
+        writeText(rv / "b" / "rb.car",
+                  "$aseanimgrabinit\n// Kommentar B\n$aseanimgrab anims/x.xsi -enum BOTH_RB\n$aseanimgrabfinalize\n");
+        writeText(rv / "b" / "rc.car", "$aseanimgrabinit\n$aseanimgrab anims/z.xsi -enum BOTH_RC\n$aseanimgrabfinalize\n");
+        const auto indexOf = [&](const std::string& file) {
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (fs::path(app->documents()[k].path).filename() == file) return static_cast<int>(k);
+            return -1;
+        };
+        const auto shown = [](const char* name) {
+            ImGuiWindow* w = ImGui::FindWindowByName(name);
+            return w && w->Active && !w->Hidden;
+        };
+        app->openCar((rv / "a" / "ra.car").string());
+        app->openCar((rv / "b" / "rb.car").string());
+        D.frames(3);
+
+        // --- An in-place comment edit must not end up in another script.
+        app->activate(indexOf("ra.car"));
+        D.frames(3);
+        D.doubleClick(D.findIf([](const Item& i) { return displayOf(i.label) == "// Kommentar A"; }));
+        D.frames(2);
+        D.key(ImGuiKey_A, true);
+        D.type("// XYZ");
+        app->activate(indexOf("rb.car"));
+        D.frames(3);
+        D.key(ImGuiKey_Enter);
+        D.frames(2);
+        {
+            const auto& b = app->documents()[static_cast<std::size_t>(indexOf("rb.car"))];
+            check(b.script.grabs[0].commentsBefore.size() == 1 && b.script.grabs[0].commentsBefore[0] == "// Kommentar B" &&
+                      !b.dirty,
+                  "REGRESSION: Bearbeitung aus Skript A landet nicht in Skript B");
+        }
+
+        // --- Comment text with "##" stays visible.
+        app->activate(indexOf("ra.car"));
+        D.frames(3);
+        check(D.findIf([](const Item& i) { return i.label == "##freetext"; }) != nullptr,
+              "REGRESSION: Kommentar '// ### Walk ###' wird ganz gezeichnet (vorher nur '// ')");
+
+        // --- Two modals: the second waits instead of both vanishing.
+        auto& ra = app->documents()[static_cast<std::size_t>(indexOf("ra.car"))];
+        ra.dirty = true;
+        D.click(D.row("BOTH_RA"), 1);
+        D.frames(2);
+        {
+            char lbl[128];
+            std::snprintf(lbl, sizeof(lbl), tr(S::SetSpeedRows), std::size_t{1});
+            D.click(D.find(lbl));
+        }
+        D.frames(3);
+        check(shown("###speeddlg"), "Framespeed-Dialog sichtbar");
+        app->requestQuit();   // the window close button meanwhile
+        D.frames(4);
+        check(shown("###speeddlg") && !shown("###closedlg"),
+              "REGRESSION: Schliessen-Frage wartet, Framespeed-Dialog bleibt sichtbar (vorher beide unsichtbar)");
+        D.click(D.find(tr(S::BtnCancel), "speeddlg"));
+        D.frames(4);
+        check(shown("###closedlg"), "danach erscheint die Schliessen-Frage");
+        D.click(D.find(tr(S::No), "closedlg"));
+        D.frames(3);
+        check(!app->quitApproved() && !shown("###closedlg"), "Nein: g2c bleibt offen");
+        ra.dirty = false;
+
+        // --- A file handed over while the folder dialog is open (a second
+        // g2c instance sends WM_COPYDATA during the modal dialog).
+        onPickFolder = [&] { app->queueOpen({(rv / "b" / "rc.car").string()}); };
+        nextFolder.push_back((rv / "out").string());
+        const std::size_t before = app->documents().size();
+        D.click(D.findEnds(tr(S::ChooseFolder)));
+        D.frames(1);
+        onPickFolder = nullptr;
+        {
+            const int ia = indexOf("ra.car");
+            check(ia >= 0 && app->documents()[static_cast<std::size_t>(ia)].outputDir == (rv / "out").string(),
+                  "REGRESSION: Ausgabeordner landet im richtigen Skript, kein Schreiben in freigegebenen Speicher");
+        }
+        D.frames(3);
+        check(app->documents().size() == before + 1 && indexOf("rc.car") >= 0,
+              "weitergereichte Datei wird im naechsten Bild geoeffnet");
+
+        for (const char* f : {"ra.car", "rb.car", "rc.car"}) {
+            const int k = indexOf(f);
+            if (k >= 0) {
+                app->documents()[static_cast<std::size_t>(k)].dirty = false;
+                app->closeDocument(static_cast<std::size_t>(k));
+            }
+        }
+        D.frames(2);
     });
 
     // =====================================================================

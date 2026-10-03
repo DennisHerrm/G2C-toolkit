@@ -145,6 +145,7 @@ enum class S {
     ModelKeepMotion, ModelKeepMotionTip, ModelSecPcj, ModelPcjTip, ModelPcjAdd, ModelPcjRemove,
     LogNoDependents, LogDependents, LogGlmMissing, LogModViewMissing, LogModViewStarted,
     PickerAll, PickerOther, PickerHideUsed, PickerUsedHint,
+    TipSpeedDefault,
 
     Count
 };

@@ -899,6 +899,10 @@ constexpr Entry kTable[] = {
     {S::PickerHideUsed, "Benutzte ausblenden", "Filter out used", "隐藏已使用", "使用済みを隠す"},
     {S::PickerUsedHint, "* = in diesem Skript schon benutzt", "* = already used in this script",
      "* = 本脚本中已使用", "* = このスクリプトで使用済み"},
+    {S::TipSpeedDefault, "%d ist der Standardwert - die .xsi-Datei hat keine Rate (SI_Scene).",
+     "%d is the default - the .xsi file has no rate (SI_Scene).",
+     "%d 为默认值——.xsi 文件中没有帧率 (SI_Scene)。",
+     "%d は既定値です - .xsi ファイルにレート (SI_Scene) がありません。"},
 };
 
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(S::Count),

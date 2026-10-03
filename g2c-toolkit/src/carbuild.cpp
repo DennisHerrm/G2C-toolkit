@@ -45,7 +45,10 @@ AutoPaths guessPaths(const Script& script, const std::string& carPath) {
     // Walk upwards from the .car until a "models" folder shows up.
     fs::path dir = fs::path(carPath).parent_path();
     for (int depth = 0; depth < 16 && !dir.empty(); ++depth) {
-        if (dir.filename() == "models") {
+        std::string leaf = dir.filename().string();
+        std::transform(leaf.begin(), leaf.end(), leaf.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (leaf == "models") {   // "Models" is the same folder on Windows
             out.baseDir = dir.parent_path().string();
             break;
         }
@@ -343,6 +346,15 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         }
 
         for (const auto& a : g.additional) {
+            // A part outside its file reaches into the neighbouring sequence.
+            // Only the validation used to check this, and only with frame
+            // counts switched on; the build wrote it without a word.
+            if (a.targetOffset < 0 || a.frameCount <= 0 ||
+                static_cast<long long>(a.targetOffset) + a.frameCount > L.frameCount)
+                res.warnings.push_back(g.file + ": -additional " + a.name + " (Start " +
+                                       std::to_string(a.targetOffset) + ", " +
+                                       std::to_string(a.frameCount) + " Frames) liegt ausserhalb der " +
+                                       std::to_string(L.frameCount) + " Frames der Datei");
             Sequence x;
             x.name = a.name;
             x.targetFrame = cursor + a.targetOffset;

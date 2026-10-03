@@ -147,6 +147,9 @@ std::optional<xsi::AnimFile> AnimCache::load(const std::string& sourcePath) {
     a.hasScene = r.u32() != 0;
     a.sceneFirst = r.i32();
     a.sceneLast = r.i32();
+    a.keyFirst = r.i32();
+    a.keyLast = r.i32();
+    a.haveKeys = r.u32() != 0;
 
     const std::uint32_t nodeCount = r.u32();
     if (!r.ok() || nodeCount > (1u << 20)) return std::nullopt;
@@ -207,6 +210,9 @@ void AnimCache::store(const std::string& sourcePath, const xsi::AnimFile& anim) 
     b.u32(anim.hasScene ? 1u : 0u);
     b.i32(anim.sceneFirst);
     b.i32(anim.sceneLast);
+    b.i32(anim.keyFirst);
+    b.i32(anim.keyLast);
+    b.u32(anim.haveKeys ? 1u : 0u);
     b.u32(static_cast<std::uint32_t>(anim.nodes.size()));
 
     const auto putStr = [&](const std::string& s) {
@@ -260,8 +266,15 @@ xsi::AnimFile AnimCache::loadOrParse(const std::string& sourcePath) {
         return std::move(*cached);
     }
     ++stats_.misses;
+    // Stamp before AND after parsing. If the file changed in between (an
+    // exporter still writing it), the parse belongs to neither version - it
+    // must not be stored under the new stamp, or every later build would get
+    // the half-written animation from the cache.
+    const SourceStamp before = stampOf(sourcePath);
     xsi::AnimFile a = xsi::loadAnimationFile(sourcePath);
-    store(sourcePath, a);
+    const SourceStamp after = stampOf(sourcePath);
+    if (before.valid && after.valid && before.size == after.size && before.mtime == after.mtime)
+        store(sourcePath, a);
     return a;
 }
 

@@ -303,9 +303,20 @@ public:
     // Select a tab from outside: sets active_ AND tells ImGui on the next draw
     // which tab to show.
     void activate(int i) {
+        // Row indices of in-place edits and the Shift anchor belong to the
+        // script they were made in - carried into another tab, an edit typed
+        // in A was committed into B.
+        if (i != active_) resetRowState();
         active_ = i;
         selectTab_ = i;
+        frameRecheck_ = true;
     }
+
+    // Files from outside (a second g2c instance, a drop on the window). They
+    // are opened at the start of the next frame, never in the middle of one:
+    // the handler can run while a file dialog is open inside drawing code, and
+    // opening a tab there reallocated the tab list under a live reference.
+    void queueOpen(std::vector<std::string> paths);
 
     // Looks for animation.cfg and .frames next to the GLA.
     //
@@ -542,6 +553,12 @@ public:
     bool fontsDirty() const { return fontsDirty_; }
     void clearFontsDirty() { fontsDirty_ = false; }
 
+    // New monitor scale: sizes and spacing are rebuilt on the next frame.
+    void setDpiScale(float k) {
+        settings_.dpiScale = k;
+        styleApplied_ = false;
+    }
+
 private:
     void drawMenuBar();
     void drawToolbar();
@@ -593,6 +610,11 @@ private:
 
     void drawCloseDialog();
     void drawSpeedDialog();
+    // Another modal is up: wait. Two modals at once each closed the other
+    // every frame, and neither ever became visible.
+    bool otherModalOpen(const char* mine) const;
+    void resetRowState();
+    void openPathsNow(const std::vector<std::string>& paths);
     void drawUpdateBanner();
     void drawUpdateSettings();
     void drawOverwriteDialog();
@@ -782,8 +804,13 @@ private:
     // thread enters the messages while drawing. The mutex protects the
     // hand-over.
     std::mutex               dupMutex_;
-    std::vector<std::string> pendingDuplicates_;
-    std::string              pendingDupDoc_;
+    // Script path -> duplicate names from its last build attempt.
+    std::map<std::string, std::vector<std::string>> pendingDuplicates_;
+    std::vector<std::string> pendingOpen_;
+    // Re-check the .xsi files of the active script (tab switch): files
+    // re-exported in the meantime showed their old length until restart.
+    bool                     frameRecheck_ = false;
+    std::string              frameWorkerCarDir_;
 
     int  issueCycleFor_ = -1;
     int  issueCycleIdx_ = 0;
@@ -822,6 +849,7 @@ private:
 
     std::vector<std::string> savedTabs_;
     int                      savedActive_ = 0;
+    std::string              savedActivePath_;   // the active tab, by path
 
     // --- Frame counts in the background -----------------------------------
     //
@@ -834,6 +862,8 @@ private:
     struct XsiInfo {
         int frames = -2;   // -2 = not found / unreadable
         int rate = 0;      // SI_Scene frame rate, 0 = none in the file
+        std::uintmax_t size = 0;     // stamp of the file that was read
+        long long      mtime = 0;
     };
     std::map<std::string, XsiInfo> xsiInfo_;   // relative path -> info
     std::atomic<bool>           frameWorkerRunning_{false};

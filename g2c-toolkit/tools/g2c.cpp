@@ -141,12 +141,24 @@ std::string sideFile(const std::string& outPath, const char* ext) {
 // replaced a GLA with 2000 sequences by one with a single sequence - including
 // animation.cfg, without asking. Rebuilding over the reference is allowed (it has
 // been read completely by then), but never again without a backup.
+// -threads N: 1..256. -1 used to become 4294967295 and failed with
+// "bad allocation" only after the whole build had run.
+unsigned threadCount(const char* text) {
+    const auto n = argInt(text, "-threads");
+    if (n < 1 || n > 256)
+        throw std::runtime_error(std::string("-threads ") + text + ": erlaubt sind 1 bis 256");
+    return static_cast<unsigned>(n);
+}
+
 void backupIfReference(const std::string& outPath, const std::string& refPath) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!fs::exists(outPath, ec) || !fs::exists(refPath, ec)) return;
+    // Only the reference has to exist. The output GLA may be new and still
+    // overwrite the reference's animation.cfg next to it - that case used to
+    // return here without a backup.
+    if (!fs::exists(refPath, ec)) return;
 
-    const bool sameFile = fs::equivalent(outPath, refPath, ec) && !ec;
+    const bool sameFile = fs::exists(outPath, ec) && fs::equivalent(outPath, refPath, ec) && !ec;
     const fs::path outDir = fs::absolute(outPath, ec).parent_path();
     const fs::path refDir = fs::absolute(refPath, ec).parent_path();
     const bool sameDir = fs::equivalent(outDir, refDir, ec) && !ec;
@@ -161,7 +173,13 @@ void backupIfReference(const std::string& outPath, const std::string& refPath) {
                                         e.message());
         std::printf("Gesichert : %s\n", bak.string().c_str());
     };
-    if (sameFile) keep(outPath);
+    if (sameFile) {
+        // Rebuilding over the reference replaces its side files as well.
+        keep(outPath);
+        keep(sideFile(outPath, ".frames"));
+        keep(sideFile(outPath, ".glm"));
+        keep(sideFile(outPath, ".skin"));
+    }
     if (sameDir) keep(cfgNextTo(outPath));
 }
 
@@ -484,7 +502,7 @@ int cmdBuild(int argc, char** argv) {
         else if (a == "-skipmissing") bo.skipMissing = true;
         else if (a == "-carcass") bo.carcassCompatible = true;
         else if (a == "-threads" && i + 1 < argc)
-            bo.threads = static_cast<unsigned>(argInt(argv[++i], "-threads"));
+            bo.threads = threadCount(argv[++i]);
         // Three separate switches. They used to share one field:
         // "-cache D:\c -clearcache" then cleared and used the folder next to
         // the .car, and D:\c stayed untouched.
@@ -903,7 +921,7 @@ int cmdValidate(int argc, char** argv, int firstOpt) {
             vo.maxEnumWarnings = static_cast<std::size_t>(-1);
         } else if (a == "-cache" && i + 1 < argc) vo.cacheDir = argv[++i];
         else if (a == "-threads" && i + 1 < argc)
-            vo.threads = static_cast<unsigned>(argInt(argv[++i], "-threads"));
+            vo.threads = threadCount(argv[++i]);
         else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "Unbekannte Option: %s\n", a.c_str());
             return 1;
@@ -999,7 +1017,7 @@ int cmdDiff(int argc, char** argv) {
             opt.toleranceRotationDeg *= m;
             opt.toleranceTranslation *= m;
         }
-        else if (a == "-threads" && i + 1 < argc) opt.threads = static_cast<unsigned>(argInt(argv[++i], "-threads"));
+        else if (a == "-threads" && i + 1 < argc) opt.threads = threadCount(argv[++i]);
         else { std::fprintf(stderr, "Unbekannte Option: %s\n", a.c_str()); return 1; }
     }
 
@@ -1344,6 +1362,7 @@ void usage() {
         "        -origin x y z / -noorigin / -scale S / -noscale\n"
         "        -nomotion          Wurzelbewegung nicht aus der GLA schaetzen\n"
         "        -keepmotion        $keepmotion ins erzeugte .car\n"
+        "        -force             vorhandene Dateien ueberschreiben\n"
         "        -makeskel <pfad>   -makeskel im erzeugten .car\n"
         "        -xsi 3.0|3.5       dotXSI-Fassung, -basepose world|local|none\n"
         "  g2c makecar <ordner> [-o <a.car>] [-root <root.xsi>] [-makeskel <pfad>]\n"
@@ -1547,6 +1566,7 @@ int cmdMakeCar(int argc, char** argv) {
 int cmdExport(int argc, char** argv) {
     const std::string glaPath = argv[2];
     std::string cfgPath, outDir = "xsi_out", only, framesPath, makeCarPath;
+    bool force = false;
     float scale = 0.0f;
     std::optional<std::array<float, 3>> origin;
     bool noOrigin = false;
@@ -1588,6 +1608,7 @@ int cmdExport(int argc, char** argv) {
             else basePose = g2::xsiexp::ExportOptions::BasePose::World;
         }
         else if (a == "-makecar" && i + 1 < argc) makeCarPath = argv[++i];
+        else if (a == "-force") force = true;
         // argFloat instead of stof: with stof "-scale 0,64" silently gave 0,
         // and the GLA's scale was used without any notice.
         else if (a == "-scale" && i + 1 < argc) scale = argFloat(argv[++i], "-scale");
@@ -1688,12 +1709,47 @@ int cmdExport(int argc, char** argv) {
                     cfg.size() - grouping.masters.size() - grouping.partial);
     }
 
+    // -only: one sequence, by its full name (case-insensitive like the engine).
+    // It used to be a substring match - "-only BOTH_RUN1" also took
+    // BOTH_RUN1_STOP and the like.
+    const auto upper = [](std::string t) {
+        std::transform(t.begin(), t.end(), t.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+        return t;
+    };
+    const auto selected = [&](const std::string& name) { return only.empty() || upper(name) == upper(only); };
+
+    // Nothing gets overwritten without -force: "-makecar _humanoid.car" in the
+    // model folder replaced the hand-written script, and -o into the source
+    // folder replaced the original .xsi files - including root.xsi.
+    if (!force) {
+        std::vector<std::string> existing;
+        std::error_code e;
+        for (const std::string& f : {carPath, makeCarPath})
+            if (!f.empty() && std::filesystem::exists(f, e)) existing.push_back(f);
+        for (const auto& sq : seqs) {
+            if (!selected(sq.name)) continue;
+            std::string low = sq.name;
+            std::transform(low.begin(), low.end(), low.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            const auto out = std::filesystem::path(outDir) / (low + ".xsi");
+            if (std::filesystem::exists(out, e)) existing.push_back(out.string());
+        }
+        if (!existing.empty()) {
+            std::fprintf(stderr, "%zu Datei(en) gibt es schon, z. B.:\n", existing.size());
+            for (std::size_t k = 0; k < existing.size() && k < 5; ++k)
+                std::fprintf(stderr, "  %s\n", existing[k].c_str());
+            std::fprintf(stderr, "Nichts geschrieben. Mit -force ueberschreiben.\n");
+            return 1;
+        }
+    }
+
     std::error_code ec;
     std::filesystem::create_directories(outDir, ec);
 
     std::size_t written = 0, failed = 0, withMotion = 0, noMotion = 0, residual = 0;
     for (const auto& s : seqs) {
-        if (!only.empty() && s.name.find(only) == std::string::npos) continue;
+        if (!selected(s.name)) continue;
         try {
             g2::xsiexp::ExportOptions one = opt;
             // The .frames first, if there is one - it is the first-hand source.
