@@ -790,6 +790,11 @@ int main(int argc, char** argv) {
             check(st.newSkeleton != n0, "Haekchen \"Skelett neu bauen\" reagiert");
             D.click(D.find(tr(S::NewSkeleton)));
             check(st.newSkeleton == n0, "zweiter Klick stellt es zurueck");
+            const bool o0 = st.onlyNewXsi;
+            D.click(D.find(tr(S::OnlyNewXsi)));
+            check(st.onlyNewXsi != o0, "Haekchen \"Nur neue XSI\" in der Werkzeugleiste reagiert");
+            D.click(D.find(tr(S::OnlyNewXsi)));
+            check(st.onlyNewXsi == o0, "zweiter Klick stellt es zurueck");
             check(D.find(tr(S::FrameStep)) != nullptr, "Feld Framestep vorhanden");
         }
 
@@ -1765,6 +1770,50 @@ int main(int argc, char** argv) {
         for (std::size_t k = 0; same && k < a.grabs.size(); ++k)
             same = a.grabs[k].file == b.grabs[k].file && a.grabs[k].additional.size() == b.grabs[k].additional.size();
         check(same, "grosses Skript gespeichert und wieder gelesen: alle Grabs gleich");
+
+        // "Only new XSI" against the real script: picking a folder it grabs
+        // from adds exactly the files that are not in it yet, and a second
+        // time nothing.
+        // On a copy of its own, closed again afterwards: the later steps
+        // need the big script unchanged.
+        if (real) {
+            const fs::path copy2 = work / "big2" / bigCar.filename();
+            fs::create_directories(copy2.parent_path());
+            fs::copy_file(bigCar, copy2, fs::copy_options::overwrite_existing);
+            app->openCar(copy2.string());
+            const std::size_t idx = app->documents().size() - 1;
+            const auto& d = app->documents()[idx];
+            auto& st = app->settings();
+            const bool o0 = st.onlyNewXsi;
+            const std::string b0 = st.baseDir;
+            st.onlyNewXsi = true;
+            st.baseDir = base.string();
+            const fs::path folder = (base / d.script.grabs.front().file).parent_path();
+            const auto key = [](std::string s) {
+                for (auto& c : s) c = c == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (s.size() > 4 && s.compare(s.size() - 4, 4, ".xsi") == 0) s.resize(s.size() - 4);
+                return s;
+            };
+            std::set<std::string> grabbed;
+            for (const auto& g : d.script.grabs) grabbed.insert(key(g.file));
+            std::size_t expected = 0;
+            std::error_code ec;
+            for (fs::recursive_directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+                if (it->is_regular_file() && key(it->path().extension().string()) == ".xsi" &&
+                    !grabbed.count(key(fs::relative(it->path(), base).generic_string())))
+                    ++expected;
+            const std::size_t before = d.script.grabs.size();
+            app->addXsiFolder(folder.string(), false);
+            check(d.script.grabs.size() - before == expected,
+                  "Nur neue XSI, echtes Skript: " + std::to_string(d.script.grabs.size() - before) +
+                      " eingefuegt, erwartet " + std::to_string(expected) + " (" + folder.filename().string() + ")");
+            const std::size_t mid = d.script.grabs.size();
+            app->addXsiFolder(folder.string(), false);
+            check(d.script.grabs.size() == mid, "Nur neue XSI, echtes Skript: zweiter Durchlauf fuegt nichts ein");
+            st.onlyNewXsi = o0;
+            st.baseDir = b0;
+            app->closeDocument(idx);
+        }
     });
 
     // =====================================================================

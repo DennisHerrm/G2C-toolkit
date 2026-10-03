@@ -133,6 +133,10 @@ struct Settings {
     // Carcass's -framestep: keep every n-th frame (1 = all).
     int  frameStep = 1;
 
+    // Adding .xsi (files, folders, drag and drop) skips every file the script
+    // already grabs - pick the whole folder, only the new ones go in.
+    bool onlyNewXsi = false;
+
     // Create a .car.bak on the first save.
     //
     // Only ONCE per file - the original state before the first edit is what
@@ -421,6 +425,9 @@ public:
 
     // Append all .xsi files of a folder - recursively, sorted.
     std::size_t addXsiFolder(const std::string& folder, bool toAll);
+    // Keys of every .xsi the script grabs (resolved like the build does);
+    // used by Settings::onlyNewXsi.
+    std::set<std::string> grabbedXsiKeys(const Document& d) const;
 
     // Frame count of a source file, if already known. -1 = not read yet,
     // -2 = not found.

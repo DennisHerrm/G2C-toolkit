@@ -3958,3 +3958,25 @@ Beim Abgleich fielen Fehler in g2c auf, jeder mit Regressionstest:
   Quantisierungsgrenze, animation.cfg bytegleich, GLM jetzt mit Carcass'
   Vertexzahl. Bau 8,5 s, mit Cache 2,4 s. Carcass baut diesen Humanoid gar
   nicht (Abbruch an einer Bindepose und an einer Translation von -520).
+
+---
+
+## 73. Nur neue XSI einfuegen
+
+Neben den XSI-Knoepfen in der Werkzeugleiste steht das Haekchen **Nur neue
+XSI**. Ist es gesetzt, uebergehen alle Wege zum Einfuegen (XSI hinzufuegen,
+XSI-Ordner, ... zu allen, Ziehen ins Fenster) jede .xsi, die das Skript
+schon enthaelt. Man waehlt also einfach den ganzen Ordner, und nur die
+neuen Dateien kommen dazu.
+
+"Schon enthalten" heisst: dieselbe Datei, so aufgeloest wie beim Bauen
+(`$basedir`, Assetwurzel, Ordner der .car, fehlende Endung `.xsi`).
+Gross-/Kleinschreibung spielt keine Rolle. Auch zweimal dieselbe Datei in
+einem Rutsch (ueberlappende Ordner) kommt nur einmal hinein. Bei "zu allen"
+bekommt jedes Skript das, was ihm selbst fehlt.
+
+Im Log steht, wie viele uebersprungen wurden. Das Haekchen wird gespeichert.
+
+Geprueft mit deinem `_humanoid.car`: Der Ordner `__original_anim` brachte
+genau die 44 Dateien, die noch nicht drinstanden. Ein zweiter Durchlauf
+brachte keine mehr.

@@ -30,7 +30,7 @@ enum class S {
 
     // Toolbar
     BtnSave, BtnSaveAll, BtnBuild, BtnBuildAll, BtnValidate,
-    BtnOpenFolder, BtnAddXsi, BtnAddXsiFolder, BtnAddXsiFolderAll, BtnAddXsiAll,
+    BtnOpenFolder, BtnAddXsi, BtnAddXsiFolder, BtnAddXsiFolderAll, BtnAddXsiAll, OnlyNewXsi, OnlyNewXsiTooltip,
     BtnCancel,
 
     // Settings
@@ -104,7 +104,7 @@ enum class S {
     LogNoRefGla, LogMeshSourceMissing, LogScriptNotWritable, LogBuilt,
     LogFrameCounts, LogFramesNotFound, LogValidation, LogAllCores,
     LogOpened, LogGlaOpened, LogFramesLoaded, LogDeleted, LogMoved, LogSeqsRead,
-    LogNoOutputAt, LogUnreadable, LogAddedFiles,
+    LogNoOutputAt, LogUnreadable, LogAddedFiles, LogSkippedExisting,
 
     // Copy and paste
     Copy, Cut, PasteBefore, PasteAfter, PasteEnd, ClipEmpty, Copied, Pasted, ClipHint,
