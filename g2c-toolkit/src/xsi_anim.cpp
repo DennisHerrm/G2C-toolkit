@@ -97,19 +97,33 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
         }
 
         for (const Template* fc : t.findAll("SI_FCurve")) {
-            // Layout: "<target>", "<channel>", "<interpolation>", a, b, keyCount,
-            //         frame, value, frame, value, ...
+            // Layout: "<target>", "<channel>", "<interpolation>", curves,
+            //         valuesPerKey, keyCount, then per key: frame and
+            //         valuesPerKey values. LINEAR and CONSTANT have one value per
+            //         key; CUBIC/HERMITE carry tangents behind the value, which
+            //         used to be read as further keys.
             if (fc->values.size() < 6) continue;
             const std::string channel = fc->values[1].text();
+            const std::string interp = fc->values[2].text();
             const auto keyCount = fc->values[5].asInt();
             if (!keyCount || *keyCount <= 0) continue;
+            const auto perKey = fc->values[4].asInt();
+            const std::size_t stride = 1 + static_cast<std::size_t>(perKey && *perKey > 1 ? *perKey : 1);
+
+            const std::size_t first = 6;
+            const std::size_t need = first + static_cast<std::size_t>(*keyCount) * stride;
+            // A curve with fewer values than it announces is a damaged file.
+            // It used to be skipped silently - the bone then stood still and
+            // nothing said why.
+            if (fc->values.size() < need)
+                throw std::runtime_error("SI_FCurve " + fc->values[0].text() + " " + channel + ": " +
+                                         std::to_string(*keyCount) + " Keys angegeben, aber nur " +
+                                         std::to_string((fc->values.size() - first) / stride) +
+                                         " vorhanden - Datei beschaedigt");
 
             auto& target = out.nodes[static_cast<std::size_t>(self)].channels[channel];
-            const std::size_t first = 6;
-            const std::size_t need = first + static_cast<std::size_t>(*keyCount) * 2;
-            if (fc->values.size() < need) continue;
-
-            for (std::size_t i = first; i + 1 < need; i += 2) {
+            std::map<int, float> keys;
+            for (std::size_t i = first; i + 1 < need; i += stride) {
                 // Do NOT read the frame number with asInt(). 3ds Max writes
                 // it as "1.000000", Raven as "1" - asInt() fails on the
                 // decimal places, and the key would be silently lost.
@@ -118,13 +132,36 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
                 // bone stayed in the rest pose.
                 const auto f = fc->values[i].asNumber();
                 const auto v = fc->values[i + 1].asNumber();
-                if (!f || !v) continue;
-                const int frame = static_cast<int>(std::lround(*f));
-                target[frame] = static_cast<float>(*v);
+                // "-1.#IND00" and the like: 3ds Max's way of writing NaN. Not a
+                // pose - say so instead of dropping the key.
+                if (!f || !v || !std::isfinite(*v) || std::fabs(*f) > 1e7)
+                    throw std::runtime_error("SI_FCurve " + fc->values[0].text() + " " + channel +
+                                             ": Key " + std::to_string((i - first) / stride + 1) +
+                                             " ist keine gueltige Zahl (\"" + fc->values[i].text() +
+                                             "\", \"" + fc->values[i + 1].text() + "\")");
+                keys[static_cast<int>(std::lround(*f))] = static_cast<float>(*v);
+            }
+            // CONSTANT means stepped: the value holds until the next key. With a
+            // key on every frame (all real files) that changes nothing; with
+            // gaps it used to slide linearly between the keys.
+            if (interp == "CONSTANT" && keys.size() > 1) {
+                std::map<int, float> filled;
+                for (auto it = keys.begin(); it != keys.end(); ++it) {
+                    const auto next = std::next(it);
+                    const int end = next == keys.end() ? it->first + 1 : next->first;
+                    for (int fr = it->first; fr < end; ++fr) filled[fr] = it->second;
+                }
+                keys = std::move(filled);
+            }
+            for (const auto& [frame, value] : keys) {
+                target[frame] = value;
                 out.firstFrame = out.nodes.size() == 1 && target.size() == 1
                                      ? frame
                                      : std::min(out.firstFrame, frame);
                 out.lastFrame = std::max(out.lastFrame, frame);
+                out.keyFirst = out.haveKeys ? std::min(out.keyFirst, frame) : frame;
+                out.keyLast = out.haveKeys ? std::max(out.keyLast, frame) : frame;
+                out.haveKeys = true;
             }
         }
     }
@@ -237,6 +274,11 @@ AnimFile loadAnimation(const Document& doc, const std::string& sourcePath) {
         std::vector<double> nums;
         for (const auto& v : scene->values)
             if (const auto d = v.asNumber()) nums.push_back(*d);
+        // A range of a billion frames would make the evaluation try to allocate
+        // terabytes; numbers beyond int were undefined behaviour in the cast.
+        if (nums.size() >= 3 &&
+            (std::fabs(nums[0]) > 1e6 || std::fabs(nums[1]) > 1e6 || nums[1] - nums[0] > 1e6))
+            throw std::runtime_error("SI_Scene mit unsinnigem Framebereich in \"" + sourcePath + "\"");
         if (nums.size() >= 3) {
             out.firstFrame = static_cast<int>(nums[0]);
             out.lastFrame = static_cast<int>(nums[1]);

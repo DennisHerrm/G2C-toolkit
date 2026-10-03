@@ -46,8 +46,15 @@ App::App(Platform platform) : platform_(std::move(platform)) {
         if (openCar(t)) ++restored;
     }
     if (restored) {
-        if (savedActive_ >= 0 && savedActive_ < static_cast<int>(docs_.size()))
-            activate(savedActive_);
+        // By path: the index shifted whenever a file of an earlier tab was
+        // gone, and the wrong tab came up.
+        int want = -1;
+        for (std::size_t k = 0; k < docs_.size(); ++k)
+            if (!savedActivePath_.empty() && docs_[k].path == savedActivePath_) want = static_cast<int>(k);
+        if (want < 0 && savedActivePath_.empty() && savedActive_ >= 0 &&
+            savedActive_ < static_cast<int>(docs_.size()))
+            want = savedActive_;
+        if (want >= 0) activate(want);
         log(LogLine::Kind::Good, trf(S::LogRestored, restored));
     } else {
         log(LogLine::Kind::Info, tr(S::LogReady));
@@ -295,13 +302,23 @@ void App::saveSettings() const {
 
     // Output locations per script. That way the mapping is kept even if the
     // tabs are opened differently on the next start.
-    for (const auto& d : docs_)
-        if (!d.outputDir.empty()) f << "out:" << d.path << "=" << d.outputDir << "\n";
+    // "outp=<script>|<folder>": '|' can't occur in a Windows path, '=' can -
+    // "out:C:\a=b\x.car=D:\out" was split at the wrong '='. Closed scripts keep
+    // their folder too; it used to be forgotten as soon as the tab closed.
+    {
+        std::map<std::string, std::string> outs = savedOutputs_;
+        for (const auto& d : docs_)
+            if (!d.outputDir.empty()) outs[d.path] = d.outputDir;
+        for (const auto& [script, folder] : outs)
+            if (!folder.empty()) f << "outp=" << script << "|" << folder << "\n";
+    }
 
     // Open tabs and the active one. On the next start the same state is back -
     // with twenty scripts that's the difference between "keep working" and
     // "first reopen everything".
     f << "active=" << active_ << "\n";
+    if (active_ >= 0 && active_ < static_cast<int>(docs_.size()))
+        f << "activepath=" << docs_[static_cast<std::size_t>(active_)].path << "\n";
     for (const auto& d : docs_) f << "tab=" << d.path << "\n";
 
     // Last used folder per file dialog.
@@ -366,7 +383,12 @@ void App::loadSettings() {
         }
         // "threads" is deliberately ignored: older settings files might
         // contain a limit that is no longer supposed to exist.
-        else if (key.rfind("out:", 0) == 0) savedOutputs_[key.substr(4)] = val;
+        else if (key == "outp") {
+            const std::size_t bar = val.find('|');
+            if (bar != std::string::npos) savedOutputs_[val.substr(0, bar)] = val.substr(bar + 1);
+        }
+        else if (key.rfind("out:", 0) == 0) savedOutputs_[key.substr(4)] = val;   // older files
+        else if (key == "activepath") savedActivePath_ = val;
         else if (key == "tab") savedTabs_.push_back(val);
         else if (key.rfind("dir:", 0) == 0) lastDirs_[key.substr(4)] = val;
         else if (key == "active") { try { savedActive_ = std::stoi(val); } catch (...) {} }
@@ -868,6 +890,7 @@ void App::runExport(const std::vector<std::size_t>& rows, bool withCar) {
 
 void App::drawOverwriteDialog() {
     if (!pendingExport_.active || pendingExport_.existing.empty()) return;
+    if (otherModalOpen("###overwrite")) return;
     if (!ImGui::IsPopupOpen("###overwrite")) ImGui::OpenPopup("###overwrite");
     if (!ImGui::BeginPopupModal((std::string(tr(S::Overwrite)) + "###overwrite").c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
@@ -925,8 +948,12 @@ std::size_t App::openFolder(const std::string& root) {
 }
 
 void App::closeDocument(std::size_t index) {
+    resetRowState();
     if (index >= docs_.size()) return;
     const std::string path = docs_[index].path;
+    // Its output folder outlives the tab: reopened later (or next session) it
+    // is there again. It used to be forgotten as soon as the tab closed.
+    if (!docs_[index].outputDir.empty()) savedOutputs_[path] = docs_[index].outputDir;
     // Close dialogs that refer to this script right along with it.
     if (editDocPath_ == path) {
         editOpen_ = false;
@@ -988,6 +1015,7 @@ void App::drawSpeedDialog() {
         speedRows_.clear();
         return;
     }
+    if (otherModalOpen("###speeddlg")) return;
     if (!ImGui::IsPopupOpen("###speeddlg")) ImGui::OpenPopup("###speeddlg");
     if (!ImGui::BeginPopupModal((std::string(tr(S::SetSpeedTitle)) + "###speeddlg").c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
@@ -1017,6 +1045,7 @@ void App::drawSpeedDialog() {
 // Unsaved changes: save, discard or cancel.
 void App::drawCloseDialog() {
     if (pendingClose_.empty()) return;
+    if (otherModalOpen("###closedlg")) return;
     if (!ImGui::IsPopupOpen("###closedlg")) ImGui::OpenPopup("###closedlg");
     if (!ImGui::BeginPopupModal((std::string(tr(S::CloseTab)) + "###closedlg").c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
@@ -1215,15 +1244,22 @@ std::size_t App::addXsiFolder(const std::string& folder, bool toAll) {
     return addXsiFiles(files, toAll);
 }
 
+// The relative path alone is not unique: a script resolves its files next to
+// itself too, so the folder of the script is part of the key. The lookups
+// below use the folder of the script on screen.
+static std::string infoKey(const std::string& carDir, const std::string& rel) {
+    return carDir + "|" + rel;
+}
+
 int App::frameCountOf(const std::string& relPath) const {
     std::lock_guard<std::mutex> lock(frameMutex_);
-    const auto it = xsiInfo_.find(relPath);
+    const auto it = xsiInfo_.find(infoKey(frameWorkerCarDir_, relPath));
     return it == xsiInfo_.end() ? -1 : it->second.frames;
 }
 
 int App::xsiRateOf(const std::string& relPath) const {
     std::lock_guard<std::mutex> lock(frameMutex_);
-    const auto it = xsiInfo_.find(relPath);
+    const auto it = xsiInfo_.find(infoKey(frameWorkerCarDir_, relPath));
     if (it == xsiInfo_.end()) return -1;
     return it->second.frames < 0 ? 0 : it->second.rate;
 }
@@ -1276,6 +1312,37 @@ void App::stopFrameWorker() {
     frameWorkerStop_.store(false);
 }
 
+void App::resetRowState() {
+    editCommentGrab_ = -1;
+    editCommentLine_ = -1;
+    editTrailGrab_ = -1;
+    selAnchor_ = -1;
+    rangeSelecting_ = false;
+}
+
+void App::queueOpen(std::vector<std::string> paths) {
+    pendingOpen_.insert(pendingOpen_.end(), paths.begin(), paths.end());
+}
+
+void App::openPathsNow(const std::vector<std::string>& paths) {
+    std::vector<std::string> xsi;
+    for (const std::string& p : paths) {
+        std::string lower = p;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
+            xsi.push_back(p);
+        else
+            openPath(p);
+    }
+    if (!xsi.empty()) addXsiFiles(xsi, false);
+}
+
+bool App::otherModalOpen(const char* mine) const {
+    for (const char* id : {"###closedlg", "###overwrite", "###speeddlg", "###modeldlg", "confirmdel"})
+        if (std::strcmp(id, mine) != 0 && ImGui::IsPopupOpen(id)) return true;
+    return false;
+}
+
 // Load frame counts in the background.
 //
 // The first time, every .xsi has to be read - with 1289 files that takes a
@@ -1283,25 +1350,35 @@ void App::stopFrameWorker() {
 // runs alongside and the column fills in gradually. The second time
 // everything comes from the cache and is there practically instantly.
 void App::startFrameWorker(const Document& d) {
+    // The folder of the script on screen - set even while the reader is busy
+    // with another script, so the lookups never use the wrong folder.
+    frameWorkerCarDir_ = fs::path(d.path).parent_path().string();
     if (frameWorkerRunning_.load()) return;
-    if (settings_.baseDir.empty()) return;
+    // No early exit without an asset root: the files are also found next to
+    // the .car, just like the build finds them. The dialog showed 30 where
+    // the build wrote the file's 20.
 
     // Asset root changed? Then the previous counts are no longer valid.
     // If the root was guessed wrong at first, "missing" showed everywhere -
     // and stayed that way until restart, even after it was corrected.
+    // Switching tabs keeps everything: entries are per script folder.
     if (!frameWorkerBaseDir_.empty() && frameWorkerBaseDir_ != settings_.baseDir) {
         std::lock_guard<std::mutex> lock(frameMutex_);
         xsiInfo_.clear();
     }
     frameWorkerBaseDir_ = settings_.baseDir;
+    const bool recheck = frameRecheck_;
+    frameRecheck_ = false;
 
     // Collect the missing ones so the thread doesn't have to access the
     // document list - it can change underneath it.
     std::vector<std::string> todo;
     {
         std::lock_guard<std::mutex> lock(frameMutex_);
+        // On a recheck all of them: the worker compares size and time and only
+        // re-reads what changed on disk.
         for (const auto& g : d.script.grabs)
-            if (!xsiInfo_.count(g.file)) todo.push_back(g.file);
+            if (recheck || !xsiInfo_.count(infoKey(frameWorkerCarDir_, g.file))) todo.push_back(g.file);
     }
     if (todo.empty()) return;
 
@@ -1325,10 +1402,26 @@ void App::startFrameWorker(const Document& d) {
             XsiInfo info;   // frames -2 = not found
             const std::string full = car::resolveAssetPath(rel, baseDir, carDir);
             if (!full.empty()) {
+                std::error_code sec;
+                info.size = fs::file_size(full, sec);
+                info.mtime = static_cast<long long>(fs::last_write_time(full, sec).time_since_epoch().count());
+                {
+                    std::lock_guard<std::mutex> lock(frameMutex_);
+                    const auto old = xsiInfo_.find(infoKey(carDir, rel));
+                    if (old != xsiInfo_.end() && old->second.frames >= 0 &&
+                        old->second.size == info.size && old->second.mtime == info.mtime)
+                        continue;   // unchanged since it was read
+                }
+            }
+            if (!full.empty()) {
                 try {
                     const xsi::AnimFile a =
                         cache.enabled() ? cache.loadOrParse(full) : xsi::loadAnimationFile(full);
+                    const auto keepSize = info.size;
+                    const auto keepTime = info.mtime;
                     info.frames = a.frameCount();
+                    info.size = keepSize;
+                    info.mtime = keepTime;
                     // Same rule as the build: only a real SI_Scene rate counts.
                     info.rate = (a.hasScene && a.frameRate > 0.0f) ? static_cast<int>(a.frameRate) : 0;
                 } catch (const std::exception&) {
@@ -1338,7 +1431,7 @@ void App::startFrameWorker(const Document& d) {
             if (info.frames == -2) ++missing;
             {
                 std::lock_guard<std::mutex> lock(frameMutex_);
-                xsiInfo_[rel] = info;
+                xsiInfo_[infoKey(carDir, rel)] = info;
             }
         }
         if (missing == todo.size() && !todo.empty())
@@ -1362,6 +1455,7 @@ std::size_t App::assignDefaultOutputs(bool onlyEmpty) {
 // --- Reordering and deleting sequences -------------------------------------
 
 bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
+    resetRowState();
     if (docIndex >= docs_.size()) return false;
     Document& d = docs_[docIndex];
     const std::size_t n = d.script.grabs.size();
@@ -1398,6 +1492,7 @@ bool App::isRootGrab(const car::GrabDirective& g) {
 
 std::size_t App::moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
                            std::size_t before) {
+    resetRowState();
     if (docIndex >= docs_.size() || rows.empty()) return 0;
     Document& d = docs_[docIndex];
     const std::size_t n = d.script.grabs.size();
@@ -1463,6 +1558,7 @@ bool App::keepRootLast(std::size_t docIndex) {
 
 std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
                              bool keepComments) {
+    resetRowState();
     if (docIndex >= docs_.size() || rows.empty()) return 0;
     Document& d = docs_[docIndex];
 
@@ -1774,9 +1870,10 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
                 // Pass the names along: the caller enters them as messages so
                 // that clicking one jumps to the rows.
                 {
+                    // Per script path: with "Build all" every script keeps its
+                    // own list, and two tabs with the same title don't mix.
                     std::lock_guard<std::mutex> lock(dupMutex_);
-                    pendingDuplicates_ = doppelt;
-                    pendingDupDoc_ = d.title;
+                    pendingDuplicates_[d.path] = doppelt;
                 }
                 throw std::runtime_error(trf(S::BuildStoppedDup, doppelt.size()));
             }
@@ -2203,17 +2300,19 @@ void App::drawToolbar() {
         // Several folders at once: for a model with animations from ten
         // sources, clicking ten times is the actual work.
         const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        for (const auto& d : dirs) addXsiFolder(d, false);
+        std::size_t files = 0;
+        for (const auto& d : dirs) files += addXsiFolder(d, false);
         if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), std::size_t{0}));
+            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
     }
     ImGui::SameLine();
     if (iconButton(ICON_FOLDER, kIconAccent, tr(S::BtnAddXsiFolderAll)) &&
         (platform_.pickFolders || platform_.pickFolder)) {
         const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        for (const auto& d : dirs) addXsiFolder(d, true);
+        std::size_t files = 0;
+        for (const auto& d : dirs) files += addXsiFolder(d, true);
         if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), std::size_t{0}));
+            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
     }
     ImGui::SameLine();
     if (iconButton(ICON_ADD, kIconAccent, tr(S::BtnAddXsiAll)) && platform_.openFiles) {
@@ -2462,6 +2561,18 @@ namespace {
 constexpr ImGuiDragDropFlags kDropFlags =
     ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
 
+// Selectable with free text as its label. ImGui ends the visible label at
+// "##": a comment "// ### Walk ###" showed as "// ". Such text is drawn by
+// hand; everything else stays an ordinary label (the GUI driver finds rows
+// by it).
+bool textSelectable(const std::string& text, ImGuiSelectableFlags flags) {
+    if (text.find("##") == std::string::npos) return ImGui::Selectable(text.c_str(), false, flags);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool hit = ImGui::Selectable("##freetext", false, flags, ImVec2(0, ImGui::GetTextLineHeight()));
+    ImGui::GetWindowDrawList()->AddText(pos, ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
+    return hit;
+}
+
 bool dropBelow() {
     const float mid = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
     return ImGui::GetMousePos().y > mid;
@@ -2490,7 +2601,11 @@ bool App::rowVisible(const Document& d, std::size_t i) const {
     if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
-    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos;
+    // Split part names too, exactly like the table: rows shown only because
+    // of a part were skipped by Shift-click and drag-select.
+    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos ||
+           std::any_of(g.additional.begin(), g.additional.end(),
+                       [&](const auto& a) { return a.name.find(filter_) != std::string::npos; });
 }
 
 void App::drawSequenceTable(Document& d) {
@@ -2675,9 +2790,8 @@ void App::drawSequenceTable(Document& d) {
             } else {
                 const std::string& c = g.commentsBefore[ci];
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
-                ImGui::Selectable(c.empty() ? " " : c.c_str(), false,
-                                  ImGuiSelectableFlags_SpanAllColumns |
-                                      ImGuiSelectableFlags_AllowDoubleClick);
+                textSelectable(c.empty() ? " " : c,
+                               ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
                 ImGui::PopStyleColor();
 
                 // Drag like a sequence.
@@ -3037,8 +3151,12 @@ void App::drawSequenceTable(Document& d) {
             if (g.frameSpeed) ImGui::Text("%d", sp);
             else if (sp > 0) ImGui::TextDisabled("%d", sp);
             else ImGui::TextDisabled("...");
-            if (!g.frameSpeed && sp > 0 && ImGui::IsItemHovered())
-                ImGui::SetTooltip(tr(S::TipSpeedFromXsi), sp);
+            if (!g.frameSpeed && sp > 0 && ImGui::IsItemHovered()) {
+                // From the file only if the file has a rate; otherwise it is
+                // the build's default, and the tooltip used to claim the file.
+                if (xsiRateOf(g.file) > 0) ImGui::SetTooltip(tr(S::TipSpeedFromXsi), sp);
+                else ImGui::SetTooltip(tr(S::TipSpeedDefault), sp);
+            }
         }
         ImGui::TableNextColumn();
         if (g.additional.empty()) {
@@ -3122,8 +3240,7 @@ void App::drawSequenceTable(Document& d) {
                 const std::string& tc = d.script.grabs[i].trailingComment;
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       ImVec4(0.55f, 0.55f, 0.58f, tc.empty() ? 0.45f : 0.95f));
-                ImGui::Selectable(tc.empty() ? "..." : tc.c_str(), false,
-                                  ImGuiSelectableFlags_AllowDoubleClick);
+                textSelectable(tc.empty() ? "..." : tc, ImGuiSelectableFlags_AllowDoubleClick);
                 ImGui::PopStyleColor();
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
                     editTrailGrab_ = static_cast<int>(i);
@@ -3190,8 +3307,7 @@ void App::drawSequenceTable(Document& d) {
         ImGui::PushID(static_cast<int>(ti));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
         const std::string& c = d.script.trailingComments[ti];
-        ImGui::Selectable(c.empty() ? " " : c.c_str(), false,
-                          ImGuiSelectableFlags_SpanAllColumns);
+        textSelectable(c.empty() ? " " : c, ImGuiSelectableFlags_SpanAllColumns);
         ImGui::PopStyleColor();
 
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
@@ -3881,18 +3997,28 @@ void App::drawIssues() {
     // doesn't jump anywhere.
     {
         std::lock_guard<std::mutex> lock(dupMutex_);
-        if (!pendingDuplicates_.empty() && pendingDupDoc_ == d.title) {
-            for (const auto& name : pendingDuplicates_) {
+        const auto it = pendingDuplicates_.find(d.path);
+        if (it != pendingDuplicates_.end()) {
+            // Replace the duplicate messages of an earlier attempt instead of
+            // adding a second copy (F5 twice listed every name twice).
+            auto& iss = d.validation.issues;
+            for (std::size_t k = iss.size(); k-- > 0;)
+                for (const auto& name : it->second)
+                    if (iss[k].sequence == name && iss[k].message == trf(S::DupIssue, name.c_str())) {
+                        iss.erase(iss.begin() + static_cast<long>(k));
+                        if (d.validation.errors) --d.validation.errors;
+                        break;
+                    }
+            for (const auto& name : it->second) {
                 car::Issue is;
                 is.level = car::Issue::Level::Error;
                 is.sequence = name;
                 is.message = trf(S::DupIssue, name.c_str());
-                d.validation.issues.push_back(std::move(is));
+                iss.push_back(std::move(is));
                 ++d.validation.errors;
             }
             d.validated = true;
-            pendingDuplicates_.clear();
-            pendingDupDoc_.clear();
+            pendingDuplicates_.erase(it);
         }
     }
 
@@ -4084,7 +4210,10 @@ App::ModelEdit App::modelEditOf(std::size_t docIndex) const {
     ModelEdit e;
     if (docIndex >= docs_.size()) return e;
     const car::Script& s = docs_[docIndex].script;
+    // Own lines for editing, but the effective values on display: a $scale or
+    // $keepmotion from an $include is what the build uses.
     e.head = car::modelSettingsOf(s);
+    e.head.keepMotion = s.keepMotion;
     e.scale = s.scale.value_or(1.0);
     if (s.convert) {
         const auto& c = *s.convert;
@@ -4112,9 +4241,16 @@ bool App::applyModelEdit(std::size_t docIndex, const ModelEdit& e) {
     Document& d = docs_[docIndex];
     const std::string before = car::writeScript(d.script);
 
+    // Unchanged against what the build sees -> leave the own lines alone. That
+    // way a value coming from an $include is not copied into this file.
+    const car::ModelSettings own = car::modelSettingsOf(d.script);
     car::ModelSettings head = e.head;
-    // 1.0 is the default: no line for it, unless the script already had one.
-    head.scale = (e.scale == 1.0 && !d.script.scale) ? std::nullopt : std::optional<double>(e.scale);
+    if (e.scale == d.script.scale.value_or(1.0))
+        head.scale = own.scale;
+    else
+        // 1.0 is the default: no line for it, unless the script had one.
+        head.scale = (e.scale == 1.0 && !own.scale) ? std::nullopt : std::optional<double>(e.scale);
+    if (e.head.keepMotion == d.script.keepMotion) head.keepMotion = own.keepMotion;
     car::applyModelSettings(d.script, head);
 
     if (!e.convertFromInclude && (d.script.convert || !e.root.empty())) {
@@ -4126,10 +4262,16 @@ bool App::applyModelEdit(std::size_t docIndex, const ModelEdit& e) {
         auto& c = *d.script.convert;
         c.root = e.root;
         c.makeSkel = e.ownSkeleton ? e.skeleton : std::string();
-        if (e.haveOrigin)
-            c.origin = std::array<double, 3>{e.origin[0], e.origin[1], e.origin[2]};
-        else
+        // The dialog edits floats. If they still equal the script's values in
+        // float precision, the script's doubles stay - otherwise OK without a
+        // change rewrote "-origin 0.1 0 24" and marked the script modified.
+        const bool sameOrigin =
+            c.origin && static_cast<float>((*c.origin)[0]) == e.origin[0] &&
+            static_cast<float>((*c.origin)[1]) == e.origin[1] && static_cast<float>((*c.origin)[2]) == e.origin[2];
+        if (!e.haveOrigin)
             c.origin.reset();
+        else if (!sameOrigin)
+            c.origin = std::array<double, 3>{e.origin[0], e.origin[1], e.origin[2]};
         c.makeSkin = e.makeSkin;
         const auto setFlag = [&](const char* flag, bool on) {
             auto it = std::find_if(c.extraArgs.begin(), c.extraArgs.end(), [&](const std::string& x) {
@@ -4173,6 +4315,7 @@ void App::drawModelDialog() {
     }
     ModelEdit& e = modelEdit_;
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    if (otherModalOpen("###modeldlg")) return;
     if (!ImGui::IsPopupOpen("###modeldlg")) ImGui::OpenPopup("###modeldlg");
     ImGui::SetNextWindowSize(ImVec2(620 * k, 0), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal((trf(S::ModelTitle, docs_[di].title.c_str()) + "###modeldlg").c_str(),
@@ -4594,7 +4737,8 @@ void App::drawSequenceDialog(Document& d) {
         a.name = name + "_2";
         a.frameCount = 1;
         a.loopFrame = -1;
-        a.frameSpeed = g.frameSpeed.value_or(20);
+        // The master's real speed (it used to be a fixed 20).
+        a.frameSpeed = effectiveSpeed(g) > 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
         g.additional.push_back(std::move(a));
         d.dirty = true;
         d.validated = false;
@@ -4759,6 +4903,9 @@ void App::drawStatusBar() {
 // Previously only Ctrl+N and Ctrl+S were implemented. Ctrl+O, Ctrl+Shift+O,
 // Ctrl+W, F5, Shift+F5 and F7 were shown in the menu but did nothing.
 void App::handleShortcuts() {
+    // Not while a text field has the keyboard: Ctrl+O/Ctrl+W during an
+    // in-place edit switched the script under the field.
+    if (ImGui::GetIO().WantTextInput) return;
     // While a confirmation prompt is open, no further actions.
     if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
 
@@ -4784,6 +4931,12 @@ void App::handleShortcuts() {
 
 void App::draw() {
     if (!styleApplied_) applyStyle();
+
+    if (!pendingOpen_.empty()) {
+        std::vector<std::string> paths;
+        paths.swap(pendingOpen_);
+        openPathsNow(paths);
+    }
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -4897,7 +5050,8 @@ void App::draw() {
 
         // Confirm deletion. There is no undo, and a slipped right-click
         // shouldn't cost a sequence.
-        if (!pendingDelete_.empty()) ImGui::OpenPopup("confirmdel");
+        if (!pendingDelete_.empty() && !otherModalOpen("confirmdel") && !ImGui::IsPopupOpen("confirmdel"))
+            ImGui::OpenPopup("confirmdel");
         if (ImGui::BeginPopupModal("confirmdel", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text(tr(S::ConfirmDelete), pendingDelete_.size());
             ImGui::Spacing();

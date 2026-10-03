@@ -111,6 +111,7 @@ ID3D11RenderTargetView* g_rtv = nullptr;
 bool                    g_resize = false;
 UINT                    g_resizeW = 0, g_resizeH = 0;
 g2::gui::App*           g_app = nullptr;
+float                   g_newDpi = 0.0f;   // set by WM_DPICHANGED, handled in the loop
 
 // --- String conversion ----------------------------------------------------
 
@@ -606,23 +607,27 @@ constexpr ULONG_PTR kOpenFilesMessage = 0x47324331;
 // counted as a folder, because INVALID_FILE_ATTRIBUTES has the directory bit
 // set.
 void openPaths(const std::vector<std::string>& paths) {
-    if (!g_app) return;
-    std::vector<std::string> xsi;
-    for (const std::string& p : paths) {
-        std::string lower = p;
-        for (char& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
-            xsi.push_back(p);
-        else
-            g_app->openPath(p);
-    }
-    if (!xsi.empty()) g_app->addXsiFiles(xsi, false);
+    // Queued, not opened here: WM_COPYDATA from a second instance also arrives
+    // while a file dialog of ours is open - inside drawing code that holds a
+    // reference into the tab list. Opening a tab right here reallocated that
+    // list under it. The App opens them at the start of the next frame.
+    if (g_app) g_app->queueOpen(paths);
 }
 
 LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return true;
 
     switch (msg) {
+        case WM_DPICHANGED: {
+            // Moved to a monitor with another scale. Windows suggests the new
+            // window rectangle; fonts and spacing are rebuilt in the main loop.
+            // Without this the window kept the first monitor's sizes.
+            const RECT* r = reinterpret_cast<const RECT*>(lp);
+            SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            g_newDpi = static_cast<float>(HIWORD(wp)) / 96.0f;
+            return 0;
+        }
         case WM_SIZE:
             if (wp == SIZE_MINIMIZED) return 0;
             g_resizeW = LOWORD(lp);
@@ -945,6 +950,10 @@ std::string redirectForTest(const std::string& url) {
     const DWORD n = GetEnvironmentVariableW(L"G2C_UPDATE_TEST_SERVER", buf, 512);
     if (n == 0 || n >= 512) return url;
     const std::string server = toUtf8(buf);
+    // Only to this machine. As an open switch it turned off origin and
+    // integrity checks for every build: SHA256SUMS would come from the same
+    // server as the exe.
+    if (server.rfind("http://127.0.0.1:", 0) != 0 && server.rfind("http://localhost:", 0) != 0) return url;
     for (const char* host : {"https://api.github.com", "https://github.com"})
         if (url.rfind(host, 0) == 0) return server + url.substr(std::strlen(host));
     return url;
@@ -1013,7 +1022,7 @@ private:
         if (!session_) return fail();
         // Resolve, connect, send, receive. A dead network must not keep the
         // program from closing for minutes.
-        WinHttpSetTimeouts(session_, 10000, 10000, 15000, 30000);
+        WinHttpSetTimeouts(session_, 5000, 5000, 10000, 15000);
 
         connect_ = WinHttpConnect(session_, host.c_str(), uc.nPort, 0);
         if (!connect_) return fail();
@@ -1080,7 +1089,7 @@ std::string httpDownload(const std::string& url, const std::filesystem::path& de
     if (req.status() == 0) return req.error();
     if (req.status() != 200) return "HTTP " + std::to_string(req.status());
     std::ofstream out(dest, std::ios::binary | std::ios::trunc);
-    if (!out) return "cannot write " + toUtf8(dest.filename().wstring());
+    if (!out) return "write:" + toUtf8(dest.parent_path().wstring());
     std::vector<char> buf(1 << 16);
     std::uint64_t done = 0;
     for (;;) {
@@ -1088,12 +1097,12 @@ std::string httpDownload(const std::string& url, const std::filesystem::path& de
         if (n < 0) return req.error();
         if (n == 0) break;
         out.write(buf.data(), static_cast<std::streamsize>(n));
-        if (!out) return "cannot write " + toUtf8(dest.filename().wstring());
+        if (!out) return "write:" + toUtf8(dest.parent_path().wstring());
         done += static_cast<std::uint64_t>(n);
         if (progress && !progress(done, req.length())) return "cancelled";
     }
     out.close();
-    return out ? std::string() : "cannot write " + toUtf8(dest.filename().wstring());
+    return out ? std::string() : "write:" + toUtf8(dest.parent_path().wstring());
 }
 
 std::filesystem::path exePath() {
@@ -1350,7 +1359,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     // Determine the scaling of the screen the window is on.
     bool firstFrame = true;
     startupLog("DPI ermitteln");
-    const float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd);
+    float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd);
 
     // With "g2c -nofont" only use the built-in font.
     //
@@ -1484,6 +1493,15 @@ int wWinMainGuarded(HINSTANCE inst) {
         // Language switch: the font atlas must be rebuilt with different
         // glyph ranges. The renderer's textures depend on it, so release them
         // first, then rebuild.
+        if (g_newDpi > 0.0f && g_newDpi != dpi) {
+            dpi = g_newDpi;
+            app.setDpiScale(dpi);
+            ImGui_ImplDX11_InvalidateDeviceObjects();
+            buildFonts(io, dpi, g2::gui::language());
+            ImGui_ImplDX11_CreateDeviceObjects();
+        }
+        g_newDpi = 0.0f;
+
         if (app.fontsDirty()) {
             ImGui_ImplDX11_InvalidateDeviceObjects();
             buildFonts(io, dpi, g2::gui::language());

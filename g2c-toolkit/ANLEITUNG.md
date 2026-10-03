@@ -67,7 +67,7 @@ cmake --build build
 build\g2_tests.exe
 ```
 
-Erwartete Ausgabe am Ende: `448/448 Pruefungen bestanden`.
+Erwartete Ausgabe am Ende: `522/522 Pruefungen bestanden`.
 
 Es entstehen `libg2` (statische Bibliothek), `g2c` (Kommandozeilenwerkzeug)
 und `g2_tests`.

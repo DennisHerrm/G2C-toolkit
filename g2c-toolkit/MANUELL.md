@@ -66,7 +66,7 @@ build\g2_tests.exe
 ## Erwartete Ausgabe
 
 ```
-448/448 Pruefungen bestanden
+522/522 Pruefungen bestanden
 ```
 
 ## Oberflaeche automatisch durchklicken
@@ -84,7 +84,7 @@ build\Release\g2_gui_driver.exe C:\temp\g2c_gui <assetwurzel> <referenz.gla> <an
 Alles wird unter dem ersten Ordner geschrieben, `%APPDATA%` wird fuer den
 Lauf dorthin umgelenkt. Die uebergebenen Dateien werden nur gelesen; die
 .car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`
-(183 Pruefungen mit Daten, 72 ohne - darunter die Update-Leiste gegen einen
+(191 Pruefungen mit Daten, 80 ohne - darunter die Update-Leiste gegen einen
 nachgebauten GitHub-Server und der Abgleich mit Assimilate: Ziel und Speed
 von zehn _humanoid-Zeilen muessen die Zahlen ergeben, die Assimilate 3.1
 zeigt).

@@ -85,7 +85,8 @@ struct Quat {
 
 enum class Rounding {
     Nearest,  // correct: rounds to the nearest representable step
-    Legacy,   // reproduces Carcass's _ftol truncation including the zero return
+    Legacy,   // Carcass's _ftol truncation. Out-of-range values are still clamped,
+              // not turned into Carcass's zero (which decodes to -2.0 / -512).
 };
 
 // Counts what went wrong during compression. Unlike Carcass, not a single
