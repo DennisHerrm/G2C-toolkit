@@ -290,24 +290,6 @@ Skeleton newSkeletonFor(const Script& script, const JobPlan& pl, const JobOption
     std::vector<const xsi::AnimFile*> anims;
     for (std::size_t i = 0; i < files.size(); ++i)
         if (!resolved[i].empty()) anims.push_back(&files[i]);
-    if (false) {
-    std::vector<std::string> errors(resolved.size());
-    parallelFor(
-        resolved.size(),
-        [&](std::size_t i) {
-            if (resolved[i].empty()) return;
-            try {
-                AnimCache cache(bo.cacheDir);
-                files[i] = cache.enabled() ? cache.loadOrParse(resolved[i]) : xsi::loadAnimationFile(resolved[i]);
-                files[i].sourcePath = resolved[i];
-            } catch (const std::exception& e) {
-                errors[i] = script.grabs[i].file + ": " + e.what();
-            }
-        },
-        bo.threads);
-    for (const auto& e : errors)
-        if (!e.empty()) throw std::runtime_error("Lesefehler: " + e);
-    }
 
     SkeletonBuildOptions so;
     so.name = pl.glaName;
