@@ -84,7 +84,7 @@ build\Release\g2_gui_driver.exe C:\temp\g2c_gui <assetwurzel> <referenz.gla> <an
 Alles wird unter dem ersten Ordner geschrieben, `%APPDATA%` wird fuer den
 Lauf dorthin umgelenkt. Die uebergebenen Dateien werden nur gelesen; die
 .car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`
-(207 Pruefungen mit Daten, 85 ohne - darunter die Update-Leiste gegen einen
+(211 Pruefungen mit Daten, 87 ohne - darunter die Update-Leiste gegen einen
 nachgebauten GitHub-Server und der Abgleich mit Assimilate: Ziel und Speed
 von zehn _humanoid-Zeilen muessen die Zahlen ergeben, die Assimilate 3.1
 zeigt).

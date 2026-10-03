@@ -51,6 +51,15 @@ constexpr Entry kTable[] = {
     {S::BtnAddXsiFolder, "XSI-Ordner", "XSI folder", "XSI 文件夹", "XSI フォルダー"},
     {S::BtnAddXsiFolderAll, "XSI-Ordner zu allen", "XSI folder to all", "XSI 文件夹到全部", "XSI フォルダーを全体へ"},
     {S::BtnAddXsiAll, "XSI zu allen", "XSI to all", "XSI 到全部", "XSI を全体へ"},
+    {S::OnlyNewXsi, "Nur neue XSI", "Only new XSI", "仅新的 XSI", "新しい XSI のみ"},
+    {S::OnlyNewXsiTooltip,
+     "Beim Hinzufuegen (Dateien, Ordner, Ziehen) werden .xsi uebersprungen, die das Skript schon enthaelt.\n"
+     "So kann man einfach den ganzen Ordner waehlen - nur die neuen kommen dazu.",
+     "When adding (files, folders, drag and drop), .xsi files the script already contains are skipped.\n"
+     "Just pick the whole folder - only the new ones are added.",
+     "添加（文件、文件夹、拖放）时跳过脚本中已有的 .xsi。\n直接选择整个文件夹即可 - 只添加新的。",
+     "追加時（ファイル、フォルダー、ドラッグ）にスクリプトに既にある .xsi をスキップします。\n"
+     "フォルダー全体を選ぶだけで、新しいものだけが追加されます。"},
     {S::BtnCancel, "Abbrechen", "Cancel", "取消", "中止"},
     {S::SecPaths, "Pfade", "Paths", "路径", "パス"},
     {S::SecOutput, "Ausgabe", "Output", "输出", "出力"},
@@ -492,6 +501,9 @@ constexpr Entry kTable[] = {
     {S::LogAddedFiles, "%zu Datei(en) zu %zu Skript(en) hinzugefuegt",
      "%zu file(s) added to %zu script(s)", "已将 %zu 个文件添加到 %zu 个脚本",
      "%zu 件のファイルを %zu 件のスクリプトに追加しました"},
+    {S::LogSkippedExisting, "%zu .xsi uebersprungen - stehen schon in der .car",
+     "%zu .xsi skipped - already in the .car", "跳过 %zu 个 .xsi - 已在 .car 中",
+     "%zu 件の .xsi をスキップ - すでに .car にあります"},
     {S::Copy, "Kopieren", "Copy", "复制", "コピー"},
     {S::Cut, "Ausschneiden", "Cut", "剪切", "切り取り"},
     {S::PasteBefore, "%zu hier einfuegen (davor)", "Paste %zu here (before)", "在此前粘贴 %zu 项",

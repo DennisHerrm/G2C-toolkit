@@ -3,6 +3,7 @@
 #include "gui/icons.h"
 #include "gui/preview.h"
 
+#include "g2/carbuild.h"
 #include "g2/carjob.h"
 #include "g2/mdxa.h"
 #include "g2/xsi_export.h"
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 
 namespace g2::gui {
@@ -285,6 +287,7 @@ void App::saveSettings() const {
     f << "carcass=" << (settings_.carcassCompat ? 1 : 0) << "\n";
     f << "newskel=" << (settings_.newSkeleton ? 1 : 0) << "\n";
     f << "framestep=" << settings_.frameStep << "\n";
+    f << "onlynewxsi=" << (settings_.onlyNewXsi ? 1 : 0) << "\n";
     f << "backup=" << (settings_.keepBackup ? 1 : 0) << "\n";
     f << "readframes=" << (settings_.readFrameCounts ? 1 : 0) << "\n";
     f << "dark=" << (settings_.darkMode ? 1 : 0) << "\n";
@@ -363,6 +366,7 @@ void App::loadSettings() {
         else if (key == "carcass") settings_.carcassCompat = asBool();
         else if (key == "newskel") settings_.newSkeleton = asBool();
         else if (key == "framestep") settings_.frameStep = std::clamp(std::atoi(val.c_str()), 1, 1000);
+        else if (key == "onlynewxsi") settings_.onlyNewXsi = asBool();
         else if (key == "backup") settings_.keepBackup = asBool();
         else if (key == "xsiver")
             extract_.xsiVersion = std::atoi(val.c_str()) == 35
@@ -1106,6 +1110,58 @@ void App::drawCloseDialog() {
     ImGui::EndPopup();
 }
 
+// When two .xsi paths name the same file: absolute, normalised, lower case
+// (Windows ignores case) and without the extension (Carcass appends ".XSI" to
+// a grab that has none).
+static std::string xsiFileKey(const fs::path& p) {
+    std::error_code ec;
+    const fs::path a = p.is_absolute() ? p : fs::absolute(p, ec);
+    std::string k = a.lexically_normal().generic_string();
+    std::transform(k.begin(), k.end(), k.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (k.size() > 4 && k.compare(k.size() - 4, 4, ".xsi") == 0) k.resize(k.size() - 4);
+    return k;
+}
+
+// The same for the text of a grab line: two lines with the same path are the
+// same grab even if no file is found under it.
+static std::string grabTextKey(const std::string& file) {
+    std::string k = fs::path(file).lexically_normal().generic_string();
+    std::transform(k.begin(), k.end(), k.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (k.size() > 4 && k.compare(k.size() - 4, 4, ".xsi") == 0) k.resize(k.size() - 4);
+    return "|" + k;
+}
+
+std::set<std::string> App::grabbedXsiKeys(const Document& d) const {
+    // Resolved the way the build resolves them ($basedir, asset root, folder
+    // of the .car, default extension) - "already in the .car" must mean the
+    // file the build would read.
+    car::BuildOptions bo;
+    bo.baseDir = settings_.baseDir;
+    std::vector<std::string> resolved;
+    car::findMissingFiles(d.script, d.path, bo, &resolved);
+    const fs::path carDir = fs::path(d.path).parent_path();
+    std::set<std::string> keys;
+    for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
+        const std::string& file = d.script.grabs[i].file;
+        keys.insert(grabTextKey(file));
+        if (!resolved[i].empty()) {
+            keys.insert(xsiFileKey(resolved[i]));
+            continue;
+        }
+        // Not on disk (yet): every place the build would look.
+        const fs::path f(file);
+        if (f.is_absolute()) {
+            keys.insert(xsiFileKey(f));
+        } else {
+            keys.insert(xsiFileKey(carDir / f));
+            if (!settings_.baseDir.empty()) keys.insert(xsiFileKey(fs::path(settings_.baseDir) / f));
+        }
+    }
+    return keys;
+}
+
 std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) {
     if (docs_.empty() || files.empty()) return 0;
 
@@ -1141,41 +1197,68 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
     }
     if (good.empty()) return 0;
 
-    const auto appendTo = [&](Document& d) {
-        for (const std::string& f : good) {
+    // Store relative to basedir if possible - otherwise the .car contains
+    // absolute paths and is no longer usable on any other machine.
+    const auto storedName = [&](const std::string& f) {
+        if (!settings_.baseDir.empty()) {
+            std::error_code ec;
+            const auto rel = fs::relative(f, settings_.baseDir, ec);
+            if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) return rel.generic_string();
+        }
+        return f;
+    };
+
+    std::vector<char> used(good.size(), 0);
+    std::size_t skipped = 0;
+    // Returns how many lines went into the script.
+    const auto appendTo = [&](Document& d) -> std::size_t {
+        std::set<std::string> have;
+        if (settings_.onlyNewXsi) have = grabbedXsiKeys(d);
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < good.size(); ++i) {
             car::GrabDirective g;
-            // Store relative to basedir if possible - otherwise the .car
-            // contains absolute paths and is no longer usable on any other
-            // machine.
-            g.file = f;
-            if (!settings_.baseDir.empty()) {
-                std::error_code ec;
-                const auto rel = fs::relative(f, settings_.baseDir, ec);
-                if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0)
-                    g.file = rel.generic_string();
+            g.file = storedName(good[i]);
+            if (settings_.onlyNewXsi) {
+                // Also catches the same file twice in one go (overlapping
+                // folders).
+                const std::string byFile = xsiFileKey(good[i]);
+                const std::string byText = grabTextKey(g.file);
+                if (have.count(byFile) || have.count(byText)) {
+                    ++skipped;
+                    continue;
+                }
+                have.insert(byFile);
+                have.insert(byText);
             }
             d.script.grabs.push_back(std::move(g));
+            used[i] = 1;
+            ++n;
         }
+        if (n == 0) return 0;
         d.dirty = true;
         d.validated = false;
         d.syncSelection();
+        return n;
     };
 
     std::size_t touched = 0;
     if (toAll) {
         for (std::size_t k = 0; k < docs_.size(); ++k) {
             if (!docs_[k].loadError.empty()) continue;
-            appendTo(docs_[k]);
+            if (appendTo(docs_[k]) == 0) continue;
             keepRootLast(k);
             ++touched;
         }
     } else if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
-        appendTo(docs_[static_cast<std::size_t>(active_)]);
-        keepRootLast(static_cast<std::size_t>(active_));
-        touched = 1;
+        if (appendTo(docs_[static_cast<std::size_t>(active_)]) > 0) {
+            keepRootLast(static_cast<std::size_t>(active_));
+            touched = 1;
+        }
     }
 
-    log(LogLine::Kind::Good, trf(S::LogAddedFiles, files.size(), touched));
+    const auto added = static_cast<std::size_t>(std::count(used.begin(), used.end(), 1));
+    if (added > 0 || skipped == 0) log(LogLine::Kind::Good, trf(S::LogAddedFiles, added, touched));
+    if (skipped > 0) log(LogLine::Kind::Info, trf(S::LogSkippedExisting, skipped));
     return touched;
 }
 
@@ -2237,6 +2320,11 @@ void App::drawToolbar() {
         if (!files.empty()) addXsiFiles(files, true);
     }
     ImGui::EndDisabled();
+    // Right next to the buttons it applies to: decided while adding, not
+    // somewhere in the settings.
+    ImGui::SameLine();
+    ImGui::Checkbox(tr(S::OnlyNewXsi), &settings_.onlyNewXsi);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OnlyNewXsiTooltip));
     ImGui::EndDisabled();
 
     if (busy) {

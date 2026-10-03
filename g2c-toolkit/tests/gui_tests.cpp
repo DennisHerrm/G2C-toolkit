@@ -681,6 +681,53 @@ int main(){
     fs::remove_all(xd); fs::remove_all(r3);
   }
 
+  // "Only missing": pick the whole folder again, only new .xsi go in.
+  {
+    const fs::path xd = fs::temp_directory_path()/"g2c_gui_onlynew";
+    fs::remove_all(xd); fs::create_directories(xd/"unter");
+    for (auto n : {"a.xsi","b.xsi","unter/c.xsi"}) makeXsi(xd/n);
+    const fs::path rc = fs::temp_directory_path()/"g2c_gui_onlynew_car";
+    fs::remove_all(rc); fs::create_directories(rc);
+    // Already grabbed: a.xsi with a different case, c without its extension
+    // (Carcass appends .XSI) - both must count as present.
+    { std::ofstream f(rc/"m.car"); f<<"$aseanimgrabinit\n$aseanimgrab A.XSI\n$aseanimgrab unter/c\n"
+                                       "$aseanimgrabfinalize\n"; }
+    { std::ofstream f(rc/"n.car"); f<<"$aseanimgrabinit\n$aseanimgrabfinalize\n"; }
+
+    g2::gui::Platform pN;
+    g2::gui::App aN(std::move(pN));
+    aN.settings().baseDir = xd.string();
+    aN.settings().onlyNewXsi = true;
+    aN.openCar((rc/"m.car").string());
+    const auto gm = [&]() -> const g2::gui::Document& {
+      for (auto& d : aN.documents()) if (fs::path(d.path).filename() == "m.car") return d;
+      return aN.documents()[0];
+    };
+    ck(aN.addXsiFolder(xd.string(), false)==1,"Nur neue XSI: Skript wurde geaendert");
+    ck(gm().script.grabs.size()==3,"Nur neue XSI: nur b.xsi kam dazu");
+    ck(gm().script.grabs.back().file=="b.xsi","Nur neue XSI: neue Zeile relativ zur Assetwurzel");
+    ck(aN.addXsiFolder(xd.string(), false)==0,"Nur neue XSI: zweiter Durchlauf aendert nichts");
+    ck(gm().script.grabs.size()==3,"Nur neue XSI: keine doppelten Zeilen");
+
+    makeXsi(xd/"d.xsi");
+    aN.addXsiFiles({(xd/"d.xsi").string(),(xd/"d.xsi").string()}, false);
+    ck(gm().script.grabs.size()==4,"Nur neue XSI: dieselbe Datei zweimal auf einmal - einmal eingefuegt");
+
+    // To all: each script gets what IT is missing.
+    aN.openCar((rc/"n.car").string());
+    ck(aN.addXsiFiles({(xd/"a.xsi").string(),(xd/"d.xsi").string()}, true)==1,
+       "Nur fehlende, zu allen: nur das Skript ohne die Dateien wurde geaendert");
+    for (auto& d : aN.documents())
+      ck(d.script.grabs.size()==(fs::path(d.path).filename()=="n.car" ? 2u : 4u),
+         "Nur fehlende, zu allen: jedes Skript hat jede Datei genau einmal");
+
+    // Off: the old behaviour, everything is appended.
+    aN.settings().onlyNewXsi = false;
+    aN.addXsiFiles({(xd/"a.xsi").string()}, false);
+    ck(aN.documents()[aN.activeTab()].script.grabs.size()==3,"ohne Haken wird wie bisher alles angehaengt");
+    fs::remove_all(xd); fs::remove_all(rc);
+  }
+
   // Separate output location per script.
   {
     const fs::path r4 = fs::temp_directory_path()/"g2c_gui_out";
