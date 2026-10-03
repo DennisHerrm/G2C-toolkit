@@ -391,10 +391,12 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
                                  ") passt nicht zur Dateigroesse (" + std::to_string(d.size()) + ")");
 
     out.numFrames = numFrames;
-    out.skeleton.bones.resize(static_cast<std::size_t>(numBones));
 
+    // Size check BEFORE allocating: a 100-byte file claiming two billion
+    // bones used to ask for 200 GB first and only then fail.
     const std::size_t headerEnd = sizeof(fmt::MdxaHeader);
     requireSize(d, headerEnd, static_cast<std::size_t>(numBones) * 4, "Skel-Offsettabelle");
+    out.skeleton.bones.resize(static_cast<std::size_t>(numBones));
 
     for (int i = 0; i < numBones; ++i) {
         const std::int32_t rel = rdI32(p + headerEnd + static_cast<std::size_t>(i) * 4);
@@ -415,6 +417,19 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c)
                 b.basePose.m[r][c] = rdF32(p + off + 72 + static_cast<std::size_t>(r * 4 + c) * 4);
+    }
+
+    // A6: no parent cycles. Only self-parents were rejected; 1 -> 2 -> 1 passed,
+    // and the world matrices of those bones silently stayed all zero.
+    for (int i = 0; i < numBones; ++i) {
+        int cur = i;
+        for (int steps = 0; cur >= 0; ++steps) {
+            if (steps > numBones)
+                throw std::runtime_error("GLA beschaedigt: Parent-Kette von Bone \"" +
+                                         out.skeleton.bones[static_cast<std::size_t>(i)].name +
+                                         "\" bildet einen Kreis");
+            cur = out.skeleton.bones[static_cast<std::size_t>(cur)].parent;
+        }
     }
 
     // Read the indices and determine the largest pool index at the same time,

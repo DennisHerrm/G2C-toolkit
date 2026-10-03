@@ -122,6 +122,11 @@ struct GrabDirective {
     // other file and are not copied into the main script on save.
     int fromInclude = -1;
 
+    // Blank lines in front of this grab that are layout, not comment: they are
+    // written back on save but neither shown as comment rows nor carried into
+    // animation.cfg.
+    int blankBefore = 0;
+
     // Sequence name when no -enum is given: file name without path and
     // extension, in uppercase. Checked against the real _humanoid.car.
     std::string derivedName() const;
@@ -167,6 +172,8 @@ struct Statement {
     // How many of the script's own grabs came before it. If an $include sits
     // in the middle of the grabs, it is put back at this position on save.
     std::size_t              grabsBefore = 0;
+    // Blank lines in front of it (layout only), see GrabDirective::blankBefore.
+    int                      blankBefore = 0;
 
     // Conveniences with a clear error message instead of silent zeros.
     const std::string& arg(std::size_t i, const char* what) const;
@@ -190,6 +197,14 @@ struct Script {
 
     // Comment lines at the very end of the file, after the last command.
     std::vector<std::string> endComments;
+
+    // Everything after $exit, exactly as it was. Carcass stops reading
+    // there; people park disabled grabs behind it. Saving used to delete them.
+    std::vector<std::string> afterExit;
+
+    // Line ending of the file. A .car with plain LF used to come back with
+    // CRLF on every line - a diff of the whole file.
+    std::string newline = "\r\n";
 
     std::vector<Statement> statements;
 
@@ -219,6 +234,31 @@ struct Script {
     std::vector<Sequence> buildSequences(
         const std::function<int(const std::string&)>& frameCountOf = {}) const;
 };
+
+// The header commands Assimilate's "Model" dialog edits. The convert line
+// (-makeskel, -origin, -makeskin, ...) is edited directly in Script::convert.
+struct ModelSettings {
+    std::optional<double>    scale;            // $scale; nullopt = no such line
+    bool                     keepMotion = false;
+    // $pcj entries in file order. "$flatten" is an entry like any other, as
+    // in Assimilate's PCJ list.
+    std::vector<std::string> pcj;
+
+    bool operator==(const ModelSettings&) const = default;
+};
+
+// The settings in the script's OWN lines - what applyModelSettings edits.
+// Lines from $include files are not part of it: they live in another file.
+// (Script::scale/keepMotion/pcjBones are the effective values the build
+// uses, includes and all.)
+ModelSettings modelSettingsOf(const Script& s);
+
+// Writes the settings into the script's statements. Only lines whose value
+// changes are rewritten (keeping their end-of-line comment); new lines go
+// where Raven's scripts have them - after the grabs, before
+// $aseanimgrabfinalize - in the order $scale, $keepmotion, $pcj. Lines from
+// $include files are not touched.
+void applyModelSettings(Script& s, const ModelSettings& m);
 
 // Writes an animation.cfg in Carcass's format.
 std::string writeAnimationCfg(const std::vector<Sequence>& seqs, const std::string& headerComment);

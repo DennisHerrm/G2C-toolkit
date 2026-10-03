@@ -1,3 +1,9 @@
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+#include <thread>
 #include "g2/compress.h"
 
 #include <filesystem>
@@ -21,11 +27,24 @@ namespace g2 {
 //
 // The rename replaces the target in a single step: afterwards either the old
 // or the new file is there in full, never anything in between.
+namespace {
+unsigned long currentProcessId() {
+#ifdef _WIN32
+    return _getpid();
+#else
+    return static_cast<unsigned long>(getpid());
+#endif
+}
+}  // namespace
+
 void writeFileChecked(const std::string& path, const void* data, std::size_t size) {
     namespace fs = std::filesystem;
     const fs::path target(path);
+    // Unique per process and thread: two writers of the same file (a second
+    // g2c, a parallel build) must not share one side file.
     fs::path tmp = target;
-    tmp += ".g2c_tmp";
+    tmp += ".g2c_tmp" + std::to_string(currentProcessId()) + "_" +
+           std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 100000);
 
     {
         std::ofstream f(tmp, std::ios::binary);
@@ -73,7 +92,11 @@ constexpr float kXlatBias  = 512.0f;
 
 // Limits that follow from them.
 constexpr float kQuatMax = 2.0f;
-constexpr float kXlatMax = 511.0f;   // (511 + 512) * 64 = 65472, fits in uint16
+// The format stores (t + 512) * 64 in a uint16: -512 is raw 0, 511.984375 is
+// raw 65535. The clamp used to stop at -511, so values between -512 and -511
+// were moved by up to one unit although they fit.
+constexpr float kXlatMin = -512.0f;
+constexpr float kXlatMax = 65535.0f / 64.0f - 512.0f;
 
 constexpr std::uint16_t kU16Max = 65535;
 
@@ -104,7 +127,7 @@ std::string CompressStats::summary() const {
     if (clean() && nonUnitQuat == 0) return "keine Auffaelligkeiten";
     if (quatClamped) os << quatClamped << " Quaternionkomponenten geklemmt; ";
     if (xlatClamped) os << xlatClamped << " Translationen geklemmt (max |t| = " << maxXlatSeen << "); ";
-    if (nonUnitQuat) os << nonUnitQuat << " nicht normierte Quaternionen korrigiert; ";
+    if (nonUnitQuat) os << nonUnitQuat << " Bone-Matrizen mit Skalierung oder Spiegelung (nur die Drehung gespeichert); ";
     std::string s = os.str();
     if (s.size() >= 2) s.erase(s.size() - 2);
     return s;
@@ -121,10 +144,10 @@ std::uint16_t squashQuatComponent(float f, Rounding r, CompressStats& stats) {
 }
 
 std::uint16_t squashXlatComponent(float f, Rounding r, CompressStats& stats) {
-    if (!(f >= -kXlatMax && f <= kXlatMax)) {
+    if (!(f >= kXlatMin && f <= kXlatMax)) {
         ++stats.xlatClamped;
         stats.maxXlatSeen = std::max(stats.maxXlatSeen, std::isnan(f) ? 0.0f : std::fabs(f));
-        f = std::isnan(f) ? 0.0f : std::clamp(f, -kXlatMax, kXlatMax);
+        f = std::isnan(f) ? 0.0f : std::clamp(f, kXlatMin, kXlatMax);
     }
     return toU16((f + kXlatBias) * kXlatScale, r);
 }
@@ -214,18 +237,70 @@ void quatToMatrix(const Quat& q, Mat3x4& out) {
     out.m[2][2] = 1.0f - (txx + tyy);
 }
 
-fmt::CompQuatBone compressBone(const Mat3x4& mat, const CompressOptions& opt, CompressStats& stats) {
-    Quat q = matrixToQuat(mat);
+// The rotation part of a matrix that carries scale or a mirror.
+//
+// The format stores only a rotation. matrixToQuat assumes a pure rotation; fed
+// a scaled one, it returns a DIFFERENT angle - 0.64 * Rx(90) came out as
+// Rx(76) - and normalizing afterwards only fixes the length, not the angle. A
+// zero scale (the "hide this bone" trick) even turned into a 180 degree turn.
+//
+// Clean rotations are passed through untouched, so every regular build stays
+// bit-identical. Only matrices that are noticeably off are orthonormalized
+// (Gram-Schmidt on the columns, mirror removed); degenerate ones become the
+// identity. Returns false if the input was not a clean rotation.
+static bool rotationPart(const Mat3x4& in, Mat3x4& out) {
+    out = in;
+    double c[3][3];
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 3; ++row) c[col][row] = in.m[row][col];
+    const auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const auto len = [&](const double* a) { return std::sqrt(dot(a, a)); };
+    const double det = c[0][0] * (c[1][1] * c[2][2] - c[1][2] * c[2][1]) -
+                       c[1][0] * (c[0][1] * c[2][2] - c[0][2] * c[2][1]) +
+                       c[2][0] * (c[0][1] * c[1][2] - c[0][2] * c[1][1]);
+    const bool clean = std::fabs(len(c[0]) - 1.0) <= 1e-3 && std::fabs(len(c[1]) - 1.0) <= 1e-3 &&
+                       std::fabs(len(c[2]) - 1.0) <= 1e-3 && std::fabs(dot(c[0], c[1])) <= 1e-3 &&
+                       std::fabs(dot(c[0], c[2])) <= 1e-3 && std::fabs(dot(c[1], c[2])) <= 1e-3 &&
+                       det > 0.0;
+    if (clean) return true;
 
-    // matrixToQuat already normalizes; here we only record whether the input
-    // matrix was a clean rotation in the first place. Non-uniform scaling in
-    // the skeleton is a common mistake in source assets, and Carcass does
-    // report it (0x430790), but only per bone.
-    {
-        const float c0 = std::sqrt(mat.m[0][0] * mat.m[0][0] + mat.m[1][0] * mat.m[1][0] +
-                                   mat.m[2][0] * mat.m[2][0]);
-        if (std::fabs(c0 - 1.0f) > 1e-3f) ++stats.nonUnitQuat;
+    double x[3] = {c[0][0], c[0][1], c[0][2]};
+    double y[3] = {c[1][0], c[1][1], c[1][2]};
+    const double lx = len(x);
+    if (lx < 1e-9) {
+        // No usable axis: no rotation at all.
+        for (int r = 0; r < 3; ++r)
+            for (int k = 0; k < 3; ++k) out.m[r][k] = (r == k) ? 1.0f : 0.0f;
+        return false;
     }
+    for (double& v : x) v /= lx;
+    const double xy = dot(x, y);
+    for (int k = 0; k < 3; ++k) y[k] -= xy * x[k];
+    double ly = len(y);
+    if (ly < 1e-9) {
+        // y collapsed onto x: any perpendicular will do.
+        const double a[3] = {std::fabs(x[0]) < 0.9 ? 1.0 : 0.0, std::fabs(x[0]) < 0.9 ? 0.0 : 1.0, 0.0};
+        const double ax = dot(a, x);
+        for (int k = 0; k < 3; ++k) y[k] = a[k] - ax * x[k];
+        ly = len(y);
+    }
+    for (double& v : y) v /= ly;
+    // z from the cross product: a proper rotation, the mirror is dropped.
+    const double z[3] = {x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]};
+    for (int r = 0; r < 3; ++r) {
+        out.m[r][0] = static_cast<float>(x[r]);
+        out.m[r][1] = static_cast<float>(y[r]);
+        out.m[r][2] = static_cast<float>(z[r]);
+    }
+    return false;
+}
+
+fmt::CompQuatBone compressBone(const Mat3x4& mat, const CompressOptions& opt, CompressStats& stats) {
+    // Scale and mirror can't be stored; take the rotation and count it. Carcass
+    // reports such matrices too (0x430790), but only per bone.
+    Mat3x4 rot;
+    if (!rotationPart(mat, rot)) ++stats.nonUnitQuat;
+    Quat q = matrixToQuat(rot);
 
     if (opt.canonicalizeSign && q.w < 0.0f) {
         q.w = -q.w; q.x = -q.x; q.y = -q.y; q.z = -q.z;

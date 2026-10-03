@@ -102,8 +102,11 @@ ValidateResult validate(const Script& script, const std::string& carPath,
         }
         for (const auto& [name, wo] : gesehen) {
             if (wo.size() < 2) continue;
+            // A part named like its own grab counts twice but is one line.
             std::string zeilen;
+            std::set<std::size_t> lines;
             for (const std::size_t k : wo) {
+                if (!lines.insert(script.grabs[k].line).second) continue;
                 if (!zeilen.empty()) zeilen += ", ";
                 zeilen += std::to_string(script.grabs[k].line);
             }
@@ -153,10 +156,9 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     }
     r.sequences = allNames.size();
     for (const auto& n : allNames) ++nameCount[n];
-    for (const auto& [n, c] : nameCount)
-        if (c > 1)
-            add(r, Issue::Level::Error,
-                "Sequenzname " + std::to_string(c) + "-mal vergeben", n);
+    // Duplicates are reported once, by the case-insensitive check above (the
+    // engine doesn't distinguish case). This second report doubled the error
+    // count for every duplicate.
 
     // --- 3. Names against the enum table ----------------------------------
     //
@@ -284,13 +286,13 @@ void addGrabFrame(Script& s) {
 
 namespace {
 
-constexpr const char* kNl = "\r\n";
-
-void writeComments(std::ostringstream& os, const std::vector<std::string>& cs) {
+void writeCommentLines(std::ostringstream& os, const std::vector<std::string>& cs,
+                       const std::string& nl) {
     for (const auto& c : cs) {
-        if (c.empty()) os << kNl;
-        else if (c.size() >= 2 && c[0] == '/' && c[1] == '/') os << c << kNl;
-        else os << "// " << c << kNl;
+        const std::size_t a = c.find_first_not_of(" \t");
+        if (a == std::string::npos) os << c << nl;                 // blank, as it was
+        else if (c.compare(a, 2, "//") == 0) os << c << nl;         // with its indentation
+        else os << "// " << c << nl;
     }
 }
 
@@ -365,6 +367,7 @@ std::string convertText(const ConvertDirective& c) {
     if (!c.sourceLine.empty() && sameConvert(parseConvertLine(c.sourceLine), c)) return c.sourceLine;
 
     std::ostringstream os;
+    os.precision(10);   // the default 6 digits rounded -origin 1.23456789 to 1.23457
     os << (c.noAsk ? "$aseanimconvertmdx_noask " : "$aseanimconvertmdx ") << quoted(c.root);
     if (c.makeSkin) os << " -makeskin";
     if (!c.makeSkel.empty()) os << " -makeskel " << quoted(c.makeSkel);
@@ -386,6 +389,11 @@ std::string statementText(const Statement& st) {
 
 std::string writeScript(const Script& s) {
     std::ostringstream os;
+    // The file's own line ending (see Script::newline).
+    const std::string& kNl = s.newline;
+    const auto writeComments = [&](std::ostringstream& o, const std::vector<std::string>& cs) {
+        writeCommentLines(o, cs, kNl);
+    };
 
     // $include files stay $include lines. Their grabs are in s.grabs for the
     // build, but belong to the other file - copied into the main script, they
@@ -395,6 +403,7 @@ std::string writeScript(const Script& s) {
         if (!includeWritten.insert(id).second) return;
         for (const auto& st : s.statements)
             if (st.cmd == Cmd::Include && st.includeId == id) {
+                for (int b = 0; b < st.blankBefore; ++b) os << kNl;
                 writeComments(os, st.commentsBefore);
                 os << statementText(st) << kNl;
             }
@@ -425,11 +434,52 @@ std::string writeScript(const Script& s) {
         return std::find(anchored.begin(), anchored.end(), &st) != anchored.end();
     };
 
+    // Any other own line between two grabs ($scale, an unknown command, ...)
+    // stays where it was too. All grabs are written as one block, and such a
+    // line used to come out after the last grab - an unchanged file was no
+    // longer byte-identical.
+    std::vector<std::pair<const Statement*, std::size_t>> between;
+    {
+        std::size_t ownGrabs = 0;
+        for (std::size_t i = 0; i < s.statements.size(); ++i) {
+            const Statement& st = s.statements[i];
+            if (st.fromInclude >= 0) continue;
+            if (st.cmd == Cmd::AseAnimGrab) {
+                ++ownGrabs;
+                continue;
+            }
+            if (i > firstGrabStmt && i < lastGrabStmt && st.cmd != Cmd::Include &&
+                st.cmd != Cmd::AseAnimConvertMdx && st.cmd != Cmd::AseAnimConvertMdxNoAsk)
+                between.emplace_back(&st, ownGrabs);
+        }
+    }
+    const auto isBetween = [&](const Statement& st) {
+        return std::any_of(between.begin(), between.end(), [&](const auto& b) { return b.first == &st; });
+    };
+
+    // With several conversion lines only the last one is the one the build
+    // and the model dialog use; the others are written back as they were.
+    // The first one used to receive the last one's text, and the rest vanished.
+    const Statement* editableConvert = nullptr;
+    for (const auto& st : s.statements)
+        if (st.fromInclude < 0 &&
+            (st.cmd == Cmd::AseAnimConvertMdx || st.cmd == Cmd::AseAnimConvertMdxNoAsk))
+            editableConvert = &st;
+
     const auto writeGrabs = [&] {
         std::size_t own = 0;
+        std::vector<bool> betweenDone(between.size(), false);
         const auto flushAnchored = [&](bool all) {
             for (const Statement* st : anchored)
                 if (all || st->grabsBefore <= own) writeInclude(st->includeId);
+            for (std::size_t k = 0; k < between.size(); ++k) {
+                if (betweenDone[k] || (!all && between[k].second > own)) continue;
+                betweenDone[k] = true;
+                const Statement& st = *between[k].first;
+                for (int b = 0; b < st.blankBefore; ++b) os << kNl;
+                writeComments(os, st.commentsBefore);
+                os << statementText(st) << kNl;
+            }
         };
         for (const auto& g : s.grabs) {
             if (g.fromInclude >= 0) {
@@ -439,6 +489,7 @@ std::string writeScript(const Script& s) {
                 continue;
             }
             flushAnchored(false);
+            for (int b = 0; b < g.blankBefore; ++b) os << kNl;
             writeComments(os, g.commentsBefore);
             os << grabText(g) << kNl;
             ++own;
@@ -473,12 +524,19 @@ std::string writeScript(const Script& s) {
             if (grabsWritten) writeInclude(st.includeId);
             continue;
         }
+        if (isBetween(st)) continue;   // written inside the grab block
 
+        for (int b = 0; b < st.blankBefore; ++b) os << kNl;
         writeComments(os, st.commentsBefore);
         if (st.cmd == Cmd::AseAnimConvertMdx || st.cmd == Cmd::AseAnimConvertMdxNoAsk) {
-            // At its old position, but from the current data.
-            if (s.convert && !convertWritten) os << convertText(*s.convert) << kNl;
-            convertWritten = true;
+            // The editable one at its old position, from the current data;
+            // any others as they were.
+            if (&st == editableConvert && s.convert && s.convert->fromInclude < 0 && !convertWritten) {
+                os << convertText(*s.convert) << kNl;
+                convertWritten = true;
+            } else {
+                os << statementText(st) << kNl;
+            }
             continue;
         }
         os << statementText(st) << kNl;
@@ -502,6 +560,8 @@ std::string writeScript(const Script& s) {
         os << convertText(*s.convert) << kNl;
 
     writeComments(os, s.endComments);
+    // Behind $exit: exactly as it was.
+    for (const auto& l : s.afterExit) os << l << kNl;
     return os.str();
 }
 

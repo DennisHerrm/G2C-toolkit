@@ -77,6 +77,10 @@ struct Platform {
 
     // Opens a web page in the browser: release notes, download page.
     std::function<void(const std::string& url)> openUrl;
+
+    // Starts another program with one argument (ModView with a .glm).
+    // false if it could not be started.
+    std::function<bool(const std::string& exe, const std::string& arg)> launch;
 };
 
 // One open script - one tab.
@@ -134,6 +138,13 @@ struct Settings {
     static constexpr int threads = 0;
 
     bool darkMode = true;
+
+    // ModView, for "Open in ModView". Asked for on first use if empty.
+    std::string modelViewPath;
+
+    // Show start, count, loop and speed of each split part next to its name,
+    // like Assimilate's "Frame Details On Additional Sequences".
+    bool partDetails = false;
 
     // Ask GitHub for a newer version at startup. Only a check - installing
     // always needs a click. A self-built "dev" version never checks by itself.
@@ -292,9 +303,20 @@ public:
     // Select a tab from outside: sets active_ AND tells ImGui on the next draw
     // which tab to show.
     void activate(int i) {
+        // Row indices of in-place edits and the Shift anchor belong to the
+        // script they were made in - carried into another tab, an edit typed
+        // in A was committed into B.
+        if (i != active_) resetRowState();
         active_ = i;
         selectTab_ = i;
+        frameRecheck_ = true;
     }
+
+    // Files from outside (a second g2c instance, a drop on the window). They
+    // are opened at the start of the next frame, never in the middle of one:
+    // the handler can run while a file dialog is open inside drawing code, and
+    // opening a tab there reallocated the tab list under a live reference.
+    void queueOpen(std::vector<std::string> paths);
 
     // Looks for animation.cfg and .frames next to the GLA.
     //
@@ -395,6 +417,73 @@ public:
     // -2 = not found.
     int frameCountOf(const std::string& relPath) const;
 
+    // Frame rate from the file's SI_Scene: > 0 the rate, 0 the file has
+    // none, -1 not read yet.
+    int xsiRateOf(const std::string& relPath) const;
+
+    // The framespeed the build writes into animation.cfg: -framespeed if
+    // given, otherwise the SI_Scene rate, otherwise the build's default. 0 =
+    // not known yet (file still being read).
+    //
+    // The table used to show "auto" and the dialog 0 for most sequences -
+    // Assimilate showed the real number, and nobody could see how fast an
+    // animation actually runs.
+    int effectiveSpeed(const car::GrabDirective& g) const;
+
+    // Start frame of every grab in the GLA, as the build lays them out. -1
+    // from the first grab whose frame count is not known yet.
+    std::vector<int> targetFrames(const Document& d) const;
+
+    // --- Assimilate's "Model" dialog ---------------------------------------
+    //
+    // The header of the script: conversion line, $scale, $keepmotion, $pcj.
+    // Assimilate edited all of it in one dialog; g2c could only read it.
+    struct ModelEdit {
+        car::ModelSettings  head;
+        bool                haveConvert = false;
+        bool                convertFromInclude = false;   // lives in another file
+        std::string         root;
+        bool                ownSkeleton = false;
+        std::string         skeleton;
+        bool                haveOrigin = false;
+        std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        double              scale = 1.0;
+        bool                makeSkin = false;
+        bool                loseDupVerts = false;
+        bool                smooth = false;
+    };
+    ModelEdit modelEditOf(std::size_t docIndex) const;
+    // Writes the edit into the script. true if anything changed.
+    bool      applyModelEdit(std::size_t docIndex, const ModelEdit& e);
+    void      openModelDialog(std::size_t docIndex);
+
+    // Save under a new name; the tab then belongs to the new file. false if
+    // another open tab already has that file, or writing fails.
+    bool saveDocumentAs(std::size_t index, const std::string& path);
+
+    // Most recently opened scripts, newest first.
+    const std::deque<std::string>& recentFiles() const { return recent_; }
+
+    // Assimilate's "Write Config Data": the full build, but only
+    // animation.cfg is written - GLA, .frames and mesh stay untouched.
+    void writeConfigOnly(bool allTabs) { startBuild(allTabs, true); }
+
+    // .car files under the asset root that animate against the skeleton this
+    // script makes ($aseanimgrab_gla / $aseanimref_gla). Assimilate: "Build
+    // dependant models".
+    std::vector<std::string> findDependents(std::size_t docIndex) const;
+    // Opens them as tabs and builds them. Returns how many.
+    std::size_t buildDependents(std::size_t docIndex);
+
+    // ModView with the .glm this script builds. false (with a log line) if
+    // ModView or the .glm is missing.
+    bool openInModView(std::size_t docIndex);
+
+    // Sets -framespeed on several rows at once; nullopt removes it again
+    // (back to the rate from the .xsi). Returns the number of rows changed.
+    std::size_t setFrameSpeed(std::size_t docIndex, const std::vector<std::size_t>& rows,
+                              std::optional<int> speed);
+
     // Remember settings across sessions.
     // Folder for settings and window state.
     //
@@ -464,6 +553,12 @@ public:
     bool fontsDirty() const { return fontsDirty_; }
     void clearFontsDirty() { fontsDirty_ = false; }
 
+    // New monitor scale: sizes and spacing are rebuilt on the next frame.
+    void setDpiScale(float k) {
+        settings_.dpiScale = k;
+        styleApplied_ = false;
+    }
+
 private:
     void drawMenuBar();
     void drawToolbar();
@@ -476,7 +571,7 @@ private:
     void drawIssues();
     void drawSequenceDialog(Document& d);
     // Selection list for enums. Returns true if something was chosen.
-    bool drawEnumChooser(const char* popupId, std::string& target);
+    bool drawEnumChooser(const char* popupId, std::string& target, const Document* d = nullptr);
     void drawLog();
 
     // Colored icon, then text - both on one line.
@@ -503,14 +598,23 @@ private:
     void applyStyle();
     void refreshTabTitles();
 
-    void startBuild(bool allTabs);
+    void startBuild(bool allTabs, bool cfgOnly = false);
+    void startBuildIndices(std::vector<std::size_t> which, bool cfgOnly);
+    void drawModelDialog();
+    void addRecent(const std::string& path);
 
     // Runs in the worker thread. Gets copies of the document AND the settings:
     // the UI stays usable during the build, and a field being typed into must
     // not be read by the thread at the same time.
-    void buildOne(const Document& d, const Settings& st);
+    void buildOne(const Document& d, const Settings& st, bool cfgOnly = false);
 
     void drawCloseDialog();
+    void drawSpeedDialog();
+    // Another modal is up: wait. Two modals at once each closed the other
+    // every frame, and neither ever became visible.
+    bool otherModalOpen(const char* mine) const;
+    void resetRowState();
+    void openPathsNow(const std::vector<std::string>& paths);
     void drawUpdateBanner();
     void drawUpdateSettings();
     void drawOverwriteDialog();
@@ -579,6 +683,24 @@ private:
     bool                     quitRequested_ = false;
     bool                     quitApproved_ = false;
     bool                     restartRequested_ = false;
+
+    // Model dialog: the script it belongs to and the edit in progress.
+    bool                     modelOpen_ = false;
+    std::string              modelDocPath_;
+    ModelEdit                modelEdit_;
+    char                     pcjInput_[128] = {0};
+    int                      pcjSel_ = -1;
+
+    std::deque<std::string>  recent_;
+
+    // Animation picker: category (0 = all) and "hide used".
+    int                      enumCategory_ = 0;
+    bool                     enumHideUsed_ = false;
+
+    // "Set framespeed" for several rows: which rows of which script.
+    std::vector<std::size_t> speedRows_;
+    std::string              speedDocPath_;
+    int                      speedValue_ = 20;
 
     // Created in the constructor when the platform offers network access.
     std::unique_ptr<update::Updater> updater_;
@@ -682,8 +804,13 @@ private:
     // thread enters the messages while drawing. The mutex protects the
     // hand-over.
     std::mutex               dupMutex_;
-    std::vector<std::string> pendingDuplicates_;
-    std::string              pendingDupDoc_;
+    // Script path -> duplicate names from its last build attempt.
+    std::map<std::string, std::vector<std::string>> pendingDuplicates_;
+    std::vector<std::string> pendingOpen_;
+    // Re-check the .xsi files of the active script (tab switch): files
+    // re-exported in the meantime showed their old length until restart.
+    bool                     frameRecheck_ = false;
+    std::string              frameWorkerCarDir_;
 
     int  issueCycleFor_ = -1;
     int  issueCycleIdx_ = 0;
@@ -722,6 +849,7 @@ private:
 
     std::vector<std::string> savedTabs_;
     int                      savedActive_ = 0;
+    std::string              savedActivePath_;   // the active tab, by path
 
     // --- Frame counts in the background -----------------------------------
     //
@@ -730,7 +858,14 @@ private:
     // button for it would be needless work for the user - you always want to
     // see the number.
     mutable std::mutex          frameMutex_;
-    std::map<std::string, int>  frameCounts_;      // relative path -> frames
+    // What the background reader found in each .xsi.
+    struct XsiInfo {
+        int frames = -2;   // -2 = not found / unreadable
+        int rate = 0;      // SI_Scene frame rate, 0 = none in the file
+        std::uintmax_t size = 0;     // stamp of the file that was read
+        long long      mtime = 0;
+    };
+    std::map<std::string, XsiInfo> xsiInfo_;   // relative path -> info
     std::atomic<bool>           frameWorkerRunning_{false};
     std::atomic<bool>           frameWorkerStop_{false};
     std::thread                 frameWorker_;

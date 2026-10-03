@@ -73,11 +73,20 @@ std::vector<std::string> tokenize(const std::string& line) {
 // Comment at the end of the line, including "//". Empty if the line has none
 // or is itself only a comment.
 std::string trailingCommentOf(const std::string& line) {
+    // The same rule as tokenize(): "//" starts a comment only at the start of
+    // a token and outside quotes. "models/p//x.xsi" is a path, not a comment -
+    // it used to be taken as one, written into animation.cfg, and grew on
+    // every edit of the line.
     std::string c;
-    const std::size_t k = line.find("//");
-    if (k != std::string::npos && line.find_first_not_of(" \t") != k) {
+    bool quoted = false;
+    for (std::size_t k = 0; k + 1 < line.size(); ++k) {
+        if (line[k] == '"') quoted = !quoted;
+        if (quoted || line[k] != '/' || line[k + 1] != '/') continue;
+        if (k > 0 && !std::isspace(static_cast<unsigned char>(line[k - 1]))) continue;
+        if (line.find_first_not_of(" \t") == k) return {};   // the whole line is a comment
         c = line.substr(k);
         while (!c.empty() && (c.back() == ' ' || c.back() == '\t')) c.pop_back();
+        return c;
     }
     return c;
 }
@@ -168,6 +177,7 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
     // generated animation.cfg - with 1683 sequences the difference between a
     // structured file and a wall of numbers is considerable.
     std::vector<std::string> pendingComments;
+    int pendingBlank = 0;
 
     while (std::getline(in, line)) {
         ++lineNo;
@@ -178,13 +188,17 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
             std::string t = line;
             const std::size_t a = t.find_first_not_of(" \t");
             if (a == std::string::npos) {
-                // Blank line: keep it only if comments are already pending -
-                // otherwise the blank lines between blocks pile up.
-                if (!pendingComments.empty()) pendingComments.emplace_back();
+                // Blank line. Inside a comment block it is part of the block;
+                // in front of it, it is layout and counted separately - so it
+                // comes back on save (it used to vanish) without turning into
+                // an empty comment row in the table and in animation.cfg.
+                if (pendingComments.empty()) ++pendingBlank;
+                else pendingComments.emplace_back();
                 continue;
             }
             if (t[a] == '/' && a + 1 < t.size() && t[a + 1] == '/') {
-                pendingComments.push_back(t.substr(a));
+                // With its indentation - that is part of the author's layout.
+                pendingComments.push_back(t);
                 continue;
             }
         }
@@ -234,6 +248,8 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 GrabDirective g = grabFromStatement(st);
                 g.commentsBefore = std::move(pendingComments);
                 pendingComments.clear();
+                g.blankBefore = pendingBlank;
+                pendingBlank = 0;
                 g.trailingComment = zeilenKommentar;
                 g.sourceLine = line;
                 g.fromInclude = fromInclude;
@@ -264,6 +280,8 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 }
                 st.commentsBefore = std::move(pendingComments);
                 pendingComments.clear();
+                st.blankBefore = pendingBlank;
+                pendingBlank = 0;
                 script.statements.push_back(st);
                 // Already added: don't add it a second time after the switch.
                 if (!opt.followIncludes) continue;
@@ -291,7 +309,15 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
             case Cmd::Exit:
                 st.commentsBefore = std::move(pendingComments);
                 pendingComments.clear();
+                st.blankBefore = pendingBlank;
+                pendingBlank = 0;
                 script.statements.push_back(st);
+                // Carcass reads no further - but the lines stay in the file.
+                if (depth == 0)
+                    while (std::getline(in, line)) {
+                        if (!line.empty() && line.back() == '\r') line.pop_back();
+                        script.afterExit.push_back(line);
+                    }
                 return;
             case Cmd::Unknown:
                 // Carcass reports unknown commands and keeps going. We keep
@@ -306,11 +332,23 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
         //
         // Exception: before $aseanimgrabfinalize. What stands there belongs
         // after the last animation, where the UI shows it for moving.
-        if (st.cmd == Cmd::AseAnimGrabFinalize && !pendingComments.empty()) {
-            if (fromInclude < 0)
+        //
+        // Only directly after a grab, though: with $scale/$pcj in between (the
+        // layout of Raven's _humanoid.car), a comment above the finalize line
+        // used to jump up behind the last grab on saving.
+        const bool afterGrab = !script.statements.empty() &&
+                               script.statements.back().cmd == Cmd::AseAnimGrab;
+        if (st.cmd == Cmd::AseAnimGrabFinalize && !pendingComments.empty() && afterGrab) {
+            if (fromInclude < 0) {
+                script.trailingComments.insert(script.trailingComments.end(),
+                                               static_cast<std::size_t>(pendingBlank), std::string());
                 for (auto& c : pendingComments) script.trailingComments.push_back(std::move(c));
+            }
+            pendingBlank = 0;
         } else if (st.cmd != Cmd::AseAnimGrab) {
             st.commentsBefore = std::move(pendingComments);
+            st.blankBefore = pendingBlank;
+            pendingBlank = 0;
         }
         pendingComments.clear();
 
@@ -319,9 +357,9 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
 
     // Whatever follows the last command belongs at the end of the file.
     if (depth == 0) {
-        while (!pendingComments.empty() && pendingComments.back().empty())
-            pendingComments.pop_back();
-        script.endComments = std::move(pendingComments);
+        script.endComments.assign(static_cast<std::size_t>(pendingBlank), std::string());
+        script.endComments.insert(script.endComments.end(), pendingComments.begin(),
+                                  pendingComments.end());
     }
 }
 
@@ -373,6 +411,11 @@ double Statement::argNumber(std::size_t i, const char* what) const {
     if (ec != std::errc{} || ptr != s.data() + s.size())
         throw std::runtime_error(std::string(what) + " in \"" + file + "\" Zeile " +
                                  std::to_string(line) + ": \"" + s + "\" ist keine Zahl");
+    // "1e10", "inf", "nan" are numbers to from_chars, but end up in int
+    // fields - undefined behaviour, in practice INT_MIN in animation.cfg.
+    if (!std::isfinite(out) || std::fabs(out) > 2.0e9)
+        throw std::runtime_error(std::string(what) + " in \"" + file + "\" Zeile " +
+                                 std::to_string(line) + ": \"" + s + "\" liegt ausserhalb des Zahlenbereichs");
     return out;
 }
 
@@ -476,10 +519,11 @@ std::string writeAnimationCfg(const std::vector<Sequence>& seqs, const std::stri
         if (!s.commentsBefore.empty()) {
             if (!erste) os << "\r\n";   // not directly after the header
             for (const auto& c : s.commentsBefore) {
-                if (c.empty()) {
+                const std::size_t a = c.find_first_not_of(" \t");
+                if (a == std::string::npos) {
                     os << "\r\n";   // a blank line stays blank, not "//"
-                } else if (c.size() >= 2 && c[0] == '/' && c[1] == '/') {
-                    os << c << "\r\n";
+                } else if (c.compare(a, 2, "//") == 0) {
+                    os << c.substr(a) << "\r\n";
                 } else {
                     os << "// " << c << "\r\n";
                 }
@@ -512,6 +556,8 @@ std::string writeAnimationCfg(const std::vector<Sequence>& seqs, const std::stri
 
 Script parse(const std::string& text, const std::string& originName, const ParseOptions& opt) {
     Script s;
+    // Plain LF only if the file has no CRLF at all; mixed files stay CRLF.
+    if (text.find('\n') != std::string::npos && text.find("\r\n") == std::string::npos) s.newline = "\n";
     int nextIncludeId = 0;
     parseInto(s, text, originName, opt, 0, "", -1, nextIncludeId);
     return s;
@@ -549,6 +595,223 @@ ConvertDirective parseConvertLine(const std::string& line) {
 
 Script parseFile(const std::string& path, const ParseOptions& opt) {
     return parse(readWholeFile(path), path, opt);
+}
+
+// --- Model settings -----------------------------------------------------------
+
+ModelSettings modelSettingsOf(const Script& s) {
+    // Own lines only. Counting the $include's lines too made the dialog copy
+    // them into the main script: "$pcj $flatten" from an include came back as
+    // a second line in the main file, and removing it there did nothing.
+    ModelSettings m;
+    for (const auto& st : s.statements) {
+        if (st.fromInclude >= 0) continue;
+        if (st.cmd == Cmd::Scale && !st.args.empty()) {
+            try {
+                m.scale = st.argNumber(0, "$scale");
+            } catch (const std::exception&) {
+            }
+        } else if (st.cmd == Cmd::KeepMotion) {
+            m.keepMotion = true;
+        } else if (st.cmd == Cmd::Pcj && !st.args.empty()) {
+            m.pcj.push_back(st.args[0]);
+        }
+    }
+    return m;
+}
+
+namespace {
+
+bool own(const Statement& st) { return st.fromInclude < 0; }
+
+Statement makeStatement(Cmd cmd, std::vector<std::string> args) {
+    Statement st;
+    st.cmd = cmd;
+    st.raw = cmdName(cmd);
+    st.args = std::move(args);
+    return st;
+}
+
+// New arguments, same end-of-line comment.
+void rewrite(Statement& st, std::vector<std::string> args) {
+    const std::string comment = trailingCommentOf(st.sourceLine);
+    st.args = std::move(args);
+    std::string line = st.raw;
+    for (const auto& a : st.args) line += " " + a;
+    if (!comment.empty()) line += "  " + comment;
+    st.sourceLine = line;
+}
+
+// Removes a statement without losing the comment lines above it: they move to
+// whatever comes next.
+// Puts comment lines in front of statement pos. A grab statement is only a
+// placeholder for s.grabs - comments given to it were never written, so they
+// go to the grab itself.
+void attachComments(Script& s, std::size_t pos, const std::vector<std::string>& comments) {
+    if (comments.empty()) return;
+    std::vector<std::string>* dst = &s.endComments;
+    if (pos < s.statements.size()) {
+        dst = &s.statements[pos].commentsBefore;
+        if (s.statements[pos].cmd == Cmd::AseAnimGrab) {
+            const std::size_t gi = static_cast<std::size_t>(
+                std::count_if(s.statements.begin(), s.statements.begin() + static_cast<long>(pos),
+                              [](const Statement& st) { return st.cmd == Cmd::AseAnimGrab; }));
+            dst = gi < s.grabs.size() ? &s.grabs[gi].commentsBefore : &s.trailingComments;
+        }
+    }
+    dst->insert(dst->begin(), comments.begin(), comments.end());
+}
+
+void eraseKeepingComments(Script& s, std::size_t i) {
+    std::vector<std::string> comments = std::move(s.statements[i].commentsBefore);
+    s.statements.erase(s.statements.begin() + static_cast<long>(i));
+    attachComments(s, i, comments);
+}
+
+// Where new header lines go: before $aseanimgrabfinalize, as in Raven's
+// scripts; otherwise after the last grab; otherwise before the conversion;
+// otherwise at the end.
+std::size_t headerInsertPos(const Script& s) {
+    std::size_t lastGrab = s.statements.size();
+    for (std::size_t i = 0; i < s.statements.size(); ++i) {
+        const auto& st = s.statements[i];
+        if (!own(st)) continue;
+        if (st.cmd == Cmd::AseAnimGrabFinalize) return i;
+        if (st.cmd == Cmd::AseAnimGrab) lastGrab = i;
+    }
+    if (lastGrab < s.statements.size()) return lastGrab + 1;
+    for (std::size_t i = 0; i < s.statements.size(); ++i)
+        if (own(s.statements[i]) && (s.statements[i].cmd == Cmd::AseAnimConvertMdx ||
+                                     s.statements[i].cmd == Cmd::AseAnimConvertMdxNoAsk))
+            return i;
+    return s.statements.size();
+}
+
+// Position right after the last own statement of one of the given kinds, or
+// headerInsertPos if there is none.
+std::size_t afterLastOf(const Script& s, std::initializer_list<Cmd> kinds) {
+    std::size_t pos = s.statements.size() + 1;
+    for (std::size_t i = 0; i < s.statements.size(); ++i)
+        if (own(s.statements[i]) &&
+            std::find(kinds.begin(), kinds.end(), s.statements[i].cmd) != kinds.end())
+            pos = i + 1;
+    return pos <= s.statements.size() ? pos : headerInsertPos(s);
+}
+
+std::string formatNumber(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.10g", v);
+    return buf;
+}
+
+}  // namespace
+
+void applyModelSettings(Script& s, const ModelSettings& m) {
+    // Only what actually changes is touched. A value that comes from an
+    // $include file and stays the same must not get a second line here.
+    const ModelSettings cur = modelSettingsOf(s);
+
+    // --- $scale ---
+    if (cur.scale != m.scale) {
+        std::vector<std::size_t> idx;
+        for (std::size_t i = 0; i < s.statements.size(); ++i)
+            if (own(s.statements[i]) && s.statements[i].cmd == Cmd::Scale) idx.push_back(i);
+        if (!m.scale) {
+            for (std::size_t k = idx.size(); k-- > 0;) eraseKeepingComments(s, idx[k]);
+        } else if (idx.empty()) {
+            s.statements.insert(s.statements.begin() + static_cast<long>(headerInsertPos(s)),
+                                makeStatement(Cmd::Scale, {formatNumber(*m.scale)}));
+        } else {
+            // The last one is the one Carcass uses; earlier ones stay as they are.
+            Statement& st = s.statements[idx.back()];
+            bool same = false;
+            try {
+                same = !st.args.empty() && std::stod(st.args[0]) == *m.scale;
+            } catch (...) {
+            }
+            if (!same) rewrite(st, {formatNumber(*m.scale)});
+        }
+    }
+
+    // --- $keepmotion ---
+    if (cur.keepMotion != m.keepMotion) {
+        std::vector<std::size_t> idx;
+        for (std::size_t i = 0; i < s.statements.size(); ++i)
+            if (own(s.statements[i]) && s.statements[i].cmd == Cmd::KeepMotion) idx.push_back(i);
+        if (!m.keepMotion) {
+            for (std::size_t k = idx.size(); k-- > 0;) eraseKeepingComments(s, idx[k]);
+        } else if (idx.empty()) {
+            s.statements.insert(s.statements.begin() + static_cast<long>(afterLastOf(s, {Cmd::Scale})),
+                                makeStatement(Cmd::KeepMotion, {}));
+        }
+    }
+
+    // --- $pcj ---
+    if (cur.pcj != m.pcj) {
+        std::vector<std::size_t> idx;
+        std::vector<std::string> current;
+        for (std::size_t i = 0; i < s.statements.size(); ++i)
+            if (own(s.statements[i]) && s.statements[i].cmd == Cmd::Pcj) {
+                idx.push_back(i);
+                current.push_back(s.statements[i].args.empty() ? std::string()
+                                                               : s.statements[i].args[0]);
+            }
+        if (current != m.pcj) {
+            // Rebuild the block where it was; unchanged entries keep their line.
+            std::vector<Statement> old;
+            for (const std::size_t i : idx) old.push_back(s.statements[i]);
+            std::vector<std::string> comments;
+            std::size_t pos = idx.empty() ? s.statements.size() + 1 : idx.front();
+            for (std::size_t k = idx.size(); k-- > 0;) {
+                auto& c = s.statements[idx[k]].commentsBefore;
+                comments.insert(comments.begin(), c.begin(), c.end());
+                s.statements.erase(s.statements.begin() + static_cast<long>(idx[k]));
+            }
+            if (pos > s.statements.size()) pos = afterLastOf(s, {Cmd::Scale, Cmd::KeepMotion});
+            std::vector<Statement> fresh;
+            for (const auto& name : m.pcj) {
+                auto it = std::find_if(old.begin(), old.end(), [&](const Statement& st) {
+                    return !st.args.empty() && st.args[0] == name;
+                });
+                if (it != old.end()) {
+                    Statement st = *it;
+                    st.commentsBefore.clear();
+                    fresh.push_back(std::move(st));
+                    old.erase(it);
+                } else {
+                    fresh.push_back(makeStatement(Cmd::Pcj, {name}));
+                }
+            }
+            if (!fresh.empty()) {
+                fresh.front().commentsBefore = std::move(comments);
+                s.statements.insert(s.statements.begin() + static_cast<long>(pos), fresh.begin(),
+                                    fresh.end());
+            } else {
+                attachComments(s, pos, comments);
+            }
+        }
+    }
+
+    // The values the build reads, recomputed from ALL lines the same way the
+    // parser does - includes too. Setting them from m alone left memory and
+    // file disagreeing whenever an include carried one of these lines.
+    s.scale.reset();
+    s.keepMotion = false;
+    s.pcjBones.clear();
+    s.pcjFlatten = false;
+    for (const auto& st : s.statements) {
+        if (st.cmd == Cmd::Scale && !st.args.empty()) {
+            try {
+                s.scale = st.argNumber(0, "$scale");
+            } catch (const std::exception&) {
+            }
+        } else if (st.cmd == Cmd::KeepMotion) {
+            s.keepMotion = true;
+        } else if (st.cmd == Cmd::Pcj && !st.args.empty()) {
+            if (toLower(st.args[0]) == "$flatten") s.pcjFlatten = true;
+            else s.pcjBones.push_back(st.args[0]);
+        }
+    }
 }
 
 }  // namespace g2::car

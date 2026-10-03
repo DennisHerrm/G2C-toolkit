@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <functional>
+#include <set>
 #include <sstream>
 #include <utility>
 #include <stdexcept>
@@ -103,7 +104,7 @@ std::vector<ShapeArray> parseShape(const Template& shape) {
         // Hence, in general: skip whatever is not a number.
         while (i < v.size() && !v[i].asNumber()) ++i;
 
-        a.values.reserve(need);
+        a.values.reserve(std::min(need, v.size() - std::min(i, v.size())));
         for (std::size_t k = 0; k < need && i < v.size(); ++k, ++i) {
             const auto d = v[i].asNumber();
             a.values.push_back(d ? static_cast<float>(*d) : 0.0f);
@@ -140,7 +141,7 @@ std::vector<EnvelopeEntry> parseEnvelopes(const Document& doc) {
         const auto n = e->values[2].asInt();
         if (!n || *n <= 0) continue;
 
-        en.weights.reserve(static_cast<std::size_t>(*n));
+        en.weights.reserve(std::min(static_cast<std::size_t>(*n), e->values.size() / 2));
         for (std::size_t i = 3; i + 1 < e->values.size(); i += 2) {
             const auto idx = e->values[i].asInt();
             const auto w = e->values[i + 1].asNumber();
@@ -300,8 +301,9 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         const Found& f = found[fi];
         const Template* mesh = f.model->find("SI_Mesh");
         const Template* shape = mesh ? mesh->findDeep("SI_Shape") : nullptr;
-        const Template* tris = mesh ? mesh->findDeep("SI_TriangleList") : nullptr;
-        if (!shape || !tris) {
+        const std::vector<const Template*> triLists =
+            mesh ? mesh->findAll("SI_TriangleList") : std::vector<const Template*>{};
+        if (!shape || triLists.empty()) {
             res.stats.warnings.push_back("Mesh \"" + f.xsiName + "\" ohne Shape oder TriangleList");
             continue;
         }
@@ -362,49 +364,113 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
             break;
         }
 
-        // --- Read the TriangleList ----------------------------------------
-        // Layout: <count>, "<attributes>", "<material>", then one index
-        // block each with count*3 values - positions, normals, UVs.
-        if (tris->values.size() < 3) {
-            res.stats.warnings.push_back("TriangleList von \"" + f.xsiName + "\" ist leer");
-            continue;
-        }
-        const auto triCount = tris->values[0].asInt();
-        if (!triCount || *triCount <= 0) continue;
-        const std::string attribs = tris->values[1].text();
-        const bool hasUv = attribs.find("TEX_COORD") != std::string::npos;
-        const bool hasNormals = attribs.find("NORMAL") != std::string::npos;
-
-        const std::size_t perBlock = static_cast<std::size_t>(*triCount) * 3;
-        std::size_t at = 3;
-        const auto readBlock = [&](std::vector<int>& dst) {
-            dst.clear();
-            dst.reserve(perBlock);
-            for (std::size_t k = 0; k < perBlock && at < tris->values.size(); ++k, ++at) {
-                const auto v = tris->values[at].asInt();
-                dst.push_back(v ? static_cast<int>(*v) : 0);
-            }
-        };
-
+        // --- Read the TriangleLists ---------------------------------------
+        // Layout per list: <count>, "<attributes>", "<material>", then the
+        // position indices and one block per attribute, in the order of the
+        // attribute string ("NORMAL|COLOR|TEX_COORD_UV").
+        //
+        // All lists of the mesh, not only the first: Softimage writes one per
+        // material, and the triangles of the others used to vanish. Blocks are
+        // taken in the order the attribute string names them - a COLOR block
+        // used to be read as the UVs. A block that is too short used to be
+        // read past its end.
         std::vector<int> posIdx, nrmIdx, uvIdx;
-        readBlock(posIdx);
-        if (hasNormals) readBlock(nrmIdx);
-        if (hasUv) readBlock(uvIdx);
-
-        if (posIdx.size() != perBlock) {
-            res.stats.warnings.push_back("TriangleList von \"" + f.xsiName + "\" abgeschnitten");
-            continue;
+        bool hasNormals = false, hasUv = false;
+        for (const Template* tl : triLists) {
+            if (tl->values.size() < 3) {
+                res.stats.warnings.push_back("TriangleList von \"" + f.xsiName + "\" ist leer");
+                continue;
+            }
+            const auto tc = tl->values[0].asInt();
+            if (!tc || *tc <= 0) {
+                res.stats.warnings.push_back("TriangleList von \"" + f.xsiName + "\" ohne Dreiecke");
+                continue;
+            }
+            const std::size_t n = static_cast<std::size_t>(*tc) * 3;
+            std::vector<std::string> kinds;
+            {
+                const std::string attribs = tl->values[1].text();
+                std::size_t from = 0;
+                while (from <= attribs.size()) {
+                    const std::size_t bar = attribs.find('|', from);
+                    const std::string k = attribs.substr(from, bar == std::string::npos ? std::string::npos : bar - from);
+                    if (!k.empty()) kinds.push_back(k);
+                    if (bar == std::string::npos) break;
+                    from = bar + 1;
+                }
+            }
+            std::size_t at = 3;
+            bool ok = true;
+            const auto block = [&](std::vector<int>* dst) {
+                // Checked against what is there BEFORE taking anything: a
+                // damaged count must not reserve or read beyond the list.
+                if (!ok || n > tl->values.size() || at > tl->values.size() - n) {
+                    ok = false;
+                    return;
+                }
+                if (dst) dst->reserve(dst->size() + n);
+                for (std::size_t k = 0; k < n; ++k) {
+                    const auto v = tl->values[at + k].asInt();
+                    if (!v) {
+                        ok = false;
+                        return;
+                    }
+                    if (dst) dst->push_back(static_cast<int>(*v));
+                }
+                at += n;
+            };
+            std::vector<int> p, nn, uu;
+            bool gotN = false, gotU = false;
+            block(&p);
+            for (const auto& k : kinds) {
+                if (k == "NORMAL" && !gotN) {
+                    block(&nn);
+                    gotN = true;
+                } else if (k.rfind("TEX_COORD", 0) == 0 && !gotU) {
+                    block(&uu);
+                    gotU = true;
+                } else {
+                    block(nullptr);   // COLOR, further UV sets: skipped in place
+                }
+            }
+            if (!ok) {
+                res.stats.warnings.push_back("TriangleList von \"" + f.xsiName +
+                                             "\" abgeschnitten oder mit ungueltigem Index");
+                continue;
+            }
+            posIdx.insert(posIdx.end(), p.begin(), p.end());
+            if (gotN) nrmIdx.insert(nrmIdx.end(), nn.begin(), nn.end());
+            else nrmIdx.insert(nrmIdx.end(), n, -1);
+            if (gotU) uvIdx.insert(uvIdx.end(), uu.begin(), uu.end());
+            else uvIdx.insert(uvIdx.end(), n, -1);
+            hasNormals = hasNormals || gotN;
+            hasUv = hasUv || gotU;
         }
+        if (posIdx.empty()) continue;
+        const std::size_t perBlock = posIdx.size();
 
         // Weights of this mesh: position index -> list of (bone, weight).
         std::map<int, std::vector<VertexWeight>> weightsByPos;
         const auto ev = envByMesh.find(f.xsiName);
         if (ev != envByMesh.end()) {
+            std::set<std::string> outside;
             for (const EnvelopeEntry* e : ev->second) {
                 const auto bi = boneIndex.find(e->bone);
-                if (bi == boneIndex.end()) continue;   // bone not in the skeleton
+                if (bi == boneIndex.end()) {
+                    // Not in the skeleton: these shares are dropped, and a
+                    // vertex left with no weight at all ends up on bone 0.
+                    if (!e->weights.empty()) outside.insert(e->bone);
+                    continue;
+                }
                 for (const auto& [vi, w] : e->weights)
                     weightsByPos[vi].push_back(VertexWeight{bi->second, w});
+            }
+            if (!outside.empty()) {
+                std::string list;
+                for (const auto& b : outside) list += (list.empty() ? "" : ", ") + b;
+                res.stats.warnings.push_back("Mesh \"" + f.xsiName +
+                                             "\": Gewichte auf Bones ausserhalb des Skeletts (" + list +
+                                             ") fallen weg");
             }
         }
 
@@ -427,8 +493,9 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         byPos.reserve(perBlock / 2);
 
         surf.vertices.reserve(perBlock / 2);
-        surf.triangles.reserve(static_cast<std::size_t>(*triCount));
+        surf.triangles.reserve(perBlock / 3);
 
+        bool warnedBadPos = false;
         for (std::size_t t3 = 0; t3 < perBlock; t3 += 3) {
             Triangle tri;
             for (int c = 0; c < 3; ++c) {
@@ -446,6 +513,11 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                         world[r] = xf.m[r][0] * local[0] + xf.m[r][1] * local[1] +
                                    xf.m[r][2] * local[2] + xf.m[r][3];
                     toGlmSpace(world, opt.scale, v.position);
+                } else if (!warnedBadPos) {
+                    // Used to become a vertex at the origin without a word.
+                    warnedBadPos = true;
+                    res.stats.warnings.push_back("Mesh \"" + f.xsiName +
+                                                 "\": Positionsindex ausserhalb der Punktliste");
                 }
                 if (nrm && ni >= 0 && static_cast<std::size_t>(ni) < nrm->count()) {
                     const float* n = &nrm->values[static_cast<std::size_t>(ni) * 3];
@@ -528,6 +600,16 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
 
         res.stats.vertices += surf.vertices.size();
         res.stats.triangles += surf.triangles.size();
+        // The game's limits per surface (SHADER_MAX_VERTEXES 1000,
+        // SHADER_MAX_INDEXES 6000): above them it refuses to load the whole
+        // model. The file itself is fine, so this is a warning, not an error -
+        // but without it the model "just doesn't load" and nothing says why.
+        if (surf.vertices.size() > 1000 || surf.triangles.size() * 3 > 6000)
+            res.stats.warnings.push_back("Surface \"" + surf.name + "\": " +
+                                         std::to_string(surf.vertices.size()) + " Vertices, " +
+                                         std::to_string(surf.triangles.size()) +
+                                         " Dreiecke - Jedi Academy laedt hoechstens 1000 Vertices "
+                                         "und 2000 Dreiecke pro Surface");
         if (surf.flags & fmt::kSurfFlagIsBolt) ++res.stats.tags;
         if (surf.flags & fmt::kSurfFlagOff) ++res.stats.offSurfaces;
 

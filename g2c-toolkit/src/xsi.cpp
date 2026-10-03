@@ -192,7 +192,9 @@ void parseBody(Scanner& sc, Template& out, int depth) {
 
 Version parseHeader(Scanner& sc) {
     sc.skipTrivia();
-    const std::string magic = sc.token();
+    std::string magic = sc.token();
+    // Editors like Notepad put a UTF-8 BOM in front when saving.
+    if (magic.rfind("\xEF\xBB\xBF", 0) == 0) magic.erase(0, 3);
     if (magic != "xsi")
         throw std::runtime_error("Keine dotXSI-Datei: erwartet \"xsi\" am Anfang, gefunden \"" +
                                  magic + "\"");

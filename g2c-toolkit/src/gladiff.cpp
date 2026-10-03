@@ -166,13 +166,16 @@ DiffResult diffMdxa(const MdxaFile& a, const MdxaFile& b,
     // --- Mapping to sequences --------------------------------------------
     if (!sequences.empty()) {
         for (const auto& s : sequences) {
-            if (s.frameCount <= 0 || s.targetFrame >= frames) continue;
+            // A cfg line is untrusted input: a negative start used to index
+            // before the frame table, a huge count overflowed the end.
+            if (s.frameCount <= 0 || s.targetFrame >= frames || s.targetFrame < 0) continue;
             SequenceDiff sd;
             sd.name = s.name;
             sd.targetFrame = s.targetFrame;
             sd.frameCount = s.frameCount;
 
-            const int end = std::min(frames, s.targetFrame + s.frameCount);
+            const int end = static_cast<int>(std::min<long long>(
+                frames, static_cast<long long>(s.targetFrame) + s.frameCount));
             for (int f = s.targetFrame; f < end; ++f) {
                 for (int i = 0; i < nb; ++i) {
                     const Mat3x4 ma = a.boneMatrix(f, i);
