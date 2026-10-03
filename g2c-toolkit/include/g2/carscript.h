@@ -32,6 +32,8 @@ enum class Cmd {
     AseAnimGrabFinalize,
     AseAnimGrabGla,
     AseAnimRefGla,
+    // Carcass reads it and does nothing with it.
+    CfgNameFromCar,
     AseConvert,
     AseAnimConvert,
     AseAnimConvertMdx,
@@ -73,6 +75,11 @@ struct Sequence {
 // $aseanimgrab <file.xsi> [-loop N] [-framespeed N] [-enum NAME]
 //              [-qdskipstart] [-additional t c l s NAME]... [-qdskipstop]
 struct GrabDirective {
+    // The $basedir in force for this line (the last one before it), as
+    // written in the script; empty = the asset root. Carcass reads the file
+    // from <basedir><file> then.
+    std::string baseDir;
+
     // Comment lines that appear BEFORE this grab in the script.
     //
     // They are carried over into the generated animation.cfg. Anyone who
@@ -205,6 +212,9 @@ struct Script {
     // Line ending of the file. A .car with plain LF used to come back with
     // CRLF on every line - a diff of the whole file.
     std::string newline = "\r\n";
+    // The last line had no line break (a file saved without one came back
+    // with one, a diff on the last line).
+    bool noFinalNewline = false;
 
     std::vector<Statement> statements;
 

@@ -40,8 +40,50 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     const std::string carDir = fs::path(carPath).parent_path().string();
     const std::string baseDir = opt.baseDir.empty() ? script.baseDir : opt.baseDir;
 
-    if (script.grabs.empty())
+    bool hasGrabGla = false, hasMdr = false;
+    for (const auto& st : script.statements) {
+        if (st.cmd == Cmd::AseAnimGrabGla) hasGrabGla = true;
+        if (st.cmd == Cmd::AseConvert || st.cmd == Cmd::AseAnimConvert) hasMdr = true;
+    }
+    // A model script ($aseanimgrab_gla) and an MDR script build without
+    // $aseanimgrab lines.
+    if (script.grabs.empty() && !hasGrabGla && !hasMdr)
         add(r, Issue::Level::Error, "Das Skript enthaelt keine $aseanimgrab-Anweisungen");
+    if (!script.grabs.empty() && hasGrabGla)
+        add(r, Issue::Level::Error,
+            "$aseanimgrab_gla (fertige GLA benutzen) und $aseanimgrab im selben Skript schliessen sich aus");
+
+    // What Carcass refuses on the convert line - with the real reason.
+    if (script.convert) {
+        const auto& xa = script.convert->extraArgs;
+        std::size_t convLine = 0;
+        for (const auto& st : script.statements)
+            if (st.cmd == Cmd::AseAnimConvertMdx || st.cmd == Cmd::AseAnimConvertMdxNoAsk) convLine = st.line;
+        for (std::size_t i = 0; i < xa.size(); ++i) {
+            std::string a = xa[i];
+            for (auto& ch : a) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (a == "-maxtris") ++i;
+            else if (a == "-smooth" || a == "-losedupverts" || a == "-skew90" || a == "-noskew90") {
+            } else if (a == "-scale") {
+                add(r, Issue::Level::Error, "-scale gehoert nicht auf die $aseanimconvertmdx-Zeile - stattdessen "
+                                            "\"$scale <wert>\" nach $aseanimgrabinit", {}, convLine);
+                ++i;   // its value
+            } else if (a == "-skel") {
+                add(r, Issue::Level::Error, "-skel gibt es nicht mehr - eine fertige GLA wird mit "
+                                            "\"$aseanimgrab_gla <name.gla>\" benutzt", {}, convLine);
+                ++i;
+            } else if (a == "-ignorebasedeviations")
+                add(r, Issue::Level::Error, "-ignorebasedeviations gehoert nicht auf die $aseanimconvertmdx-Zeile",
+                    {}, convLine);
+            else
+                add(r, Issue::Level::Error, "Unbekannte Angabe \"" + xa[i] + "\" auf der $aseanimconvertmdx-Zeile",
+                    {}, convLine);
+        }
+    }
+    for (const auto& st : script.statements)
+        if (st.cmd == Cmd::Unknown)
+            add(r, Issue::Level::Warning,
+                "Unbekannter Befehl \"" + st.raw + "\" - g2c uebergeht ihn, Carcass brach hier ab", {}, st.line);
 
     // --- 0a. Size of animation.cfg ----------------------------------------
     //
@@ -123,9 +165,15 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     // are missing at once, and 1289 identical lines crowd out every other
     // message - even though the real message then is "the path is wrong",
     // not "this file is missing".
-    std::vector<std::string> resolved(script.grabs.size());
+    // The same rules as the build: $basedir before the line, ".XSI" added
+    // to a name without extension.
+    std::vector<std::string> resolved;
+    {
+        BuildOptions bo;
+        bo.baseDir = baseDir;
+        (void)findMissingFiles(script, carPath, bo, &resolved);
+    }
     for (std::size_t i = 0; i < script.grabs.size(); ++i) {
-        resolved[i] = resolveAssetPath(script.grabs[i].file, baseDir, carDir);
         if (resolved[i].empty()) {
             ++r.missingFiles;
             if (r.missingFiles <= 8)
@@ -288,11 +336,23 @@ namespace {
 
 void writeCommentLines(std::ostringstream& os, const std::vector<std::string>& cs,
                        const std::string& nl) {
+    // Lines of a /* ... */ block are comment text as they stand.
+    bool inBlock = false;
     for (const auto& c : cs) {
         const std::size_t a = c.find_first_not_of(" \t");
-        if (a == std::string::npos) os << c << nl;                 // blank, as it was
-        else if (c.compare(a, 2, "//") == 0) os << c << nl;         // with its indentation
-        else os << "// " << c << nl;
+        if (inBlock) {
+            os << c << nl;
+            if (c.find("*/") != std::string::npos) inBlock = false;
+        } else if (a == std::string::npos) {
+            os << c << nl;                 // blank, as it was
+        } else if (c.compare(a, 2, "//") == 0 || c[a] == ';' || c[a] == '#') {
+            os << c << nl;                 // with its indentation; Carcass also reads ; and #
+        } else if (c.compare(a, 2, "/*") == 0) {
+            os << c << nl;
+            if (c.find("*/", a + 2) == std::string::npos) inBlock = true;
+        } else {
+            os << "// " << c << nl;        // typed in without a comment mark
+        }
     }
 }
 
@@ -562,7 +622,10 @@ std::string writeScript(const Script& s) {
     writeComments(os, s.endComments);
     // Behind $exit: exactly as it was.
     for (const auto& l : s.afterExit) os << l << kNl;
-    return os.str();
+    std::string out = os.str();
+    if (s.noFinalNewline && out.size() >= kNl.size() && out.compare(out.size() - kNl.size(), kNl.size(), kNl) == 0)
+        out.resize(out.size() - kNl.size());
+    return out;
 }
 
 std::vector<FoundCar> scanDirectory(const std::string& root, std::size_t maxDepth) {

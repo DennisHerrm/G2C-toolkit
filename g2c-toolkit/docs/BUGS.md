@@ -274,3 +274,48 @@ Bewusst nicht geaendert:
 - **GLA und animation.cfg an der Kommandozeile** sind zwei getrennte Schreibvorgaenge.
 - **g2c-cli.exe**, deren Austausch beim Update scheitert, bleibt bis zum naechsten
   Release alt; das Update meldet es.
+
+
+## Oktober 2026: Carcass v2.2 vollstaendig
+
+Alles, was Carcass kann, ist in g2c (ANLEITUNG Abschnitt 72). Dabei wurden
+diese Carcass-Fehler gefunden. g2c macht es anders - mit `-carcass` nur dort
+wie Carcass, wo es um bytegleiche Dateien geht (Rundung, Glaetten).
+
+| Bereich | Carcass | g2c |
+|---|---|---|
+| Kommandozeile | `-makeskin`, `-makeskel`, `-origin` stehen in der Hilfe, sind aber "Unknown option" | gehen |
+| Kommandozeile | Optionen mit Wert als letztes Argument: Absturz; Optionen nach der .car werden als .car gelesen | Fehlermeldung; Optionen ueberall, gross/klein egal |
+| Kommandozeile | `-smooth`/`-losedupverts` wirkungslos (jede Convert-Zeile setzt sie zurueck) | wirken |
+| Aktualitaet | vergleicht nur mit der GLM, liest auskommentierte Zeilen, baut bei gleichem Zeitstempel | prueft GLA und GLM, Inhalt statt Text |
+| `-recursive` | gross/klein beim Ueberspringen von `backup`/`ignore_`; ein Fehler beendet den ganzen Lauf | ohne Unterschied; jede .car fuer sich |
+| `-filelist` | Zeilen kleingeschrieben, an Leerzeichen abgeschnitten, eingerueckte verworfen | Pfade wie geschrieben, Kommentarzeilen erlaubt |
+| `-framestep` | Speed nicht geteilt (doppelt so schnell); `_skip` erst ab 3 | Speed/Loop/Teile mitgeteilt; `_skip` ab 2 |
+| `.frames` | eine Datei zweimal gegrabbt: ein Block, der erste Startframe verloren | ein Block je Grab |
+| `$pcj`/`-flatten` | vor den Grabs: Abbruch mit falscher `_always_`-Meldung (nennt die GLA statt den Bone) | Warnung mit Bone-Namen |
+| `$aseanimref_gla` | mit einer GLA, die Carcass selbst gebaut hat, immer Abbruch; Gesichts-Bones still unter cranium | Abgleich ueber den GLA-Namen, Reihenfolge der Referenz |
+| Skelett | Bone-Namen gross/klein verschieden: zweiter Bone, Finger still umgehaengt | ein Bone, Hinweis |
+| Skelett | Bone ohne BASEPOSE: lokale statt absolute Pose | aus der SRT-Kette zusammengesetzt |
+| Skelett | abweichende Bindepose: Abbruch (MD-Humanoid unbaubar) | Warnung, letzte Datei gilt |
+| `$bonehiercap` | eine alte `.bonecap` ohne Kappung still geloescht | bleibt |
+| Glaetten | entgegengesetzte Normalen addiert (doppelseitig = schwarz), Tags verbiegen die Nahtnormalen | nur gleichseitige, ohne Tags |
+| Gewichte | groesstes Gewicht rundet auf 0 -> "vier Gewichte, alle null" | ein Gewicht |
+| Tags | zwei gleich lange Kanten: Richtung des vorigen Tags, Vertex doppelt moeglich | eindeutig |
+| Tags | Name `*back\0ack` (Rest von `bolt_back` hinter der Null) | sauber |
+| `-makeskin` | erstes Byte jedes Shader-Namens auf 0 | Shader leer |
+| UV | ohne UV-Block: UVs ueber den Normalenindex; COLOR-Block als UV gelesen | nach dem Attribut-String |
+| Normalen | Mesh ohne NORMAL: Null-Normalen | Flaechennormalen |
+| Vertex ohne Gewicht | Abbruch | an Bone 0, Warnung |
+| `_info.txt` | "Index bytes for pooling" aus der Mesh-Statistik | echte 3 Byte je Bone und Frame |
+| ASE | Namen ohne Anfuehrungszeichen verlieren das erste Zeichen, mit Leerzeichen werden abgeschnitten; `.ase` geht nicht | ganz gelesen; `.ase` geht |
+| ASE | "Bip"-Objekte sollten wegfallen, fallen nie weg (nach dem Kleinschreiben gesucht) | fallen weg |
+| ASE | Objekt ohne `*MESH_WEIGHTS`: alle Punkte im Ursprung, NaN-Normalen | Fehler |
+| ASE | Bone-Index hinter der Bone-Liste: still Bone 0 | Fehler |
+| MDR | komprimierte Frames im falschen Format (vom Spiel nicht lesbar); immer `test.mdr` | unkomprimiert; nach der .ask benannt |
+| MDR | `$aseanimgrab_gla`: alle Matrizen Einheitsmatrizen | die echten Frames der GLA |
+| MDR | Namen mit `_x` am Ende verlieren zwei Zeichen (`u_x` -> `u`) | nur die LOD-Endung faellt weg |
+| ASE-GLM | `*NODE_PARENT` ignoriert: nur Ein-Objekt-Modelle baubar | Hierarchie aus `*NODE_PARENT`, sonst unter dem ersten Objekt |
+| CARPET | Zwischenspeicher in `C:\ravenlocal\CARPET`, waechst unbegrenzt (bei dir 11 GB) | Cache neben der .car |
+
+Nicht nachgebaut, weil Carcass es selbst nicht kann: MD3-Ausgabe,
+`-playerparms` (head/upper/lower.mdr), `-weapon`.

@@ -35,7 +35,9 @@ g2c does what they did, more accurately, and adds the direction they never had: 
 ### Build (XSI → GLA)
 
 - Reads all 19 `.car` directives, including `-additional`, `-qdskipstart`, `$pcj`, `$keepmotion`
-- Writes `.gla`, `.glm`, `animation.cfg`, `.frames`, `.skin`
+- Writes `.gla`, `.glm`, `animation.cfg`, `.frames`, `.bonecap`, `_info.txt`, `.skin` — **you pick which**; everything except GLA and config can be switched off
+- Model scripts (`$aseanimgrab_gla`, ASE meshes) and MDR scripts (`$aseconvert`) build too
+- Builds a new skeleton from the source files the way Carcass does, or keeps the reference GLA's bone order
 - Opens a whole model tree at once — each `.car` becomes a tab
 - Sequence editor: enum, loop frame, frame speed, sub-ranges
 - Copy and paste sequences **between scripts**
@@ -62,10 +64,21 @@ The same executable works from a console:
 g2c build _humanoid.car -ref _humanoid.gla -basedir C:\base
 g2c export _humanoid.gla -cfg animation.cfg -o out\ -car out\_humanoid.car
 g2c export _humanoid.gla -cfg animation.cfg -o out\ -xsi 3.5
+g2c build _humanoid.car -only gla,cfg          only the GLA and animation.cfg
 g2c makecar <folder>     build a .car from a folder of .xsi files
 g2c diff a.gla b.gla     compare two files bone by bone
+g2c dump _humanoid.glm   same output as carcass -dump
 g2c validate / info / check / mesh / anim / xsi / car / scan / about
 ```
+
+**Carcass mode.** `g2c` also accepts Carcass's own command line, so existing batch files keep working:
+
+```
+g2c -recursive                       every .car below the current folder
+g2c carcass -filelist list.txt -forcebuild -framestep 2
+```
+
+`-recursive`, `-filelist`, `-forcebuild` (otherwise only what changed), `-nooutput`, `-framestep`, `-dump`, `-verbose`, `-silent`, `-keypress`, `-nocarpet`, `-flatten`, `-smooth`, `-losedupverts`, `-makeskin`, `-origin` behave as in Carcass. Add `-carcass` for output that is byte-identical to Carcass, including its rounding and smoothing.
 
 ---
 
@@ -91,6 +104,18 @@ Measured against Raven's own `_humanoid.gla`, not estimated.
 
 **Mesh output** matches Raven's on names, flags, shaders, hierarchy and bone references — 84 of 84 surfaces.
 
+**Against Carcass v2.2** (each case built with both tools and compared byte by byte):
+
+| | identical | the rest |
+|---|---|---|
+| GLM from `.xsi` | 23 of 27 with `-carcass` | Carcass bugs, see below |
+| GLM + GLA from `.ase` | 3 of 3 | |
+| MDR | 8 of 12 | Carcass bugs, see below |
+| New skeleton | every normal case | 4 inputs crash Carcass |
+| `-dump`, `.bonecap` | identical | |
+
+The real 2061-grab `_humanoid.car` builds in 8.5 s from cold, 2.4 s with a warm cache.
+
 ---
 
 ## Carcass bugs that are fixed
@@ -104,6 +129,12 @@ Found by disassembling `carcass.exe` and measuring against real files.
 **Silent limit violations.** Several hard format limits are checked in a way that lets bad data through and produces a file the engine mis-reads later.
 
 **No candidate search.** Rounding each quaternion component independently does not give the nearest *rotation*. g2c evaluates the neighbours and keeps the best.
+
+**Smoothing across back faces.** `-smooth` averages normals of every vertex at the same position, including back faces of double-sided surfaces and tags. Their normals cancel and the surface renders black. g2c only averages normals that point the same way.
+
+**Mesh corner cases.** Meshes without normals, normals taken from UV vertices, and weights that round to zero produce broken vertices in Carcass. In MDR it discards `Bip01` and writes wrong frames for absolute animations.
+
+**Crashes on new skeletons.** Four inputs that make Carcass abort build cleanly in g2c.
 
 ---
 
@@ -166,7 +197,16 @@ Stated openly, because you will run into them eventually.
 
 ---
 
-## What's new (September 2026)
+## What's new (October 2026)
+
+**Everything Carcass could do, without its bugs.** Model scripts, ASE meshes, MDR, new skeletons, `.bonecap`, `_info.txt`, `-dump`, `-framestep`, `-smooth`, `-losedupverts`, `-makeskin` and Carcass's command line. Carcass and Assimilate are no longer needed.
+
+- **Choose your outputs.** In the GUI (settings) and on the command line (`-only`, `-nogla`, `-noglm`, …). If you only need the GLA and `animation.cfg`, that is all that is written.
+- **Fixed in g2c itself:** the `face` bone was never animated, mesh weights with a different case or an `_always_` suffix were dropped, the GLM named the reference GLA instead of its own, the skin file was not called `<car>_default.skin`, and the GUI built everything twice.
+- **Faster.** The real humanoid builds in 8.5 s instead of 9.1 s from cold, 2.4 s instead of 2.9 s warm.
+- The animation cache format changed, so the first build after updating re-reads every `.xsi` once.
+
+## September 2026
 
 A full test pass against Raven's shipped `_humanoid.gla`, Carcass v2.2 and 53 real `.car` scripts. Highlights:
 
@@ -181,7 +221,7 @@ The full list is in [`g2c-toolkit/docs/BUGS.md`](g2c-toolkit/docs/BUGS.md).
 
 ## Verification
 
-448 automated checks run on every build, including round-trip tests against real files. A separate driver (`g2_gui_driver`) clicks, drags and types through every window of the real interface — 118 checks, reporting every ImGui assertion and ID conflict. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
+591 automated checks run on every build, including round-trip tests against real files — all 55 real `.car` scripts are saved back byte for byte. A separate driver (`g2_gui_driver`) clicks, drags and types through every window of the real interface — 207 checks, reporting every ImGui assertion and ID conflict. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
 
 Three static checkers run at build time for the parts that cannot be unit-tested: the Win32 layer, GUI wiring, and `build.bat`.
 

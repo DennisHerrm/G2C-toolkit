@@ -796,6 +796,15 @@ bool looksLikeCommand(const char* a) {
                                   "-v",    "--version"};
     for (const char* c : kCmds)
         if (std::strcmp(a, c) == 0) return true;
+    // Carcass's command line: "g2c carcass ...", "g2c dump x.glm" or the
+    // options straight away, as carcass.exe took them ("g2c -recursive").
+    if (std::strcmp(a, "carcass") == 0 || std::strcmp(a, "dump") == 0) return true;
+    static const char* kCarcass[] = {"-recursive", "-forcebuild", "-nostrips", "-writedir", "-nocarpet",
+                                     "-flatten", "-keypress", "-silent", "-verbose", "-nocompress",
+                                     "-nooutput", "-smooth", "-losedupverts", "-ignorebasedeviations",
+                                     "-filelist", "-dump", "-framestep", "-makeskin", "-origin"};
+    for (const char* c : kCarcass)
+        if (_stricmp(a, c) == 0) return true;
     return false;
 }
 

@@ -29,6 +29,7 @@
 
 #include "g2/carscript.h"
 #include "g2/mdxa.h"
+#include "g2/mdxm.h"
 #include "g2/readfile.h"
 
 #include "imgui.h"
@@ -774,6 +775,23 @@ int main(int argc, char** argv) {
             D.click(D.find(tr(s)));
         check(st.writeFrames == f0 && st.writeMesh == m0 && st.carcassCompat == k0,
               "zweiter Klick stellt zurueck");
+        {
+            const bool g0 = st.writeGla, cf0 = st.writeCfg, i0 = st.writeInfo;
+            for (S s : {S::WriteGla, S::WriteCfg, S::WriteInfo}) D.click(D.find(tr(s)));
+            check(st.writeGla != g0 && st.writeCfg != cf0 && st.writeInfo != i0,
+                  "Haekchen GLA, animation.cfg und _info.txt reagieren");
+            for (S s : {S::WriteGla, S::WriteCfg, S::WriteInfo}) D.click(D.find(tr(s)));
+            check(st.writeGla == g0 && st.writeCfg == cf0 && st.writeInfo == i0,
+                  "zweiter Klick stellt GLA/cfg/_info zurueck");
+        }
+        {
+            const bool n0 = st.newSkeleton;
+            D.click(D.find(tr(S::NewSkeleton)));
+            check(st.newSkeleton != n0, "Haekchen \"Skelett neu bauen\" reagiert");
+            D.click(D.find(tr(S::NewSkeleton)));
+            check(st.newSkeleton == n0, "zweiter Klick stellt es zurueck");
+            check(D.find(tr(S::FrameStep)) != nullptr, "Feld Framestep vorhanden");
+        }
 
         // Paths: via the folder button (dialog supplies them) and by typing.
         if (real) {
@@ -1356,6 +1374,108 @@ int main(int argc, char** argv) {
         check(!revealed.empty(), "Ausgabeordner oeffnen ruft den Explorer");
         D.click(D.findEnds(tr(S::CopyLog)));
         check(logHas(*app, "Zeilen") || true, "Protokoll kopieren");
+    });
+
+    // =====================================================================
+    step("10b. Ausgaben waehlen, Modell-Skript");
+    guardedStep("Ausgaben", [&] {
+        if (!real || app->documents().empty()) return;
+        auto& st = app->settings();
+        const g2::gui::Settings saved = st;
+        const int activeBefore = app->activeTab();
+        const std::string outBefore = app->documents()[static_cast<std::size_t>(activeBefore)].outputDir;
+        auto& d = app->documents()[static_cast<std::size_t>(activeBefore)];
+        const fs::path only = work / "nur_cfg";
+        fs::remove_all(only);
+        d.outputDir = only.string();
+
+        // Only the animation.cfg: nothing else may appear.
+        st.writeGla = false;
+        st.writeCfg = true;
+        st.writeFrames = false;
+        st.writeMesh = false;
+        st.writeInfo = false;
+        D.click(D.findIconButton(tr(S::BtnBuild), "##main"));
+        D.waitBuild();
+        std::size_t files = 0;
+        for (const auto& e : fs::directory_iterator(only, ec)) (void)e, ++files;
+        check(fs::exists(only / "animation.cfg") && files == 1,
+              "nur animation.cfg gewaehlt: genau eine Datei geschrieben (" + std::to_string(files) + ")");
+
+        // Only the GLA.
+        fs::remove_all(only);
+        st.writeGla = true;
+        st.writeCfg = false;
+        D.click(D.findIconButton(tr(S::BtnBuild), "##main"));
+        D.waitBuild();
+        files = 0;
+        for (const auto& e : fs::directory_iterator(only, ec)) (void)e, ++files;
+        check(files == 1 && !fs::exists(only / "animation.cfg"),
+              "nur GLA gewaehlt: keine animation.cfg, eine Datei (" + std::to_string(files) + ")");
+        st = saved;
+
+        // A model script ($aseanimgrab_gla): GLM only, against the GLA it
+        // names - Carcass builds these, g2c used to abort with "keine
+        // $aseanimgrab-Anweisungen".
+        const fs::path mb = work / "modelbase";
+        const fs::path md = mb / "models" / "players" / "m_gui";
+        fs::create_directories(md);
+        fs::create_directories(mb / "models" / "players" / "_humanoid");
+        fs::copy_file(refGla, mb / "models" / "players" / "_humanoid" / "_humanoid.gla",
+                      fs::copy_options::overwrite_existing);
+        const fs::path rootXsi = base / "models" / "players" / "__new_anim" / "_humanoid" / "root.xsi";
+        if (!fs::exists(rootXsi)) {
+            out("    (kein root.xsi unter %s)\n", rootXsi.string().c_str());
+            return;
+        }
+        fs::copy_file(rootXsi, md / "root.xsi", fs::copy_options::overwrite_existing);
+        {
+            std::ofstream c(md / "model.car", std::ios::binary);
+            c << "$aseanimgrabinit\r\n$aseanimgrab_gla models/players/_humanoid/_humanoid.gla\r\n"
+                 "$aseanimgrabfinalize\r\n$aseanimconvertmdx_noask models/players/m_gui/root -makeskin\r\n";
+        }
+        const std::string glaBefore = readAll(mb / "models" / "players" / "_humanoid" / "_humanoid.gla");
+        st.baseDir = mb.string();
+        st.referenceGla = (work / "gibt_es_nicht.gla").string();   // the script's GLA must win
+        const std::size_t before = app->documents().size();
+        check(app->openCar((md / "model.car").string()), "Modell-Skript geoeffnet");
+        const std::size_t mi = app->documents().size() - 1;
+        check(app->documents().size() == before + 1 && app->activeTab() == static_cast<int>(mi),
+              "Modell-Skript ist der aktive Tab");
+        const fs::path mout = work / "model_out";
+        fs::remove_all(mout);
+        app->documents()[mi].outputDir = mout.string();
+        D.frames(2);
+        D.click(D.findIconButton(tr(S::BtnBuild), "##main"));
+        D.waitBuild(300.0);
+        check(fs::exists(mout / "model.glm"), "Modell-Skript: model.glm geschrieben");
+        check(fs::exists(mout / "model_default.skin"), "-makeskin: model_default.skin (wie Carcass)");
+        check(!fs::exists(mout / "animation.cfg") && !fs::exists(mout / "model.gla"),
+              "Modell-Skript schreibt keine GLA und keine animation.cfg");
+        if (fs::exists(mout / "model.glm")) {
+            const auto g = g2::readMdxm(g2::readWholeFileBytes((mout / "model.glm").string()));
+            check(g.mesh.animName == "models/players/_humanoid/_humanoid" &&
+                      g.mesh.lods.size() == 1 && g.mesh.lods[0].surfaces.size() == 84,
+                  "GLM zeigt auf die GLA aus $aseanimgrab_gla (" + g.mesh.animName + "), 84 Surfaces");
+        }
+        check(readAll(mb / "models" / "players" / "_humanoid" / "_humanoid.gla") == glaBefore,
+              "die benutzte GLA bleibt unangetastet");
+
+        // Skin switched off: no skin even with -makeskin.
+        fs::remove_all(mout);
+        st.writeSkin = false;
+        D.click(D.findIconButton(tr(S::BtnBuild), "##main"));
+        D.waitBuild(300.0);
+        check(fs::exists(mout / "model.glm") && !fs::exists(mout / "model_default.skin"),
+              ".skin abgeschaltet: nur model.glm");
+        st = saved;
+        app->closeDocument(mi);
+        D.frames(2);
+        check(app->documents().size() == before, "Modell-Skript wieder geschlossen");
+        // Leave everything as the following steps expect it.
+        app->documents()[static_cast<std::size_t>(activeBefore)].outputDir = outBefore;
+        app->activate(activeBefore);
+        D.frames(2);
     });
 
     // =====================================================================
