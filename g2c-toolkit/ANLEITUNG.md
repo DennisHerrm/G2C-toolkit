@@ -3964,7 +3964,10 @@ Beim Abgleich fielen Fehler in g2c auf, jeder mit Regressionstest:
 ## 73. Nur neue XSI einfuegen
 
 Neben den XSI-Knoepfen in der Werkzeugleiste steht das Haekchen **Nur neue
-XSI**. Ist es gesetzt, uebergehen alle Wege zum Einfuegen (XSI hinzufuegen,
+XSI**. Es ist von Haus aus gesetzt - dieselbe Datei zweimal einzufuegen ist
+praktisch immer ein Versehen. Absichtliche Doppelte (dieselbe Datei mit
+anderem Framebereich) entstehen ueber Kopieren/Einfuegen oder den
+Sequenzdialog und sind davon nicht betroffen. Ist es gesetzt, uebergehen alle Wege zum Einfuegen (XSI hinzufuegen,
 XSI-Ordner, ... zu allen, Ziehen ins Fenster) jede .xsi, die das Skript
 schon enthaelt. Man waehlt also einfach den ganzen Ordner, und nur die
 neuen Dateien kommen dazu.
