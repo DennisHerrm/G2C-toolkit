@@ -2826,6 +2826,123 @@ void testRobustness() {
     }
 }
 
+// Assimilate's "Model" dialog: $scale, $keepmotion and $pcj are edited in
+// place. Unchanged lines must come back byte for byte, changed ones keep their
+// end-of-line comment, new ones go where Raven's scripts have them.
+void testModelSettings() {
+    using namespace g2::car;
+    const std::string src =
+        "$aseanimgrabinit\r\n"
+        "$aseanimgrab models/a.xsi -loop -1\r\n"
+        "$aseanimgrab models/b.xsi -framespeed 30\r\n"
+        "$scale 0.64  // Massstab\r\n"
+        "// Bewegung\r\n"
+        "$keepmotion\r\n"
+        "$pcj $flatten\r\n"
+        "$pcj upper_lumbar  // Ruecken\r\n"
+        "$pcj cranium\r\n"
+        "$aseanimgrabfinalize\r\n"
+        "$aseanimconvertmdx_noask models/root -makeskel models/x/_humanoid -origin 0 0 24\r\n";
+
+    section("Modell-Einstellungen lesen");
+    Script s = parse(src);
+    ModelSettings m = modelSettingsOf(s);
+    check(m.scale && *m.scale == 0.64, "Scale gelesen");
+    check(m.keepMotion, "$keepmotion gelesen");
+    check((m.pcj == std::vector<std::string>{"$flatten", "upper_lumbar", "cranium"}), "PCJ-Liste in Reihenfolge, $flatten dabei");
+
+    section("Unveraendert anwenden aendert keine Zeile");
+    applyModelSettings(s, m);
+    check(writeScript(s) == src, "Datei byte-gleich");
+
+    section("Scale aendern");
+    {
+        Script t = parse(src);
+        ModelSettings n = modelSettingsOf(t);
+        n.scale = 0.5;
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out.find("$scale 0.5  // Massstab\r\n") != std::string::npos, "neuer Wert, Kommentar bleibt");
+        check(out.find("0.64") == std::string::npos, "alter Wert weg");
+        check(t.scale && *t.scale == 0.5, "Bauwert mitgezogen");
+        check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
+        std::string expect = src;
+        expect.replace(expect.find("$scale 0.64"), 11, "$scale 0.5");
+        check(out == expect, "nur diese Zeile geaendert");
+    }
+
+    section("$keepmotion entfernen, Kommentar darueber bleibt");
+    {
+        Script t = parse(src);
+        ModelSettings n = modelSettingsOf(t);
+        n.keepMotion = false;
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out.find("$keepmotion") == std::string::npos, "Zeile weg");
+        check(out.find("// Bewegung\r\n$pcj $flatten") != std::string::npos, "Kommentar wandert zur naechsten Zeile");
+        check(!t.keepMotion, "Bauwert mitgezogen");
+    }
+
+    section("PCJ-Liste aendern");
+    {
+        Script t = parse(src);
+        ModelSettings n = modelSettingsOf(t);
+        n.pcj = {"$flatten", "cranium", "pelvis"};
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out.find("$pcj $flatten\r\n$pcj cranium\r\n$pcj pelvis\r\n$aseanimgrabfinalize") != std::string::npos,
+              "neue Reihenfolge an alter Stelle");
+        check(out.find("upper_lumbar") == std::string::npos, "entfernter Eintrag weg");
+        check((t.pcjBones == std::vector<std::string>{"cranium", "pelvis"}) && t.pcjFlatten, "Bauwerte mitgezogen");
+        check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
+
+        Script u = parse(src);
+        ModelSettings k = modelSettingsOf(u);
+        k.pcj = {"$flatten", "upper_lumbar"};
+        applyModelSettings(u, k);
+        check(writeScript(u).find("$pcj upper_lumbar  // Ruecken\r\n") != std::string::npos,
+              "behaltener Eintrag behaelt seine Zeile samt Kommentar");
+    }
+
+    section("Neu anlegen: vor $aseanimgrabfinalize, Reihenfolge wie bei Raven");
+    {
+        const std::string bare =
+            "$aseanimgrabinit\r\n"
+            "$aseanimgrab models/a.xsi\r\n"
+            "$aseanimgrabfinalize\r\n"
+            "$aseanimconvertmdx_noask models/root -makeskel models/x/_humanoid\r\n";
+        Script t = parse(bare);
+        ModelSettings n;
+        n.scale = 0.64;
+        n.keepMotion = true;
+        n.pcj = {"$flatten", "cranium"};
+        applyModelSettings(t, n);
+        const std::string out = writeScript(t);
+        check(out == "$aseanimgrabinit\r\n$aseanimgrab models/a.xsi\r\n$scale 0.64\r\n$keepmotion\r\n"
+                     "$pcj $flatten\r\n$pcj cranium\r\n$aseanimgrabfinalize\r\n"
+                     "$aseanimconvertmdx_noask models/root -makeskel models/x/_humanoid\r\n",
+              "an der richtigen Stelle angelegt");
+        check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
+
+        // And everything off again: back to the original file.
+        Script v = parse(out);
+        applyModelSettings(v, ModelSettings{});
+        check(writeScript(v) == bare, "alles abgeschaltet = Ausgangsdatei");
+    }
+
+    section("Konvertierungszeile");
+    {
+        Script t = parse(src);
+        t.convert->origin.reset();
+        t.convert->makeSkin = true;
+        t.convert->extraArgs.push_back("-smooth");
+        const std::string out = writeScript(t);
+        const ConvertDirective c = *parse(out).convert;
+        check(!c.origin && c.makeSkin && c.makeSkel == "models/x/_humanoid", "-origin weg, -makeskin dazu");
+        check(std::find(c.extraArgs.begin(), c.extraArgs.end(), "-smooth") != c.extraArgs.end(), "-smooth bleibt erhalten");
+    }
+}
+
 int main() {
     // Unbuffered output. Otherwise, on a hang or crash you can't tell where it
     // happened: the last printed text is still stuck in the buffer, and the
@@ -2882,6 +2999,7 @@ int main() {
     run("testAnimEval", testAnimEval);
     run("testXsiExport", testXsiExport);
     run("testRobustness", testRobustness);
+    run("testModelSettings", testModelSettings);
 
 
     g_currentTest.store("(fertig)");

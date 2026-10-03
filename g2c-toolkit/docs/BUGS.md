@@ -198,4 +198,7 @@ Alle behoben; die Tests dazu stehen in `tests/`.
 | Lesen | GLM-Surfaces nach uebersprungenem Mesh | Elternbezuege um eins verrutscht |
 | GUI | Minimiertes Fenster | Hauptschleife lief leer weiter: 88 % eines Kerns, solange g2c in der Taskleiste lag. Jetzt Pause, gemessen 1 % |
 | GUI | Schliessen ueber die Taskleiste bei minimiertem Fenster mit ungespeicherten Aenderungen | Rueckfrage unsichtbar. Jetzt wird das Fenster dafuer wiederhergestellt |
+| GUI | Framespeed ohne `-framespeed` als 0 bzw. "auto" angezeigt | man sah nicht, wie schnell eine Animation laeuft; "+" im Dialog machte aus der echten 25 eine 1. Jetzt die echte Zahl (SI_Scene, sonst 30), Regressionstest im GUI-Treiber |
+| GUI | Loop ohne `-loop` im Dialog als -1 | gebaut wird 0 (wie Carcass, geprueft an Ravens animation.cfg); "-" machte -2 daraus |
+| GUI | Split-Teile (`-additional`) nur als Anzahl | Namen jetzt in der Tabelle, Details (Ziel, Frames, Loop, Speed) per Ansicht-Menue, wie Assimilate |
 | Bauen (CMake) | `-DG2C_VERSION=v1.2.0` ungequotet aus PowerShell | PowerShell teilt am Punkt, die Exe hiess "1". Jetzt Abbruch mit Hinweis; Workflow quotet |

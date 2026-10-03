@@ -551,4 +551,184 @@ Script parseFile(const std::string& path, const ParseOptions& opt) {
     return parse(readWholeFile(path), path, opt);
 }
 
+// --- Model settings -----------------------------------------------------------
+
+ModelSettings modelSettingsOf(const Script& s) {
+    ModelSettings m;
+    m.scale = s.scale;
+    m.keepMotion = s.keepMotion;
+    for (const auto& st : s.statements)
+        if (st.cmd == Cmd::Pcj && !st.args.empty()) m.pcj.push_back(st.args[0]);
+    return m;
+}
+
+namespace {
+
+bool own(const Statement& st) { return st.fromInclude < 0; }
+
+Statement makeStatement(Cmd cmd, std::vector<std::string> args) {
+    Statement st;
+    st.cmd = cmd;
+    st.raw = cmdName(cmd);
+    st.args = std::move(args);
+    return st;
+}
+
+// New arguments, same end-of-line comment.
+void rewrite(Statement& st, std::vector<std::string> args) {
+    const std::string comment = trailingCommentOf(st.sourceLine);
+    st.args = std::move(args);
+    std::string line = st.raw;
+    for (const auto& a : st.args) line += " " + a;
+    if (!comment.empty()) line += "  " + comment;
+    st.sourceLine = line;
+}
+
+// Removes a statement without losing the comment lines above it: they move to
+// whatever comes next.
+void eraseKeepingComments(Script& s, std::size_t i) {
+    std::vector<std::string> comments = std::move(s.statements[i].commentsBefore);
+    s.statements.erase(s.statements.begin() + static_cast<long>(i));
+    if (comments.empty()) return;
+    auto& dst = i < s.statements.size() ? s.statements[i].commentsBefore : s.endComments;
+    dst.insert(dst.begin(), comments.begin(), comments.end());
+}
+
+// Where new header lines go: before $aseanimgrabfinalize, as in Raven's
+// scripts; otherwise after the last grab; otherwise before the conversion;
+// otherwise at the end.
+std::size_t headerInsertPos(const Script& s) {
+    std::size_t lastGrab = s.statements.size();
+    for (std::size_t i = 0; i < s.statements.size(); ++i) {
+        const auto& st = s.statements[i];
+        if (!own(st)) continue;
+        if (st.cmd == Cmd::AseAnimGrabFinalize) return i;
+        if (st.cmd == Cmd::AseAnimGrab) lastGrab = i;
+    }
+    if (lastGrab < s.statements.size()) return lastGrab + 1;
+    for (std::size_t i = 0; i < s.statements.size(); ++i)
+        if (own(s.statements[i]) && (s.statements[i].cmd == Cmd::AseAnimConvertMdx ||
+                                     s.statements[i].cmd == Cmd::AseAnimConvertMdxNoAsk))
+            return i;
+    return s.statements.size();
+}
+
+// Position right after the last own statement of one of the given kinds, or
+// headerInsertPos if there is none.
+std::size_t afterLastOf(const Script& s, std::initializer_list<Cmd> kinds) {
+    std::size_t pos = s.statements.size() + 1;
+    for (std::size_t i = 0; i < s.statements.size(); ++i)
+        if (own(s.statements[i]) &&
+            std::find(kinds.begin(), kinds.end(), s.statements[i].cmd) != kinds.end())
+            pos = i + 1;
+    return pos <= s.statements.size() ? pos : headerInsertPos(s);
+}
+
+std::string formatNumber(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%g", v);
+    return buf;
+}
+
+}  // namespace
+
+void applyModelSettings(Script& s, const ModelSettings& m) {
+    // Only what actually changes is touched. A value that comes from an
+    // $include file and stays the same must not get a second line here.
+    const ModelSettings cur = modelSettingsOf(s);
+
+    // --- $scale ---
+    if (cur.scale != m.scale) {
+        std::vector<std::size_t> idx;
+        for (std::size_t i = 0; i < s.statements.size(); ++i)
+            if (own(s.statements[i]) && s.statements[i].cmd == Cmd::Scale) idx.push_back(i);
+        if (!m.scale) {
+            for (std::size_t k = idx.size(); k-- > 0;) eraseKeepingComments(s, idx[k]);
+        } else if (idx.empty()) {
+            s.statements.insert(s.statements.begin() + static_cast<long>(headerInsertPos(s)),
+                                makeStatement(Cmd::Scale, {formatNumber(*m.scale)}));
+        } else {
+            // The last one is the one Carcass uses; earlier ones stay as they are.
+            Statement& st = s.statements[idx.back()];
+            bool same = false;
+            try {
+                same = !st.args.empty() && std::stod(st.args[0]) == *m.scale;
+            } catch (...) {
+            }
+            if (!same) rewrite(st, {formatNumber(*m.scale)});
+        }
+    }
+
+    // --- $keepmotion ---
+    if (cur.keepMotion != m.keepMotion) {
+        std::vector<std::size_t> idx;
+        for (std::size_t i = 0; i < s.statements.size(); ++i)
+            if (own(s.statements[i]) && s.statements[i].cmd == Cmd::KeepMotion) idx.push_back(i);
+        if (!m.keepMotion) {
+            for (std::size_t k = idx.size(); k-- > 0;) eraseKeepingComments(s, idx[k]);
+        } else if (idx.empty()) {
+            s.statements.insert(s.statements.begin() + static_cast<long>(afterLastOf(s, {Cmd::Scale})),
+                                makeStatement(Cmd::KeepMotion, {}));
+        }
+    }
+
+    // --- $pcj ---
+    if (cur.pcj != m.pcj) {
+        std::vector<std::size_t> idx;
+        std::vector<std::string> current;
+        for (std::size_t i = 0; i < s.statements.size(); ++i)
+            if (own(s.statements[i]) && s.statements[i].cmd == Cmd::Pcj) {
+                idx.push_back(i);
+                current.push_back(s.statements[i].args.empty() ? std::string()
+                                                               : s.statements[i].args[0]);
+            }
+        if (current != m.pcj) {
+            // Rebuild the block where it was; unchanged entries keep their line.
+            std::vector<Statement> old;
+            for (const std::size_t i : idx) old.push_back(s.statements[i]);
+            std::vector<std::string> comments;
+            std::size_t pos = idx.empty() ? s.statements.size() + 1 : idx.front();
+            for (std::size_t k = idx.size(); k-- > 0;) {
+                auto& c = s.statements[idx[k]].commentsBefore;
+                comments.insert(comments.begin(), c.begin(), c.end());
+                s.statements.erase(s.statements.begin() + static_cast<long>(idx[k]));
+            }
+            if (pos > s.statements.size()) pos = afterLastOf(s, {Cmd::Scale, Cmd::KeepMotion});
+            std::vector<Statement> fresh;
+            for (const auto& name : m.pcj) {
+                auto it = std::find_if(old.begin(), old.end(), [&](const Statement& st) {
+                    return !st.args.empty() && st.args[0] == name;
+                });
+                if (it != old.end()) {
+                    Statement st = *it;
+                    st.commentsBefore.clear();
+                    fresh.push_back(std::move(st));
+                    old.erase(it);
+                } else {
+                    fresh.push_back(makeStatement(Cmd::Pcj, {name}));
+                }
+            }
+            if (!fresh.empty()) {
+                fresh.front().commentsBefore = std::move(comments);
+                s.statements.insert(s.statements.begin() + static_cast<long>(pos), fresh.begin(),
+                                    fresh.end());
+            } else if (!comments.empty()) {
+                auto& dst = pos < s.statements.size() ? s.statements[pos].commentsBefore
+                                                      : s.endComments;
+                dst.insert(dst.begin(), comments.begin(), comments.end());
+            }
+        }
+    }
+
+    // The convenience fields the build reads.
+    s.scale = m.scale;
+    s.keepMotion = m.keepMotion;
+    s.pcjBones.clear();
+    s.pcjFlatten = false;
+    for (const auto& p : m.pcj) {
+        if (toLower(p) == "$flatten") s.pcjFlatten = true;
+        else s.pcjBones.push_back(p);
+    }
+}
+
 }  // namespace g2::car

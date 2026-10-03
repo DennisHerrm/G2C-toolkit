@@ -1397,6 +1397,22 @@ int wWinMainGuarded(HINSTANCE inst) {
     plat.network.get = httpGet;
     plat.network.download = httpDownload;
     plat.exePath = exePath();
+    plat.launch = [](const std::string& exe, const std::string& arg) {
+        const std::wstring wexe = toWide(exe);
+        std::wstring cmd = L"\"" + wexe + L"\" \"" + toWide(arg) + L"\"";
+        // In the program's own folder: ModView finds its shaders and settings
+        // relative to where it lives.
+        const std::wstring dir = std::filesystem::path(wexe).parent_path().wstring();
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(wexe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                            dir.empty() ? nullptr : dir.c_str(), &si, &pi))
+            return false;
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return true;
+    };
     plat.openUrl = [](const std::string& url) {
         // Only web pages - never hand ShellExecute a path or a program.
         if (url.rfind("https://", 0) != 0) return;
