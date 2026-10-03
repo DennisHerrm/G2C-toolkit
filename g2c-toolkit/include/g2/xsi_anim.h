@@ -56,6 +56,12 @@ struct AnimNode {
     std::array<float, 9> srt{{1, 1, 1, 0, 0, 0, 0, 0, 0}};
     bool                 hasSrt = false;
 
+    // SI_Transform BASEPOSE-<name>: the ABSOLUTE bind pose, same layout as
+    // srt. Not used for evaluating animations; Carcass builds a new
+    // skeleton's base poses from it (skelbuild.h).
+    std::array<float, 9> basePose{{1, 1, 1, 0, 0, 0, 0, 0, 0}};
+    bool                 hasBasePose = false;
+
     bool animated() const { return !channels.empty() || hasSrt; }
 };
 
@@ -116,6 +122,19 @@ AnimFile loadAnimationFile(const std::string& path);
 
 // --- Evaluation against a reference skeleton -------------------------------
 
+// The name a dotXSI node gets as a GLA bone, as Carcass derives it: the
+// first "_always_" is cut out, then one trailing "_" removed.
+//   "face_always_" -> "face", "Wing_always_x_" -> "Wingx", "pelvis" -> "pelvis"
+std::string glaBoneName(const std::string& xsiName);
+
+// The matrix of an SRT/BASEPOSE triple (scaling xyz, rotation xyz in
+// degrees, translation xyz) in dotXSI space: [Rz*Ry*Rx*diag(s) | t].
+Mat3x4 srtMatrix(const std::array<float, 9>& v);
+// dotXSI (Y-up) to Ghoul2 (Z-up) with the model scale: s*C*M*C^T, s*C*t.
+Mat3x4 toGhoul2Space(const Mat3x4& m, float scale);
+// Does the node name mark an always-transformed bone ("_always_" in it)?
+bool isAlwaysName(const std::string& xsiName);
+
 struct EvalOptions {
     // $scale from the .car. Must match the value the reference GLA was built
     // with, otherwise the base poses don't fit.
@@ -155,6 +174,10 @@ struct EvalOptions {
     // animations instead of moving.
     bool        extractRootMotion = true;
     std::string motionBone = "Motion";
+
+    // Also report where the Motion bone is in every frame (EvalResult::
+    // motionPath) - for Carcass's "-deltavecs" in the .frames file.
+    bool        wantMotionPath = false;
 };
 
 struct EvalResult {
@@ -165,6 +188,9 @@ struct EvalResult {
     // into the .frames file - there with the opposite sign, though, because
     // the ramp is a counter-movement.
     float rootMotion[3] = {0.0f, 0.0f, 0.0f};
+    // Only with EvalOptions::wantMotionPath: the Motion bone's position per
+    // frame in GLA space (scaled, Z up). Empty if the file has no Motion bone.
+    std::vector<std::array<float, 3>> motionPath;
     std::vector<std::string> missingBones;   // in the skeleton, not in the XSI
     std::vector<std::string> extraBones;     // in the XSI, not in the skeleton
     int                      frameCount = 0;

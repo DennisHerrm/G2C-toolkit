@@ -3,6 +3,7 @@
 #include "gui/icons.h"
 #include "gui/preview.h"
 
+#include "g2/carjob.h"
 #include "g2/mdxa.h"
 #include "g2/xsi_export.h"
 #include "g2/parallel.h"
@@ -274,11 +275,16 @@ void App::saveSettings() const {
     f << "basedir=" << settings_.baseDir << "\n";
     f << "refgla=" << settings_.referenceGla << "\n";
     f << "enums=" << settings_.enumPath << "\n";
+    f << "gla=" << (settings_.writeGla ? 1 : 0) << "\n";
+    f << "cfg=" << (settings_.writeCfg ? 1 : 0) << "\n";
+    f << "info=" << (settings_.writeInfo ? 1 : 0) << "\n";
     f << "frames=" << (settings_.writeFrames ? 1 : 0) << "\n";
     f << "mesh=" << (settings_.writeMesh ? 1 : 0) << "\n";
     f << "skin=" << (settings_.writeSkin ? 1 : 0) << "\n";
     f << "cache=" << (settings_.useCache ? 1 : 0) << "\n";
     f << "carcass=" << (settings_.carcassCompat ? 1 : 0) << "\n";
+    f << "newskel=" << (settings_.newSkeleton ? 1 : 0) << "\n";
+    f << "framestep=" << settings_.frameStep << "\n";
     f << "backup=" << (settings_.keepBackup ? 1 : 0) << "\n";
     f << "readframes=" << (settings_.readFrameCounts ? 1 : 0) << "\n";
     f << "dark=" << (settings_.darkMode ? 1 : 0) << "\n";
@@ -347,11 +353,16 @@ void App::loadSettings() {
         if (key == "basedir") settings_.baseDir = val;
         else if (key == "refgla") settings_.referenceGla = val;
         else if (key == "enums") settings_.enumPath = val;
+        else if (key == "gla") settings_.writeGla = asBool();
+        else if (key == "cfg") settings_.writeCfg = asBool();
+        else if (key == "info") settings_.writeInfo = asBool();
         else if (key == "frames") settings_.writeFrames = asBool();
         else if (key == "mesh") settings_.writeMesh = asBool();
         else if (key == "skin") settings_.writeSkin = asBool();
         else if (key == "cache") settings_.useCache = asBool();
         else if (key == "carcass") settings_.carcassCompat = asBool();
+        else if (key == "newskel") settings_.newSkeleton = asBool();
+        else if (key == "framestep") settings_.frameStep = std::clamp(std::atoi(val.c_str()), 1, 1000);
         else if (key == "backup") settings_.keepBackup = asBool();
         else if (key == "xsiver")
             extract_.xsiVersion = std::atoi(val.c_str()) == 35
@@ -1738,15 +1749,26 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
     try {
         if (d.outputDir.empty())
             throw std::runtime_error(tr(S::LogNoOutputDir));
-        if (st.referenceGla.empty())
-            throw std::runtime_error(tr(S::LogNoRefGla));
 
-        const MdxaFile ref = readMdxa(readWholeFileBytes(st.referenceGla));
+        // Which skeleton. A model script ($aseanimgrab_gla) and a script with
+        // $aseanimref_gla name their GLA themselves - that one wins over the
+        // setting: a model's GLM must point to exactly the GLA it was made for.
+        const car::ScriptKind kind = car::scriptKind(d.script);
+        bool scriptNamesGla = kind == car::ScriptKind::Model;
+        for (const auto& stt : d.script.statements)
+            if (stt.cmd == car::Cmd::AseAnimRefGla) scriptNamesGla = true;
+        // No reference at all: the skeleton is built from the sources, as
+        // Carcass does (runJob says when that cannot work).
+        std::string refPath = scriptNamesGla || st.newSkeleton ? std::string() : st.referenceGla;
+        if (refPath.empty() && !st.newSkeleton) refPath = car::scriptReferenceGla(d.script, st.baseDir, d.path);
+        if (kind == car::ScriptKind::Model)
+            log(LogLine::Kind::Info, trf(S::LogModelScript, d.title.c_str(), refPath.c_str()));
 
         car::BuildOptions bo;
         bo.baseDir = st.baseDir;
         bo.threads = 0;   // all cores
         bo.carcassCompatible = st.carcassCompat;
+        bo.frameStep = std::max(1, st.frameStep);
         if (st.useCache && !st.baseDir.empty())
             bo.cacheDir = (fs::path(st.baseDir) / "g2c_cache").string();
 
@@ -1755,39 +1777,13 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // The library's exception is in German and carries the full text;
         // instead, a message in the configured language is built here from
         // the structured data, saying WHICH sequence is affected and where the
-        // file was expected.
-        {
-            car::BuildOptions probe = bo;
-            probe.skipMissing = true;
-
-            // The probe run must NOT throw. If all files are missing, build
-            // aborts with "not a single one readable" - then the detailed
-            // message would never be produced, and the user would see exactly
-            // the useless sentence it is meant to replace.
-            std::vector<car::BuildResult::MissingFile> missing;
-            try {
-                missing = car::build(d.script, ref.skeleton, d.path, probe).missing;
-            } catch (const std::exception&) {
-                // Everything is missing: build the list ourselves.
-                for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
-                    const auto& g = d.script.grabs[i];
-                    if (!car::resolveAssetPath(g.file, st.baseDir,
-                                               fs::path(d.path).parent_path().string())
-                             .empty())
-                        continue;
-                    car::BuildResult::MissingFile m;
-                    m.file = g.file;
-                    m.sequence = g.enumName ? *g.enumName : g.derivedName();
-                    m.grabIndex = i;
-                    m.line = g.line;
-                    missing.push_back(std::move(m));
-                }
-            }
-
-            const struct { const std::vector<car::BuildResult::MissingFile>& missing; } chk{missing};
-            if (!chk.missing.empty() && !bo.skipMissing) {
+        // file was expected. Only the paths are resolved - this used to be a
+        // complete extra build, which doubled the time of every build.
+        if (kind == car::ScriptKind::Animation) {
+            const auto missing = car::findMissingFiles(d.script, d.path, bo);
+            if (!missing.empty() && !bo.skipMissing) {
                 char head[160];
-                std::snprintf(head, sizeof(head), tr(S::MissingHead), chk.missing.size(),
+                std::snprintf(head, sizeof(head), tr(S::MissingHead), missing.size(),
                               d.script.grabs.size());
                 log(LogLine::Kind::Bad, d.title + ": " + head);
                 if (!st.baseDir.empty())
@@ -1795,8 +1791,8 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
                         std::string(tr(S::MissingSearched)) + " " + st.baseDir);
                 log(LogLine::Kind::Bad, tr(S::MissingList));
 
-                for (std::size_t i = 0; i < chk.missing.size() && i < 8; ++i) {
-                    const auto& m = chk.missing[i];
+                for (std::size_t i = 0; i < missing.size() && i < 8; ++i) {
+                    const auto& m = missing[i];
                     std::string line = "  " + m.file + "   [" + tr(S::SeqLabel) + " " +
                                        m.sequence + "]";
                     if (m.line) line += " (.car " + std::to_string(m.line) + ")";
@@ -1806,9 +1802,9 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
                             "      " +
                                 (fs::path(st.baseDir) / m.file).lexically_normal().string());
                 }
-                if (chk.missing.size() > 8) {
+                if (missing.size() > 8) {
                     char more[80];
-                    std::snprintf(more, sizeof(more), tr(S::MissingMore), chk.missing.size() - 8);
+                    std::snprintf(more, sizeof(more), tr(S::MissingMore), missing.size() - 8);
                     log(LogLine::Kind::Bad, more);
                 }
                 log(LogLine::Kind::Warn, tr(S::MissingHintBase));
@@ -1823,10 +1819,9 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // "Cannot open ...", again for every grab. The message names the path
         // but not the reason - you then look for missing permissions instead
         // of the overlap.
-        if (!d.outputDir.empty() && !st.referenceGla.empty()) {
+        if (kind == car::ScriptKind::Animation && st.writeGla && !cfgOnly && !refPath.empty()) {
             std::error_code rec;
-            const fs::path refPath(st.referenceGla);
-            const fs::path refDir = refPath.parent_path();
+            const fs::path refDir = fs::path(refPath).parent_path();
             if (!refDir.empty() && fs::exists(refDir, rec) && fs::exists(d.outputDir, rec) &&
                 fs::equivalent(refDir, d.outputDir, rec) && !rec) {
                 log(LogLine::Kind::Bad, trf(S::RefIsTarget, d.title.c_str()));
@@ -1837,166 +1832,88 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // thread. Doing it here would be wrong: d is a copy, and docs_
         // belongs to the UI.
 
-        const car::BuildResult br = car::build(d.script, ref.skeleton, d.path, bo);
-        for (const auto& w : br.warnings) log(LogLine::Kind::Warn, d.title + ": " + w);
+        car::JobOptions jo;
+        jo.build = bo;
+        jo.referenceGla = scriptNamesGla || st.newSkeleton ? std::string() : st.referenceGla;
+        jo.newSkeleton = st.newSkeleton;
+        jo.outputDir = d.outputDir;
+        // "Only animation.cfg": the same build, so the cfg is exactly the one a
+        // full build writes - but the GLA on disk stays as it is.
+        jo.outputs.gla = !cfgOnly && st.writeGla;
+        jo.outputs.animationCfg = cfgOnly || st.writeCfg;
+        jo.outputs.frames = !cfgOnly && st.writeFrames;
+        jo.outputs.glm = !cfgOnly && st.writeMesh;
+        jo.outputs.skin = !cfgOnly && st.writeMesh && st.writeSkin;
+        jo.outputs.info = !cfgOnly && st.writeInfo;
+        jo.log = [&](car::JobLog l, const std::string& t) {
+            if (l == car::JobLog::Warn) log(LogLine::Kind::Warn, d.title + ": " + t);
+        };
+
+        const car::JobResult r = car::runJob(d.script, d.path, jo);
+        if (r.skeletonBuilt) log(LogLine::Kind::Info, trf(S::LogNewSkeleton, d.title.c_str()));
 
         // Report duplicate names on BUILD too, not only on validation.
         //
         // Anyone who builds without validating first would otherwise get an
         // animation.cfg in which one animation is unreachable - and only
-        // notice in the game, where nothing points to it.
-        {
-            std::map<std::string, int> gesehen;
-            for (const auto& sq : br.sequences) {
+        // notice in the game, where nothing points to it. runJob writes
+        // nothing in that case.
+        if (!r.duplicates.empty()) {
+            std::map<std::string, int> count;
+            for (const auto& sq : r.anim.sequences) {
                 std::string n = sq.name;
-                for (auto& c : n)
-                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                ++gesehen[n];
+                for (auto& ch : n)
+                    ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                ++count[n];
             }
-            std::vector<std::string> doppelt;
-            for (const auto& [name, anzahl] : gesehen)
-                if (anzahl > 1) {
-                    log(LogLine::Kind::Bad,
-                        trf(S::DupInCfg, d.title.c_str(), name.c_str(), anzahl));
-                    doppelt.push_back(name);
-                }
-
-            // Do NOT write while names are duplicated.
-            //
-            // A GLA with unreachable animations looks finished and only
-            // shows up in the game - where nothing then points to the cause.
-            // Better to write nothing at all and say so here.
-            if (!doppelt.empty()) {
-                // Pass the names along: the caller enters them as messages so
-                // that clicking one jumps to the rows.
-                {
-                    // Per script path: with "Build all" every script keeps its
-                    // own list, and two tabs with the same title don't mix.
-                    std::lock_guard<std::mutex> lock(dupMutex_);
-                    pendingDuplicates_[d.path] = doppelt;
-                }
-                throw std::runtime_error(trf(S::BuildStoppedDup, doppelt.size()));
+            for (const auto& name : r.duplicates)
+                log(LogLine::Kind::Bad, trf(S::DupInCfg, d.title.c_str(), name.c_str(), count[name]));
+            {
+                // Per script path: with "Build all" every script keeps its
+                // own list, and two tabs with the same title don't mix.
+                std::lock_guard<std::mutex> lock(dupMutex_);
+                pendingDuplicates_[d.path] = r.duplicates;
             }
+            throw std::runtime_error(trf(S::BuildStoppedDup, r.duplicates.size()));
         }
 
-        MdxaWriteOptions wo;
-        wo.threads = 0;   // all cores
-        if (st.carcassCompat) {
-            wo.compress.rounding = Rounding::Legacy;
-            wo.compress.optimizeQuat = false;
-            wo.compress.canonicalizeSign = false;
-        }
         // The GLA name in the header comes from -makeskel, NOT from the
-        // reference.
-        //
-        // It is stored as a string in the file and tells the engine which
-        // skeleton this is. When we took it from the reference, every built
-        // file carried "models/players/_humanoid/_humanoid" - no matter where
-        // it belonged. In the game a custom humanoid then identified itself as
-        // the standard humanoid, and the engine used that one's animation.cfg.
-        Skeleton outSkel = ref.skeleton;
-        if (d.script.convert && !d.script.convert->makeSkel.empty()) {
+        // reference (runJob does that). Say so when they differ.
+        if (kind == car::ScriptKind::Animation && d.script.convert &&
+            !d.script.convert->makeSkel.empty()) {
             std::string ms = d.script.convert->makeSkel;
             std::replace(ms.begin(), ms.end(), '\\', '/');
-            if (ms != outSkel.name)
-                log(LogLine::Kind::Info, trf(S::GlaNameFromMakeSkel, ms.c_str()));
-            outSkel.name = ms;
+            if (!refPath.empty()) try {
+                const MdxaFile ref = readMdxa(readWholeFileBytes(refPath));
+                if (ms != ref.skeleton.name)
+                    log(LogLine::Kind::Info, trf(S::GlaNameFromMakeSkel, ms.c_str()));
+            } catch (const std::exception&) {
+            }
         }
 
-
-        const fs::path outDir(d.outputDir);
-        std::error_code ec;
-        fs::create_directories(outDir, ec);
-
-        std::string stem = "out";
-        if (d.script.convert && !d.script.convert->makeSkel.empty()) {
-            const std::string& ms = d.script.convert->makeSkel;
-            const std::size_t sl = ms.find_last_of("/\\");
-            stem = (sl == std::string::npos) ? ms : ms.substr(sl + 1);
-        }
-
-        // Every output goes through writeOutput: first into a side file, then
-        // replaced in one go, errors go to the log. Previously unchecked
-        // ofstreams wrote directly to the target - if the GLA was locked (game
-        // or ModView open) or the disk full, the log still said "built", and
-        // the old file had already been truncated to zero.
-        // "Only animation.cfg": the same build, so the cfg is exactly the one a
-        // full build writes - but the GLA on disk stays as it is.
-        if (!cfgOnly) {
-            const auto res = writeMdxa(outSkel, br.frames, wo);
-            const fs::path gla = outDir / (stem + ".gla");
-            if (!writeOutput(d.title, gla.string(),
-                             std::string(reinterpret_cast<const char*>(res.data.data()),
-                                         res.data.size())))
-                return;
-            log(LogLine::Kind::Good, d.title + " -> " + gla.string() + " (" +
-                                         std::to_string(br.totalFrames()) + " Frames)");
-        }
-
-        {
-            std::ostringstream head;
-            head << br.totalFrames() << " frames; " << br.sequences.size()
-                 << " sequences; erzeugt von g2c";
-            const std::string cfg = car::writeAnimationCfg(br.sequences, head.str());
-            // No .bak: the animation.cfg is regenerated completely on every
-            // build, a backup of it would be worthless and just clutter the
-            // folder. For .car files, which are edited by hand, that's
-            // different - the backup stays there.
-            if (!writeOutput(d.title, (outDir / "animation.cfg").string(), cfg)) return;
-            if (cfgOnly)
+        bool cfgWritten = false;
+        for (const auto& f : r.written) {
+            if (f.what == "GLA")
+                log(LogLine::Kind::Good, d.title + " -> " + f.path + " (" +
+                                             std::to_string(r.anim.totalFrames()) + " Frames)");
+            else if (f.what == "GLM")
                 log(LogLine::Kind::Good,
-                    trf(S::LogCfgWritten, (outDir / "animation.cfg").string().c_str()));
+                    d.title + " -> " + f.path + " (" + std::to_string(r.mesh.surfaces) +
+                        " Surfaces, " + std::to_string(r.mesh.vertices) + " Verts)");
+            else if (f.what == "animation.cfg") {
+                cfgWritten = true;
+                if (cfgOnly) log(LogLine::Kind::Good, trf(S::LogCfgWritten, f.path.c_str()));
+                else log(LogLine::Kind::Good, trf(S::LogFileWritten, d.title.c_str(), f.path.c_str()));
+            } else {
+                log(LogLine::Kind::Info, trf(S::LogFileWritten, d.title.c_str(), f.path.c_str()));
+            }
         }
-        log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
+        if (cfgWritten) log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
 
         // Remember the output folder so it can be opened.
         {
             std::lock_guard<std::mutex> lock(outputDirMutex_);
-            lastOutputDir_ = outDir.string();
-        }
-
-        if (!cfgOnly && st.writeFrames && !br.frameBlocks.empty()) {
-            std::vector<FrameEntry> fe;
-            for (const auto& b : br.frameBlocks) {
-                FrameEntry e;
-                e.sourcePath = fs::absolute(b.sourcePath).generic_string();
-                e.startFrame = b.startFrame;
-                e.duration = b.duration;
-                e.fps = b.fps;
-                for (int k = 0; k < 3; ++k) e.averageVec[k] = b.averageVec[k];
-                fe.push_back(std::move(e));
-            }
-            writeOutput(d.title, (outDir / (stem + ".frames")).string(), writeFrames(fe));
-        }
-
-        if (!cfgOnly && st.writeMesh && d.script.convert && !d.script.convert->root.empty()) {
-            const std::string carDir = fs::path(d.path).parent_path().string();
-            std::string xsi;
-            for (const char* ext : {".xsi", ".XSI"}) {
-                xsi = car::resolveAssetPath(d.script.convert->root + ext, st.baseDir, carDir);
-                if (!xsi.empty()) break;
-            }
-            if (xsi.empty()) {
-                log(LogLine::Kind::Warn, trf(S::LogMeshSourceMissing, d.title.c_str()));
-            } else {
-                xsi::MeshImportOptions mo;
-                mo.scale = ref.skeleton.scale > 0.0f ? ref.skeleton.scale : 1.0f;
-                mo.animName = ref.skeleton.name;
-                mo.modelName = stem + ".glm";
-                for (const auto& b : ref.skeleton.bones) mo.boneNames.push_back(b.name);
-                const auto mr = xsi::importMeshFile(xsi, mo);
-                const auto mw = writeMdxm(mr.mesh);
-                if (writeOutput(d.title, (outDir / (stem + ".glm")).string(),
-                                std::string(reinterpret_cast<const char*>(mw.data.data()),
-                                            mw.data.size()))) {
-                    log(LogLine::Kind::Good,
-                        d.title + " -> " + stem + ".glm (" + std::to_string(mr.stats.surfaces) +
-                            " Surfaces, " + std::to_string(mr.stats.vertices) + " Verts)");
-                    if (st.writeSkin)
-                        writeOutput(d.title, (outDir / (stem + ".skin")).string(),
-                                    writeSkin(mr.mesh));
-                }
-            }
+            lastOutputDir_ = fs::path(d.outputDir).string();
         }
     } catch (const std::exception& e) {
         log(LogLine::Kind::Bad, d.title + ": " + e.what());
@@ -2384,16 +2301,32 @@ void App::drawSettingsPanel() {
         ImGui::SetTooltip("%s", tr(S::AssignTooltip));
 
     ImGui::SeparatorText(tr(S::SecOutput));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OutputsTooltip));
+    ImGui::Checkbox(tr(S::WriteGla), &settings_.writeGla);
+    ImGui::Checkbox(tr(S::WriteCfg), &settings_.writeCfg);
     ImGui::Checkbox(tr(S::WriteFrames), &settings_.writeFrames);
+    ImGui::Checkbox(tr(S::WriteInfo), &settings_.writeInfo);
     ImGui::Checkbox(tr(S::WriteMesh), &settings_.writeMesh);
     ImGui::BeginDisabled(!settings_.writeMesh);
     ImGui::Checkbox(tr(S::WriteSkin), &settings_.writeSkin);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", tr(S::SkinTooltip));
     ImGui::EndDisabled();
 
     ImGui::SeparatorText(tr(S::SecProcessing));
     ImGui::Checkbox(tr(S::UseCache), &settings_.useCache);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::CacheTooltip));
+    ImGui::Checkbox(tr(S::NewSkeleton), &settings_.newSkeleton);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", tr(S::NewSkeletonTooltip));
+    {
+        ImGui::SetNextItemWidth(90 * (settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f));
+        int fs = settings_.frameStep;
+        if (ImGui::InputInt(tr(S::FrameStep), &fs)) settings_.frameStep = std::clamp(fs, 1, 1000);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tr(S::FrameStepTooltip));
+    }
     ImGui::Checkbox(tr(S::CarcassMode), &settings_.carcassCompat);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::CarcassTooltip));

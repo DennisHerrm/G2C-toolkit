@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+namespace g2::ase {
+struct Scene;
+}
+
 namespace g2::xsi {
 
 struct MeshImportOptions {
@@ -31,22 +35,15 @@ struct MeshImportOptions {
     // Renames reference -> dotXSI, as with the animation.
     std::map<std::string, std::string> aliases;
 
-    // Tolerances for vertex merging.
-    //
-    // dotXSI has a separate index array per attribute, GLM only one index
-    // per vertex. Merging is done by position index, UV and normal - but NOT
-    // via a hash key, rather by a greedy search with tolerance: the first
-    // matching candidate wins.
-    //
-    // The difference is significant. With exact equality too many vertices
-    // are created, and no rounding grid can compensate for that - the merge
-    // is order-dependent, not value-discrete. mrwonko's Blender exporter uses
-    // the same rule.
-    float normalTolerance = 0.05f;
-    // 0.002 instead of exact equality: measured across all 84 surfaces, the
-    // best value (81 exact vs. 77 with exact equality). Larger values do hit
-    // the overall total, but only through errors that cancel out.
-    float uvTolerance = 0.002f;
+    // Carcass's -smooth: normals of vertices at the same place (within one
+    // LOD, across surfaces) are averaged; implies loseDupVerts.
+    bool smooth = false;
+    // Carcass's -losedupverts: vertices that became identical are removed.
+    bool loseDupVerts = false;
+    // Smooth exactly as Carcass did, faults included: tags take part, and
+    // opposite normals are added too (they cancel). For byte-identical files
+    // with old builds; normally off.
+    bool carcassSmooth = false;
 };
 
 struct MeshImportStats {
@@ -56,7 +53,15 @@ struct MeshImportStats {
     std::size_t   tags = 0;          // surfaces with a * prefix
     std::size_t   offSurfaces = 0;   // surfaces with _off
     std::uint64_t splitVertices = 0; // created by attribute splitting
+    std::size_t   lods = 0;
+    // -losedupverts / -smooth: what was removed (for _info.txt).
+    std::size_t   deletedDupVerts = 0;
+    std::size_t   deletedDupWeights = 0;
+    std::vector<std::size_t> deletedDupVertsPerLod;
+    std::vector<std::size_t> deletedDupWeightsPerLod;
     std::vector<std::string> warnings;
+    // Informational, not a problem: e.g. weights moved to a parent bone.
+    std::vector<std::string> notes;
 };
 
 struct MeshImportResult {
@@ -64,9 +69,8 @@ struct MeshImportResult {
     MeshImportStats stats;
 };
 
-// Converts a surface name from the dotXSI into the GLM name.
-//
-// Two rules, derived from Raven's _humanoid.glm:
+// Converts a surface name from the dotXSI into the GLM name, as Carcass:
+//   - at most 63 characters, a LOD suffix "_<digit>" removed
 //   - all lowercase: "Stupidtriangle_off" -> "stupidtriangle_off"
 //   - prefix "bolt_" becomes "*":  "bolt_back" -> "*back"
 //
@@ -82,6 +86,17 @@ std::string surfaceNameToGlm(const std::string& xsiName);
 std::uint32_t surfaceFlagsFromName(const std::string& glmName);
 
 MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt);
+
+// Names of all envelope deformers that carry at least one weight > 0, in
+// file order without duplicates. These are the bones a new skeleton keeps
+// (Carcass: "used by a surface").
+std::vector<std::string> weightedDeformers(const Document& doc);
 MeshImportResult importMeshFile(const std::string& path, const MeshImportOptions& opt);
+
+// The same GLM from 3ds Max ASE (Carcass: "$aseanimconvertmdx" without
+// _noask). Positions come from *MESH_BONE_VERTEX, normals are computed.
+// Objects hang below their *NODE_PARENT, or below the first object - Carcass
+// ignored the parent and could only build single-object models from ASE.
+MeshImportResult importMeshAse(const ase::Scene& scene, const MeshImportOptions& opt);
 
 }  // namespace g2::xsi

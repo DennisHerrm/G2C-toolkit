@@ -1,5 +1,7 @@
 #include "g2/xsi_anim.h"
 
+#include <cctype>
+
 #include "g2/mdxa.h"
 
 #include <algorithm>
@@ -80,20 +82,31 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
         out.nodes.push_back(std::move(n));
 
         // SI_Transform SRT-<name>: static local transform.
-        // BASEPOSE-<name> is something else (absolute bind pose) and is
-        // deliberately not used here.
+        // BASEPOSE-<name> is the absolute bind pose; evaluating animations
+        // does not use it, building a new skeleton does (skelbuild.cpp).
+        bool haveSrt = false, haveBase = false;
         for (const Template* xf : t.findAll("SI_Transform")) {
-            if (xf->name.rfind("SRT-", 0) != 0) continue;
+            const bool isSrt = xf->name.rfind("SRT-", 0) == 0;
+            const bool isBase = xf->name.rfind("BASEPOSE-", 0) == 0;
+            if ((!isSrt || haveSrt) && (!isBase || haveBase)) continue;
             if (xf->values.size() < 9) continue;
             auto& node = out.nodes[static_cast<std::size_t>(self)];
+            std::array<float, 9> v{};
             bool ok = true;
             for (int k = 0; k < 9; ++k) {
                 const auto d = xf->values[static_cast<std::size_t>(k)].asNumber();
                 if (!d) { ok = false; break; }
-                node.srt[static_cast<std::size_t>(k)] = static_cast<float>(*d);
+                v[static_cast<std::size_t>(k)] = static_cast<float>(*d);
             }
-            node.hasSrt = ok;
-            break;
+            if (isSrt) {
+                haveSrt = true;
+                node.srt = v;
+                node.hasSrt = ok;
+            } else {
+                haveBase = true;
+                node.basePose = v;
+                node.hasBasePose = ok;
+            }
         }
 
         for (const Template* fc : t.findAll("SI_FCurve")) {
@@ -186,6 +199,44 @@ float channelAt(const std::map<int, float>& keys, int frame, float fallback) {
     return lo->second + (hi->second - lo->second) * t;
 }
 
+}  // namespace
+
+std::string glaBoneName(const std::string& xsiName) {
+    std::string n = xsiName;
+    const std::size_t k = n.find("_always_");
+    if (k != std::string::npos) n.erase(k, 8);
+    if (!n.empty() && n.back() == '_') n.pop_back();
+    return n;
+}
+
+Mat3x4 srtMatrix(const std::array<float, 9>& v) {
+    Mat3x4 m = eulerXYZ(v[3], v[4], v[5]);
+    for (int r = 0; r < 3; ++r) {
+        m.m[r][0] *= v[0];
+        m.m[r][1] *= v[1];
+        m.m[r][2] *= v[2];
+    }
+    m.m[0][3] = v[6];
+    m.m[1][3] = v[7];
+    m.m[2][3] = v[8];
+    return m;
+}
+
+Mat3x4 toGhoul2Space(const Mat3x4& m, float scale) {
+    const Mat3x4 rot = mul(mul(axisChange(), m), axisChangeInv());
+    Mat3x4 o = rot;
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c) o.m[r][c] = rot.m[r][c] * scale;
+    return o;
+}
+
+bool isAlwaysName(const std::string& xsiName) { return xsiName.find("_always_") != std::string::npos; }
+
+namespace {
+std::string lowerAscii(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
 }  // namespace
 
 const AnimNode* AnimFile::find(const std::string& bone) const {
@@ -350,8 +401,19 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
         const std::string& refName = reference.bones[static_cast<std::size_t>(b)].name;
         const auto al = opt.aliases.find(refName);
         const std::string& lookup = (al == opt.aliases.end()) ? refName : al->second;
-        nodeOf[static_cast<std::size_t>(b)] = anim.indexOf(lookup);
-        if (nodeOf[static_cast<std::size_t>(b)] < 0) res.missingBones.push_back(refName);
+        int idx = anim.indexOf(lookup);
+        // Not found by name: compare with the name Carcass would have given
+        // the node in a GLA - first "_always_" cut out, one trailing "_"
+        // removed. Raven's files call the face bone "face_always_", every GLA
+        // calls it "face"; without this the face bone and the eight bones
+        // under it stayed in their rest pose in every build.
+        if (idx < 0 && al == opt.aliases.end()) {
+            const std::string want = lowerAscii(refName);
+            for (std::size_t n = 0; n < anim.nodes.size() && idx < 0; ++n)
+                if (lowerAscii(glaBoneName(anim.nodes[n].name)) == want) idx = static_cast<int>(n);
+        }
+        nodeOf[static_cast<std::size_t>(b)] = idx;
+        if (idx < 0) res.missingBones.push_back(refName);
     }
     {
         std::set<std::string> refNames;
@@ -415,6 +477,20 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
             rootRamp[2] = -opt.scale * dy;
             haveRamp = (rootRamp[0] != 0.0f || rootRamp[1] != 0.0f || rootRamp[2] != 0.0f);
             for (int k = 0; k < 3; ++k) res.rootMotion[k] = rootRamp[k];
+        }
+    }
+
+    if (opt.wantMotionPath) {
+        const int mi = anim.indexOf(opt.motionBone);
+        if (mi >= 0) {
+            res.motionPath.reserve(static_cast<std::size_t>(numFrames));
+            for (int f = 0; f < numFrames; ++f) {
+                const auto w = anim.worldMatrices(anim.firstFrame + f);
+                const auto& m = w[static_cast<std::size_t>(mi)].m;
+                // Axis swap as everywhere else: (x, -z, y), scaled.
+                res.motionPath.push_back(std::array<float, 3>{opt.scale * m[0][3], opt.scale * -m[2][3],
+                                                              opt.scale * m[1][3]});
+            }
         }
     }
 

@@ -118,11 +118,20 @@ struct Settings {
     std::string baseDir;       // root under which models/ lives
     std::string referenceGla;  // skeleton source
 
+    // What a build writes - every file can be switched off (JobOutputs).
+    bool writeGla = true;
+    bool writeCfg = true;
     bool writeFrames = true;
     bool writeMesh = true;
     bool writeSkin = true;
+    bool writeInfo = true;
     bool useCache = true;
     bool carcassCompat = false;
+    // Build the skeleton anew from the sources (as Carcass always did) even
+    // when a GLA exists; its bone order is kept if the bones are the same.
+    bool newSkeleton = false;
+    // Carcass's -framestep: keep every n-th frame (1 = all).
+    int  frameStep = 1;
 
     // Create a .car.bak on the first save.
     //

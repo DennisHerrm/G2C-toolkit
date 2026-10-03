@@ -66,7 +66,7 @@ build\g2_tests.exe
 ## Erwartete Ausgabe
 
 ```
-522/522 Pruefungen bestanden
+591/591 Pruefungen bestanden
 ```
 
 ## Oberflaeche automatisch durchklicken
@@ -84,7 +84,7 @@ build\Release\g2_gui_driver.exe C:\temp\g2c_gui <assetwurzel> <referenz.gla> <an
 Alles wird unter dem ersten Ordner geschrieben, `%APPDATA%` wird fuer den
 Lauf dorthin umgelenkt. Die uebergebenen Dateien werden nur gelesen; die
 .car wird vorher kopiert. Erwartet: `fehlgeschlagen: 0, Abstuerze: 0`
-(191 Pruefungen mit Daten, 80 ohne - darunter die Update-Leiste gegen einen
+(207 Pruefungen mit Daten, 85 ohne - darunter die Update-Leiste gegen einen
 nachgebauten GitHub-Server und der Abgleich mit Assimilate: Ziel und Speed
 von zehn _humanoid-Zeilen muessen die Zahlen ergeben, die Assimilate 3.1
 zeigt).
@@ -116,3 +116,20 @@ git push origin v1.0.0
 Oder auf GitHub unter *Releases > Draft a new release* einen neuen Tag
 anlegen. Die Nummer folgt [Semver](https://semver.org): Fehlerbehebung
 = letzte Stelle, neue Funktion = mittlere, Inkompatibles = erste.
+
+
+## Abgleich mit Carcass
+
+Die Vergleiche mit Carcass' eigenen Ausgaben (Skelett, GLM, MDR, ASE) laufen
+ausserhalb der Tests, weil sie carcass.exe-Ausgaben brauchen, die nicht ins
+Repository gehoeren. Die Skripte dazu lagen bei der Entwicklung unter
+`C:\g2c_test\re\` (`skel_g2c_compare.py`, `mesh_g2c_compare.py`,
+`mdr_g2c_compare.py`, `aseglm_g2c_compare.py`). Ergebnis siehe ANLEITUNG
+Abschnitt 72.
+
+Die echten .car-Dateien eines Rechners pruefen (nur lesend):
+
+```bat
+set G2C_CAR_CORPUS=C:\pfad\liste.txt
+build\Release\g2_tests.exe
+```

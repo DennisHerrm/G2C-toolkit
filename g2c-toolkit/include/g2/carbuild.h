@@ -49,6 +49,13 @@ struct BuildOptions {
     // really matters or you want to compare outputs byte by byte.
     bool carcassCompatible = false;
 
+    // Carcass's -framestep <n>: keep every n-th frame of each file that is
+    // longer than n frames (shorter ones stay whole, as in Carcass). Unlike
+    // Carcass, the speeds are divided by n too - there a stepped animation
+    // played n times too fast. Loop frames and -additional ranges are scaled
+    // with it.
+    int frameStep = 1;
+
     // 0 = all available cores. The files are read, parsed and evaluated
     // independently of each other; that parallelizes completely. Afterwards
     // they are concatenated in script order again so the target frames are
@@ -72,6 +79,9 @@ struct FrameBlock {
     int         duration = 0;
     int         fps = 0;         // rate from SI_Scene, NOT the framespeed
     float       averageVec[3] = {0.0f, 0.0f, 0.0f};
+    // "-deltavecs" on the grab line: the Motion bone's step per frame
+    // (delta0 = its position in the first frame). Empty = averagevec.
+    std::vector<std::array<float, 3>> deltaVecs;
 };
 
 struct BuildResult {
@@ -134,6 +144,14 @@ std::string guessBaseDir(const Script& script, const std::string& carPath, int m
 // Derives the reference GLA from -makeskel: <base>/<makeskel>.gla
 // Returns an empty string if the file does not exist.
 std::string guessReferenceGla(const Script& script, const std::string& baseDir);
+
+// The grab files that cannot be found - exactly the check build() makes
+// first, without reading anything. resolvedOut (optional) receives the
+// resolved path of every grab, empty for the missing ones.
+std::vector<BuildResult::MissingFile> findMissingFiles(const Script& script,
+                                                       const std::string& carPath,
+                                                       const BuildOptions& opt,
+                                                       std::vector<std::string>* resolvedOut = nullptr);
 
 BuildResult build(const Script& script, const Skeleton& reference, const std::string& carPath,
                   const BuildOptions& opt = {});

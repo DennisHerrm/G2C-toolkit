@@ -85,6 +85,9 @@ add_library(g2 STATIC
   src/sidefiles.cpp
   src/animenums.cpp
   src/carvalidate.cpp
+  src/carjob.cpp
+  src/skelbuild.cpp
+  src/ase.cpp
 )
 target_include_directories(g2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

@@ -36,6 +36,7 @@ const std::unordered_map<std::string, Cmd>& table() {
         {"$aseanimconvertmdx", Cmd::AseAnimConvertMdx},
         {"$aseanimconvertmdx_noask", Cmd::AseAnimConvertMdxNoAsk},
         {"$exit", Cmd::Exit},
+        {"$cfgnamefromcar", Cmd::CfgNameFromCar},
     };
     return t;
 }
@@ -46,6 +47,14 @@ std::string toLower(std::string s) {
     return s;
 }
 
+// Does a comment start at position k (at the start of a token)? Carcass's
+// tokenizer (Quake scriplib) knows "//", ";", "#" and "/* ... */".
+bool commentAt(const std::string& line, std::size_t k) {
+    const char ch = line[k];
+    if (ch == ';' || ch == '#') return true;
+    return ch == '/' && k + 1 < line.size() && (line[k + 1] == '/' || line[k + 1] == '*');
+}
+
 // Splits a line into tokens. Quotes keep paths containing spaces together;
 // Carcass can't do that, but it does no harm.
 std::vector<std::string> tokenize(const std::string& line) {
@@ -54,7 +63,7 @@ std::vector<std::string> tokenize(const std::string& line) {
     while (i < line.size()) {
         while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
         if (i >= line.size()) break;
-        if (line[i] == '/' && i + 1 < line.size() && line[i + 1] == '/') break;
+        if (commentAt(line, i)) break;
         if (line[i] == '"') {
             ++i;
             const std::size_t start = i;
@@ -79,9 +88,9 @@ std::string trailingCommentOf(const std::string& line) {
     // every edit of the line.
     std::string c;
     bool quoted = false;
-    for (std::size_t k = 0; k + 1 < line.size(); ++k) {
+    for (std::size_t k = 0; k < line.size(); ++k) {
         if (line[k] == '"') quoted = !quoted;
-        if (quoted || line[k] != '/' || line[k + 1] != '/') continue;
+        if (quoted || !commentAt(line, k)) continue;
         if (k > 0 && !std::isspace(static_cast<unsigned char>(line[k - 1]))) continue;
         if (line.find_first_not_of(" \t") == k) return {};   // the whole line is a comment
         c = line.substr(k);
@@ -178,6 +187,9 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
     // structured file and a wall of numbers is considerable.
     std::vector<std::string> pendingComments;
     int pendingBlank = 0;
+    bool inBlockComment = false;
+    // $basedir applies to the $aseanimgrab lines that FOLLOW it (Carcass).
+    std::string currentBaseDir;
 
     while (std::getline(in, line)) {
         ++lineNo;
@@ -196,9 +208,17 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 else pendingComments.emplace_back();
                 continue;
             }
-            if (t[a] == '/' && a + 1 < t.size() && t[a + 1] == '/') {
+            // Inside a /* ... */ block every line is comment text.
+            if (inBlockComment) {
+                pendingComments.push_back(t);
+                if (t.find("*/") != std::string::npos) inBlockComment = false;
+                continue;
+            }
+            if (commentAt(t, a)) {
                 // With its indentation - that is part of the author's layout.
                 pendingComments.push_back(t);
+                if (t.compare(a, 2, "/*") == 0 && t.find("*/", a + 2) == std::string::npos)
+                    inBlockComment = true;
                 continue;
             }
         }
@@ -209,6 +229,12 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
         // evaluation, but the text should be preserved and reappear later in
         // animation.cfg.
         const std::string zeilenKommentar = trailingCommentOf(line);
+        // A block comment opened at the end of a command line.
+        {
+            const std::size_t open = zeilenKommentar.find("/*");
+            if (open != std::string::npos && zeilenKommentar.find("*/", open + 2) == std::string::npos)
+                inBlockComment = true;
+        }
 
         auto tokens = tokenize(line);
         if (tokens.empty()) continue;
@@ -220,6 +246,7 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
         switch (st.cmd) {
             case Cmd::BaseDir:
                 script.baseDir = st.arg(0, "$basedir");
+                currentBaseDir = script.baseDir;
                 break;
             case Cmd::ModelName:
                 script.modelName = st.arg(0, "$modelname");
@@ -253,6 +280,7 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 g.trailingComment = zeilenKommentar;
                 g.sourceLine = line;
                 g.fromInclude = fromInclude;
+                g.baseDir = currentBaseDir;
                 script.grabs.push_back(std::move(g));
                 break;
             }
@@ -293,6 +321,20 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                                               ? fs::path(originName).parent_path()
                                               : fs::path(baseDirForIncludes);
                     p = base / p;
+                }
+                // Carcass reads $include relative to the folder ABOVE "base"
+                // ("$include base/models/..."); also try that and the asset
+                // root itself.
+                if (!fs::exists(p) && fs::path(rel).is_relative()) {
+                    for (fs::path up = fs::absolute(fs::path(originName)).parent_path(); !up.empty();
+                         up = up.parent_path()) {
+                        const fs::path cand = up / rel;
+                        if (fs::exists(cand)) {
+                            p = cand;
+                            break;
+                        }
+                        if (up == up.parent_path()) break;
+                    }
                 }
                 std::string sub;
                 try {
@@ -386,6 +428,7 @@ const char* cmdName(Cmd c) {
         case Cmd::AseAnimConvertMdx: return "$aseanimconvertmdx";
         case Cmd::AseAnimConvertMdxNoAsk: return "$aseanimconvertmdx_noask";
         case Cmd::Exit: return "$exit";
+        case Cmd::CfgNameFromCar: return "$CFGNameFromCAR";
         case Cmd::Unknown: return "<unbekannt>";
     }
     return "<unbekannt>";
@@ -558,6 +601,7 @@ Script parse(const std::string& text, const std::string& originName, const Parse
     Script s;
     // Plain LF only if the file has no CRLF at all; mixed files stay CRLF.
     if (text.find('\n') != std::string::npos && text.find("\r\n") == std::string::npos) s.newline = "\n";
+    s.noFinalNewline = !text.empty() && text.back() != '\n';
     int nextIncludeId = 0;
     parseInto(s, text, originName, opt, 0, "", -1, nextIncludeId);
     return s;

@@ -34,7 +34,8 @@ namespace g2 {
 // as "the fix doesn't work" and is hard to find.
 // 4: SI_Scene range stored as well, for the mismatch warning.
 // 5: key range stored; values per key and CONSTANT (stepped) curves honoured.
-inline constexpr std::uint32_t kAnimCacheVersion = 5;
+// 6: base poses (BASEPOSE-) stored per node.
+inline constexpr std::uint32_t kAnimCacheVersion = 6;
 
 struct AnimCacheStats {
     std::uint64_t hits = 0;

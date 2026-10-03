@@ -3,6 +3,7 @@
 #include "g2/parallel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <atomic>
 #include <mutex>
@@ -100,6 +101,57 @@ std::string guessReferenceGla(const Script& script, const std::string& baseDir) 
     return fs::exists(p, ec) ? p.lexically_normal().make_preferred().string() : std::string();
 }
 
+std::vector<BuildResult::MissingFile> findMissingFiles(const Script& script,
+                                                       const std::string& carPath,
+                                                       const BuildOptions& opt,
+                                                       std::vector<std::string>* resolvedOut) {
+    const std::string carDir = fs::path(carPath).parent_path().string();
+    const std::string baseDir = opt.baseDir.empty() ? script.baseDir : opt.baseDir;
+    std::vector<BuildResult::MissingFile> out;
+    if (resolvedOut) resolvedOut->assign(script.grabs.size(), std::string());
+    for (std::size_t i = 0; i < script.grabs.size(); ++i) {
+        const auto& g = script.grabs[i];
+        // Carcass appends ".XSI" when the name has no ".xsi" in it.
+        std::vector<std::string> names{g.file};
+        {
+            std::string low = g.file;
+            for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (low.find(".xsi") == std::string::npos) {
+                names.push_back(g.file + ".XSI");
+                names.push_back(g.file + ".xsi");
+            }
+        }
+        std::string r;
+        for (const auto& name : names) {
+            // $basedir before the line: <basedir>/<file> first - absolute, or
+            // relative to the .car's folder or the asset root.
+            if (!g.baseDir.empty()) {
+                const fs::path bd(g.baseDir);
+                for (const fs::path& cand :
+                     {bd / name, fs::path(carDir) / bd / name, fs::path(baseDir) / bd / name}) {
+                    std::error_code ec;
+                    if (!cand.empty() && fs::is_regular_file(cand, ec)) {
+                        r = cand.lexically_normal().make_preferred().string();
+                        break;
+                    }
+                }
+            }
+            if (r.empty()) r = resolveAssetPath(name, baseDir, carDir);
+            if (!r.empty()) break;
+        }
+        if (resolvedOut) (*resolvedOut)[i] = r;
+        if (!r.empty()) continue;
+        BuildResult::MissingFile m;
+        m.file = script.grabs[i].file;
+        m.sequence = script.grabs[i].enumName ? *script.grabs[i].enumName
+                                              : script.grabs[i].derivedName();
+        m.grabIndex = i;
+        m.line = script.grabs[i].line;
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
 BuildResult build(const Script& script, const Skeleton& reference, const std::string& carPath,
                   const BuildOptions& opt) {
     if (script.grabs.empty())
@@ -152,19 +204,8 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
     // --- Resolve paths (serial, cheap) ------------------------------------
     const std::size_t nGrabs = script.grabs.size();
     std::vector<std::string> resolved(nGrabs);
-    for (std::size_t i = 0; i < nGrabs; ++i) {
-        resolved[i] = resolveAssetPath(script.grabs[i].file, baseDir, carDir);
-        if (!resolved[i].empty()) continue;
-
-        BuildResult::MissingFile m;
-        m.file = script.grabs[i].file;
-        m.sequence = script.grabs[i].enumName ? *script.grabs[i].enumName
-                                              : script.grabs[i].derivedName();
-        m.grabIndex = i;
-        m.line = script.grabs[i].line;
-        res.missing.push_back(std::move(m));
-        res.missingFiles.push_back(script.grabs[i].file);
-    }
+    res.missing = findMissingFiles(script, carPath, opt, &resolved);
+    for (const auto& m : res.missing) res.missingFiles.push_back(m.file);
     if (!res.missing.empty() && !opt.skipMissing) {
         std::ostringstream os;
         os << res.missing.size() << " von " << nGrabs << " Animationsdateien nicht gefunden.\n";
@@ -205,8 +246,22 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         std::string     warning;
         std::string     rangeNote;
         std::vector<std::string> missingBones;
+        std::vector<std::array<float, 3>> motionPath;
     };
     std::vector<Loaded> loaded(nGrabs);
+
+    // -deltavecs per grab line (.frames only).
+    std::vector<bool> wantsDeltas(nGrabs, false);
+    bool anyDeltas = false;
+    for (std::size_t i = 0; i < nGrabs; ++i)
+        for (const auto& x : script.grabs[i].extraArgs) {
+            std::string lx = x;
+            for (auto& ch : lx) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (lx == "-deltavecs") wantsDeltas[i] = anyDeltas = true;
+        }
+    // Carcass's delta0 is measured from the Motion bone in the very first
+    // frame of the GLA, shifted by -origin as it stores it: (y, -x, -z).
+    std::array<float, 3> deltaBase{0.0f, 0.0f, 0.0f};
 
     std::mutex             progressMutex;
     std::atomic<std::size_t> done{0};
@@ -237,7 +292,11 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
                         res.cache.bytesRead += cache.stats().bytesRead;
                         res.cache.bytesWritten += cache.stats().bytesWritten;
                     }
-                    xsi::EvalResult ev = xsi::evaluate(reference, anim, eval);
+                    xsi::EvalOptions ev1 = eval;
+                    // The first file's path too: delta0 refers to it.
+                    ev1.wantMotionPath = wantsDeltas[i] || (i == 0 && anyDeltas);
+                    xsi::EvalResult ev = xsi::evaluate(reference, anim, ev1);
+                    out.motionPath = std::move(ev.motionPath);
                     out.frameCount = ev.frameCount;
                     out.frameRate = (anim.hasScene && anim.frameRate > 0.0f)
                                         ? static_cast<int>(anim.frameRate)
@@ -306,6 +365,27 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         if (!L.rangeNote.empty()) res.warnings.push_back(L.rangeNote);
 
         for (const auto& b : L.missingBones) reportedMissingBones.insert(b);
+
+        // -framestep: thin out before concatenating.
+        const int step = (opt.frameStep > 1 && L.frameCount > opt.frameStep) ? opt.frameStep : 1;
+        const int fullCount = L.frameCount;
+        if (step > 1) {
+            std::vector<Mat3x4> kept;
+            const int keptCount = (fullCount + step - 1) / step;
+            kept.reserve(static_cast<std::size_t>(keptCount) * static_cast<std::size_t>(numBones));
+            for (int f = 0; f < fullCount; f += step)
+                kept.insert(kept.end(),
+                            L.frames.matrices.begin() + static_cast<std::ptrdiff_t>(f) * numBones,
+                            L.frames.matrices.begin() + static_cast<std::ptrdiff_t>(f + 1) * numBones);
+            L.frames.matrices = std::move(kept);
+            L.frameCount = keptCount;
+        }
+        // Scales a frame number / speed of this file by the step.
+        const auto byStep = [step](int v) { return step > 1 ? v / step : v; };
+        const auto speedByStep = [step](int v) {
+            return step > 1 ? std::max(1, static_cast<int>(std::lround(static_cast<double>(v) / step))) : v;
+        };
+
         res.frames.matrices.insert(res.frames.matrices.end(), L.frames.matrices.begin(),
                                    L.frames.matrices.end());
         L.frames.matrices.clear();
@@ -327,7 +407,8 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         s.targetFrame = cursor;
         s.frameCount = L.frameCount;
         s.loopFrame = g.loop.value_or(0);
-        s.frameSpeed = speed;
+        if (s.loopFrame > 0) s.loopFrame = byStep(s.loopFrame);
+        s.frameSpeed = speedByStep(speed);
         s.sourceFile = g.file;
         res.sequences.push_back(std::move(s));
 
@@ -336,12 +417,33 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
             fb.sourcePath = L.resolvedPath;
             fb.startFrame = cursor;
             fb.duration = L.frameCount;
-            fb.fps = L.frameRate;
+            fb.fps = L.frameRate > 0 ? speedByStep(L.frameRate) : L.frameRate;
             // Per frame and with the sign flipped: the ramp on the root bone is
-            // the counter-motion, averagevec is the motion itself.
-            if (L.frameCount > 1)
+            // the counter-motion, averagevec is the motion itself. With
+            // -framestep one kept frame covers `step` source frames.
+            if (fullCount > 1)
                 for (int k = 0; k < 3; ++k)
-                    fb.averageVec[k] = -L.rootMotion[k] / static_cast<float>(L.frameCount - 1);
+                    fb.averageVec[k] = -L.rootMotion[k] * static_cast<float>(step) /
+                                       static_cast<float>(fullCount - 1);
+            // -deltavecs: the step of the Motion bone per kept frame; delta0
+            // is its position in the first frame (Carcass, measured on
+            // BOTH_RUN1: delta0 = (0, -0.385, -28.419), then zeros).
+            if (i == 0 && !L.motionPath.empty()) {
+                deltaBase = L.motionPath[0];
+                if (eval.origin) {
+                    deltaBase[0] -= (*eval.origin)[1];
+                    deltaBase[1] += (*eval.origin)[0];
+                    deltaBase[2] += (*eval.origin)[2];
+                }
+            }
+            if (wantsDeltas[i] && !L.motionPath.empty()) {
+                std::array<float, 3> prev = deltaBase;
+                for (int f = 0; f < fullCount; f += step) {
+                    const auto& p = L.motionPath[static_cast<std::size_t>(f)];
+                    fb.deltaVecs.push_back({p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]});
+                    prev = p;
+                }
+            }
             res.frameBlocks.push_back(std::move(fb));
         }
 
@@ -350,17 +452,21 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
             // Only the validation used to check this, and only with frame
             // counts switched on; the build wrote it without a word.
             if (a.targetOffset < 0 || a.frameCount <= 0 ||
-                static_cast<long long>(a.targetOffset) + a.frameCount > L.frameCount)
+                static_cast<long long>(a.targetOffset) + a.frameCount > fullCount)
                 res.warnings.push_back(g.file + ": -additional " + a.name + " (Start " +
                                        std::to_string(a.targetOffset) + ", " +
                                        std::to_string(a.frameCount) + " Frames) liegt ausserhalb der " +
-                                       std::to_string(L.frameCount) + " Frames der Datei");
+                                       std::to_string(fullCount) + " Frames der Datei");
             Sequence x;
             x.name = a.name;
-            x.targetFrame = cursor + a.targetOffset;
+            x.targetFrame = cursor + byStep(a.targetOffset);
             x.frameCount = a.frameCount;
-            x.loopFrame = a.loopFrame;
-            x.frameSpeed = a.frameSpeed;
+            if (step > 1) {
+                const int end = (a.targetOffset + a.frameCount + step - 1) / step;
+                x.frameCount = std::max(1, end - byStep(a.targetOffset));
+            }
+            x.loopFrame = a.loopFrame > 0 ? byStep(a.loopFrame) : a.loopFrame;
+            x.frameSpeed = speedByStep(a.frameSpeed);
             x.sourceFile = g.file;
             x.fromAdditional = true;
             x.insideQdSkip = a.insideQdSkip;

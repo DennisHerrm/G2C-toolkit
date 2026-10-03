@@ -14,6 +14,10 @@
 #include "g2/readfile.h"
 #include "g2/gladiff.h"
 #include "g2/xsi_mesh.h"
+#include "g2/sidefiles.h"
+#include "g2/ase.h"
+#include "g2/skelbuild.h"
+#include "g2/carjob.h"
 
 #include <cmath>
 #include <algorithm>
@@ -3379,6 +3383,8 @@ void testReviewScript() {
     }
 }
 
+#include "tests_carcass.inc"
+
 int main() {
     // Unbuffered output. Otherwise, on a hang or crash you can't tell where it
     // happened: the last printed text is still stuck in the buffer, and the
@@ -3439,6 +3445,14 @@ int main() {
     run("testReviewBinary", testReviewBinary);
     run("testReviewXsi", testReviewXsi);
     run("testReviewScript", testReviewScript);
+    run("testGlmRead", testGlmRead);
+    run("testCarcassScriptSyntax", testCarcassScriptSyntax);
+    run("testSkeletonBuild", testSkeletonBuild);
+    run("testFrameStepAndOutputs", testFrameStepAndOutputs);
+    run("testGlmWeightsLikeCarcass", testGlmWeightsLikeCarcass);
+    run("testMeshLikeCarcass", testMeshLikeCarcass);
+    run("testAseAndMdr", testAseAndMdr);
+    run("testCarCorpus", testCarCorpus);
 
 
     g_currentTest.store("(fertig)");

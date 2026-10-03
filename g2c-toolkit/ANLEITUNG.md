@@ -3832,13 +3832,129 @@ Nur geaenderte Zeilen werden umgeschrieben, Zeilenendkommentare bleiben.
 Neue Zeilen kommen dahin, wo Raven sie hat: nach den Grabs, vor
 `$aseanimgrabfinalize`.
 
-Was g2c davon selbst auswertet: Scale, Origin, `-makeskel`, `-makeskin`.
-`$keepmotion` braucht g2c nicht (die Wurzelbewegung wird immer wie in Ravens
-GLA uebernommen), die PCJ-Liste braucht nur Carcass beim Erzeugen eines neuen
-Skeletts, und `-losedupverts`/`-smooth` setzt derzeit nur Carcass um. Der
-Dialog sagt das jeweils dazu.
+Was g2c davon auswertet: alles (seit Abschnitt 72). `$keepmotion` und die
+PCJ-Liste wirken beim Neubau des Skeletts, `-losedupverts`/`-smooth` beim
+Mesh. Der Dialog sagt das jeweils dazu.
 
 ### Nur animation.cfg
 
 Laeuft den vollen Bau, schreibt aber nur die animation.cfg - die GLA bleibt
 unangetastet. Geprueft: die Datei ist byte-gleich mit der aus dem vollen Bau.
+
+
+## 72. Was Carcass konnte - und wo es in g2c steht
+
+Abgeglichen im Oktober 2026 mit Carcass v2.2: jede Option der Kommandozeile
+und jeder Skriptbefehl, ermittelt aus der Exe (Disassemblierung) und mit gut
+300 Testlaeufen an Kopien. Die Mitschriften liegen ausserhalb des Projekts
+(`re/misc`, `re/mesh`, `re/skel`, `re/mdr`, `re/md3`); was daraus folgt, steht
+hier. Ziel: g2c kann alles, was Carcass konnte, ohne Carcass' Fehler, und
+Carcass und Assimilate werden nicht mehr gebraucht.
+
+### Was Carcass baut und was g2c daraus macht
+
+| Carcass | g2c |
+|---|---|
+| Animationen (`$aseanimgrab`) -> GLA, `.frames` | gleich; dazu animation.cfg (die schrieb Assimilate) |
+| Mesh (`$aseanimconvertmdx_noask <root>`) -> GLM | **bytegleich** zu Carcass (23 von 27 Testfaellen, die anderen 4 sind behobene Fehler, unten) |
+| Modell-Skript: `$aseanimgrab_gla` -> nur GLM, `<car>_default.skin` | gleich; vorher konnte g2c das gar nicht |
+| neues Skelett aus den Quellen (ohne vorhandene GLA) | gleich (24 Testfaelle, Bindeposen bis 6,6e-7); vorher brauchte g2c immer eine Referenz-GLA |
+| `$aseanimconvertmdx` ohne `_noask`: GLM aus 3ds-Max-ASE (`.ASK`) | gleich (GLM und GLA identisch zu Carcass) |
+| `$aseconvert` / `$aseanimconvert`: MDR aus ASE | gleich in Geometrie, Gewichten, Dreiecken; Matrizen auf 0,0001 |
+| `-smooth`, `-losedupverts` | gleich (mit `-carcass` bytegleich, sonst ohne Carcass' Glaett-Fehler) |
+| LODs (`<name>_1` ... `_9`) | gleich |
+| `<car>_info.txt` | gleich, bis auf eine falsche Statistik (unten) |
+| `-dump` | `g2c dump` bzw. `g2c -dump`, Ausgabe bytegleich |
+| `-recursive`, `-filelist`, Aktualitaetspruefung, `-forcebuild` | `g2c carcass ...` bzw. direkt `g2c -recursive` |
+| `-framestep`, `-skew90`, `-origin`, `$bonehiercap`/`.bonecap`, `-deltavecs`, `$pcj`/`-flatten`, `$aseanimref_gla`, `$basedir`, `$include`, Kommentare `;` `#` `/* */` | alles umgesetzt |
+| Toene am Ende, `-silent`, `-keypress`, `-verbose`, `-nooutput` | im Carcass-Modus vorhanden |
+| `-nocarpet` (Zwischenspeicher in `C:\ravenlocal\CARPET`) | `-nocache`; g2cs Cache liegt neben der .car und waechst nicht unbegrenzt |
+
+Was Carcass nicht kann, kann g2c auch nicht nachbauen: **MD3** schreibt
+Carcass v2.2 nie (der Code ist da, wird aber nie mit Daten versorgt), und der
+**Spielermodus** `-playerparms` (head/upper/lower.mdr) bricht bei jeder Eingabe
+ab - er verlangt `tag_*`-Objekte und lehnt sie im selben Lauf als "altes
+Format" ab. g2c meldet beides mit dieser Begruendung.
+
+### Ausgaben waehlen
+
+Carcass schrieb immer alles. In g2c laesst sich jede Datei abschalten:
+
+- Oberflaeche: Einstellungen > Ausgabe (GLA, animation.cfg, .frames,
+  _info.txt, GLM, .skin)
+- Kommandozeile: `-only gla,cfg`, einzeln `-nogla -nocfg -noframes -noglm
+  -noskin -noinfo`, alles aus mit `-nooutput`
+
+Der Skin entsteht wie bei Carcass nur mit `-makeskin`; dann stehen die
+Texturen in `<car>_default.skin` und die GLM hat leere Shader-Namen.
+
+### Wohin geschrieben wird
+
+Wie Carcass: die GLA (mit animation.cfg und .frames) nach Assetwurzel +
+`-makeskel`, GLM, Skin und _info.txt neben die .car, benannt nach der .car.
+Anders als Carcass legt g2c fehlende Ordner an und sichert ueberschriebene
+GLA/animation.cfg als `.bak`. Mit `-o`/`-outdir` bzw. dem Ausgabeordner der
+Oberflaeche geht alles dorthin.
+
+### Das Skelett
+
+Carcass baut das Skelett **nicht** aus root.xsi. Die Bones kommen aus den
+Animationsdateien, in der Reihenfolge, in der sie zuerst auftauchen; root.xsi
+entscheidet nur, welche bleiben (die mit Gewichten, dazu `_always_`-Bones,
+Motion mit `$keepmotion`, Bone 0). `$pcj`-Eintraege VOR den Grabs haengen
+Bones an den naechsten PCJ-Vorfahren - daher "ltibia unter lfemurYZ" in
+Ravens GLA. Hinter den Grabs (Ravens Anordnung) wirken sie nicht.
+
+g2c baut so ein Skelett, wenn es noch keine GLA gibt, wenn das Skript
+`$aseanimref_gla` enthaelt, oder mit "Skelett neu aus den Quellen bauen"
+(`-newskel`). Gibt es eine GLA mit denselben Bones, bleibt deren Reihenfolge -
+eine GLM speichert Bone-**Nummern**, jedes Modell fuer die alte GLA bliebe
+sonst nicht mehr benutzbar. Ohne den Haken bleibt eine vorhandene GLA das
+Skelett, wie bisher.
+
+### Carcass-Fehler, die g2c nicht uebernimmt
+
+Die vollstaendige Liste steht in `docs/BUGS.md` ("Oktober 2026: Carcass
+v2.2 vollstaendig"). Die wichtigsten, weil man sie sonst fuer Absicht halten
+koennte:
+
+- **Glaetten** (`-smooth`): Carcass addiert auch entgegengesetzte Normalen
+  (doppelseitige Flaechen werden schwarz) und die der unsichtbaren Tags.
+  g2c nur gleichseitige, ohne Tags. `-carcass` stellt das alte Verhalten her.
+- **Gewichte**: rundet das groesste Gewicht auf 0, schrieb Carcass "vier
+  Gewichte, alle null".
+- **Tags** mit zwei gleich langen Kanten: Carcass nahm die Richtung des
+  vorigen Tags.
+- **`-framestep`**: Carcass halbierte die Frames, nicht aber die
+  Geschwindigkeit - alles lief doppelt so schnell. g2c teilt Speed, Loop und
+  `-additional` mit, `_skip`-Namen schon ab Schritt 2 (Carcass: ab 3, bei 2
+  ueberschrieb es die normalen Dateien).
+- **MDR**: Carcass' komprimierte Frames liest kein Spiel; g2c schreibt sie
+  unkomprimiert. Datei nach der `.ask` benannt statt immer `test.mdr`.
+- **Groesse/Klein** der Bone-Namen: eine zweite Datei mit `LHAND` haengte bei
+  Carcass still die Finger um. g2c behandelt die Namen ohne Unterschied.
+
+### Gefunden und behoben in g2c selbst
+
+Beim Abgleich fielen Fehler in g2c auf, jeder mit Regressionstest:
+
+- Eine GLM zeigte auf die Referenz-GLA statt auf die eigene aus `-makeskel` -
+  im Spiel haette das Modell das falsche Skelett benutzt.
+- Der Skin hiess `<name>.skin` statt `<car>_default.skin`; das Spiel findet
+  nur den zweiten.
+- `face_always_` in den Dateien gegen `face` in der GLA: der Bone wurde nie
+  animiert, und Gewichte auf ihm fielen im Mesh weg.
+- `build` ohne `-o` schrieb in den aktuellen Ordner.
+- Die Oberflaeche baute vor jedem Bau einmal komplett zur Probe - nur um
+  fehlende Dateien zu finden. Jetzt werden nur die Pfade geprueft.
+- Eine .car ohne Zeilenumbruch am Ende bekam beim Speichern einen.
+
+### Geprueft
+
+- Unit-Tests 591/591, Oberflaechen-Treiber 207/207 (85 ohne Daten).
+- Alle 55 echten .car-Dateien kommen byte-gleich vom Speichern zurueck
+  (`G2C_CAR_CORPUS=<liste> g2_tests`).
+- Dein `_humanoid` (2061 Grabs): GLA ohne Abweichung ueber der
+  Quantisierungsgrenze, animation.cfg bytegleich, GLM jetzt mit Carcass'
+  Vertexzahl. Bau 8,5 s, mit Cache 2,4 s. Carcass baut diesen Humanoid gar
+  nicht (Abbruch an einer Bindepose und an einer Translation von -520).

@@ -9,6 +9,7 @@
 #include "g2/carscript.h"
 #include "g2/model.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -65,8 +66,29 @@ struct FrameEntry {
     int         duration = 0;
     int         fps = 0;
     float       averageVec[3] = {0.0f, 0.0f, 0.0f};
+    std::vector<std::array<float, 3>> deltaVecs;   // -deltavecs; replaces averagevec
 };
 
 std::string writeFrames(const std::vector<FrameEntry>& entries);
+
+// --- <name>_info.txt ------------------------------------------------------
+//
+// Carcass writes this next to the GLM on every run. Layout byte-exact as in
+// Carcass v2.2 (0x4416a0): the GLM header, the shaders, what is rendered by
+// default per LOD, then either the GLA header with the pooling statistics and
+// the bone list, or - for a model script - which GLA it uses.
+struct InfoInput {
+    std::vector<std::uint8_t> glm;   // the GLM as written
+    // Shader per LOD-0 surface BEFORE -makeskin blanked them in the GLM.
+    // Empty = take them from the GLM.
+    std::vector<std::string>  shaders;
+    std::vector<std::uint8_t> gla;   // the GLA as written; empty if none
+    std::string               usesGla;   // model script: "models/.../x.gla"
+    // -losedupverts / -smooth: what the vertex merge removed.
+    // Per LOD; a line only for a LOD where something was removed.
+    std::vector<std::size_t>  deletedDupVerts;
+    std::vector<std::size_t>  deletedDupWeights;
+};
+std::string writeInfoText(const InfoInput& in);
 
 }  // namespace g2
