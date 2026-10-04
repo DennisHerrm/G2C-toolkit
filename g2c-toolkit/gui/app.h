@@ -257,7 +257,7 @@ public:
         int         start = 0;
         int         count = 0;
         int         loopFrame = -1;
-        int         fps = 20;
+        double      fps = 20;
     };
 
     struct ExtractState {
@@ -447,7 +447,7 @@ public:
     // The table used to show "auto" and the dialog 0 for most sequences -
     // Assimilate showed the real number, and nobody could see how fast an
     // animation actually runs.
-    int effectiveSpeed(const car::GrabDirective& g) const;
+    double effectiveSpeed(const car::GrabDirective& g) const;
 
     // Start frame of every grab in the GLA, as the build lays them out. -1
     // from the first grab whose frame count is not known yet.
@@ -501,7 +501,7 @@ public:
     // Sets -framespeed on several rows at once; nullopt removes it again
     // (back to the rate from the .xsi). Returns the number of rows changed.
     std::size_t setFrameSpeed(std::size_t docIndex, const std::vector<std::size_t>& rows,
-                              std::optional<int> speed);
+                              std::optional<double> speed);
 
     // Remember settings across sessions.
     // Folder for settings and window state.
@@ -719,7 +719,7 @@ private:
     // "Set framespeed" for several rows: which rows of which script.
     std::vector<std::size_t> speedRows_;
     std::string              speedDocPath_;
-    int                      speedValue_ = 20;
+    double                   speedValue_ = 20;
 
     // Created in the constructor when the platform offers network access.
     std::unique_ptr<update::Updater> updater_;

@@ -124,7 +124,7 @@ GrabDirective grabFromStatement(const Statement& st) {
         if (f == "-loop" && i + 1 < st.args.size())
             g.loop = static_cast<int>(st.argNumber(++i, "-loop"));
         else if (f == "-framespeed" && i + 1 < st.args.size())
-            g.frameSpeed = static_cast<int>(st.argNumber(++i, "-framespeed"));
+            g.frameSpeed = st.argNumber(++i, "-framespeed");
         else if (f == "-enum" && i + 1 < st.args.size())
             g.enumName = st.args[++i];
         else if (f == "-qdskipstart") { inQd = true; g.hasQdSkip = true; }
@@ -134,7 +134,7 @@ GrabDirective grabFromStatement(const Statement& st) {
             a.targetOffset = static_cast<int>(st.argNumber(i + 1, "-additional"));
             a.frameCount   = static_cast<int>(st.argNumber(i + 2, "-additional"));
             a.loopFrame    = static_cast<int>(st.argNumber(i + 3, "-additional"));
-            a.frameSpeed   = static_cast<int>(st.argNumber(i + 4, "-additional"));
+            a.frameSpeed   = st.argNumber(i + 4, "-additional");
             a.name         = st.args[i + 5];
             a.insideQdSkip = inQd;
             g.additional.push_back(std::move(a));

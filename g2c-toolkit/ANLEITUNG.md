@@ -3983,3 +3983,30 @@ Im Log steht, wie viele uebersprungen wurden. Das Haekchen wird gespeichert.
 Geprueft mit deinem `_humanoid.car`: Der Ordner `__original_anim` brachte
 genau die 44 Dateien, die noch nicht drinstanden. Ein zweiter Durchlauf
 brachte keine mehr.
+
+---
+
+## 74. Framespeed mit Komma
+
+`-framespeed 16.5` (und der Speed in `-additional`) darf jetzt Nachkommastellen
+haben. Das Spiel liest die Zahl in der animation.cfg mit `atof`, und
+handbearbeitete Configs nutzen das - im Movie-Duels-Humanoid etwa
+`BOTH_FORCELONGLEAP_ATTACK2` mit 16.5. Carcass las nur ganze Zahlen (`atoi`)
+und schrieb 16.
+
+- .car lesen und speichern, Bau, animation.cfg: 16.5 bleibt 16.5. Ganze Zahlen
+  werden weiter ohne Nachkommastellen geschrieben ("20", nicht "20.0").
+- GLA -> XSI: eine 16.5 aus der animation.cfg landet als `-framespeed 16.5` in
+  der erzeugten .car.
+- Oberflaeche: Speed-Spalte, Sequenzdialog, "Framespeed setzen" und die
+  Teilbereiche nehmen Kommazahlen.
+
+Carcass kann eine .car mit Kommazahl-Speed nicht mehr richtig lesen (es
+schneidet ab) - g2c ersetzt Carcass, darum ist das gewollt.
+
+Dabei behoben, jeweils mit Regressionstest:
+
+- Der Sequenzdialog zeigte einen Rueckwaerts-Speed (-20) als Vorgabe 30 an;
+  ein Klick auf "+" machte daraus 31, die Sequenz lief vorwaerts.
+- `-framestep` machte aus einem Rueckwaerts-Speed 1 statt der Haelfte
+  (-20 wurde 1 statt -10).

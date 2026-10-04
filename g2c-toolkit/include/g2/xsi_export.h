@@ -156,7 +156,7 @@ struct CfgSequence {
     int         start = 0;
     int         count = 0;
     int         loop = -1;
-    int         fps = 20;
+    double      fps = 20;   // may have decimals (hand-edited configs)
 };
 
 // A range that is written as its own .xsi, together with the sequences that

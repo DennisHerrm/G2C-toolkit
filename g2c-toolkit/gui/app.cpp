@@ -746,7 +746,7 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     for (const std::size_t r : rows) {
         if (r >= extract_.seqs.size()) continue;
         const ExtractSeq& s = extract_.seqs[r];
-        opt.fps = s.fps > 0 ? s.fps : 20;
+        opt.fps = s.fps > 0 ? static_cast<int>(std::lround(s.fps)) : 20;
         // The .frames first, if there is one. If it's missing - or this
         // sequence is missing from it - the root motion can be reconstructed
         // from the GLA itself: it is stored there as a linear ramp on the
@@ -1037,10 +1037,10 @@ void App::drawSpeedDialog() {
         return;
     ImGui::TextUnformatted(trf(S::SetSpeedHead, speedRows_.size()).c_str());
     ImGui::SetNextItemWidth(140 * settings_.dpiScale);
-    ImGui::InputInt("##speed", &speedValue_);
+    ImGui::InputDouble("##speed", &speedValue_, 1.0, 10.0, "%g");
     ImGui::TextDisabled("%s", tr(S::SetSpeedHint));
     ImGui::Spacing();
-    const auto done = [&](std::optional<int> v) {
+    const auto done = [&](std::optional<double> v) {
         const std::size_t n = setFrameSpeed(di, speedRows_, v);
         log(LogLine::Kind::Info, trf(S::LogSpeedSet, n));
         speedRows_.clear();
@@ -1358,7 +1358,7 @@ int App::xsiRateOf(const std::string& relPath) const {
     return it->second.frames < 0 ? 0 : it->second.rate;
 }
 
-int App::effectiveSpeed(const car::GrabDirective& g) const {
+double App::effectiveSpeed(const car::GrabDirective& g) const {
     if (g.frameSpeed) return *g.frameSpeed;
     const int rate = xsiRateOf(g.file);
     if (rate < 0) return 0;
@@ -1384,7 +1384,7 @@ std::vector<int> App::targetFrames(const Document& d) const {
 }
 
 std::size_t App::setFrameSpeed(std::size_t docIndex, const std::vector<std::size_t>& rows,
-                               std::optional<int> speed) {
+                               std::optional<double> speed) {
     if (docIndex >= docs_.size()) return 0;
     Document& d = docs_[docIndex];
     std::size_t n = 0;
@@ -3105,8 +3105,9 @@ void App::drawSequenceTable(Document& d) {
                 if (ImGui::MenuItem(lbl)) {
                     speedRows_ = rows;
                     speedDocPath_ = d.path;
-                    const int sp = effectiveSpeed(d.script.grabs[rows.front()]);
-                    speedValue_ = sp > 0 ? sp : car::BuildOptions{}.defaultFrameSpeed;
+                    const double sp = effectiveSpeed(d.script.grabs[rows.front()]);
+                    // Negative = backwards, a real value (0 = unknown).
+                    speedValue_ = sp != 0 ? sp : car::BuildOptions{}.defaultFrameSpeed;
                 }
             }
 
@@ -3168,15 +3169,17 @@ void App::drawSequenceTable(Document& d) {
         {
             // The real number, as the build writes it. Greyed when it comes
             // from the .xsi rather than from -framespeed in the script.
-            const int sp = effectiveSpeed(g);
-            if (g.frameSpeed) ImGui::Text("%d", sp);
-            else if (sp > 0) ImGui::TextDisabled("%d", sp);
+            const double sp = effectiveSpeed(g);
+            if (g.frameSpeed) ImGui::Text("%g", sp);
+            else if (sp > 0) ImGui::TextDisabled("%g", sp);
             else ImGui::TextDisabled("...");
             if (!g.frameSpeed && sp > 0 && ImGui::IsItemHovered()) {
                 // From the file only if the file has a rate; otherwise it is
                 // the build's default, and the tooltip used to claim the file.
-                if (xsiRateOf(g.file) > 0) ImGui::SetTooltip(tr(S::TipSpeedFromXsi), sp);
-                else ImGui::SetTooltip(tr(S::TipSpeedDefault), sp);
+                // Both are whole numbers.
+                const int whole = static_cast<int>(sp);
+                if (xsiRateOf(g.file) > 0) ImGui::SetTooltip(tr(S::TipSpeedFromXsi), whole);
+                else ImGui::SetTooltip(tr(S::TipSpeedDefault), whole);
             }
         }
         ImGui::TableNextColumn();
@@ -3193,10 +3196,10 @@ void App::drawSequenceTable(Document& d) {
                     char det[96];
                     const int t = targets[i] >= 0 ? targets[i] + a.targetOffset : -1;
                     if (t >= 0)
-                        std::snprintf(det, sizeof(det), " (T:%d C:%d L:%d S:%d)", t, a.frameCount,
+                        std::snprintf(det, sizeof(det), " (T:%d C:%d L:%d S:%g)", t, a.frameCount,
                                       a.loopFrame, a.frameSpeed);
                     else
-                        std::snprintf(det, sizeof(det), " (+%d C:%d L:%d S:%d)", a.targetOffset,
+                        std::snprintf(det, sizeof(det), " (+%d C:%d L:%d S:%g)", a.targetOffset,
                                       a.frameCount, a.loopFrame, a.frameSpeed);
                     parts += det;
                 }
@@ -3995,7 +3998,7 @@ void App::drawExtractPanel() {
         if (s.loopFrame < 0) ImGui::TextDisabled("-");
         else ImGui::Text("%d", s.loopFrame);
         ImGui::TableNextColumn();
-        ImGui::Text("%d", s.fps);
+        ImGui::Text("%g", s.fps);
         if (!ex.compareNames.empty()) {
             ImGui::TableNextColumn();
             // Icon before the word: the eye takes in the column without
@@ -4632,10 +4635,12 @@ void App::drawSequenceDialog(Document& d) {
 
         // The real speed, as it is built - not 0 for "from the file".
         const int fileRate = xsiRateOf(g.file);
-        int speed = effectiveSpeed(g);
-        if (speed <= 0) speed = car::BuildOptions{}.defaultFrameSpeed;
+        double speed = effectiveSpeed(g);
+        // 0 = unknown; a negative speed is real (backwards) and used to be
+        // replaced by the default here - and saved that way on any edit.
+        if (speed == 0) speed = car::BuildOptions{}.defaultFrameSpeed;
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
-        if (ImGui::InputInt(tr(S::DlgFrameSpeed), &speed)) {
+        if (ImGui::InputDouble(tr(S::DlgFrameSpeed), &speed, 1.0, 10.0, "%g")) {
             g.frameSpeed = speed;
             d.dirty = true;
         }
@@ -4697,7 +4702,9 @@ void App::drawSequenceDialog(Document& d) {
             intCol("##s", ad.targetOffset);
             intCol("##c", ad.frameCount);
             intCol("##l", ad.loopFrame);
-            intCol("##p", ad.frameSpeed);
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputDouble("##p", &ad.frameSpeed, 0, 0, "%g")) { d.dirty = true; d.validated = false; }
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton(iconsAvailable() ? ICON_DELETE : "X")) remove = static_cast<int>(a);
@@ -4759,7 +4766,7 @@ void App::drawSequenceDialog(Document& d) {
         a.frameCount = 1;
         a.loopFrame = -1;
         // The master's real speed (it used to be a fixed 20).
-        a.frameSpeed = effectiveSpeed(g) > 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
+        a.frameSpeed = effectiveSpeed(g) != 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
         g.additional.push_back(std::move(a));
         d.dirty = true;
         d.validated = false;

@@ -152,13 +152,13 @@ std::vector<BoneLine> buildBoneLines(const MdxaFile& gla, const std::vector<Mat3
     return out;
 }
 
-void advancePlayback(Playback& pb, float dt, int fps, int frameCount) {
+void advancePlayback(Playback& pb, float dt, double fps, int frameCount) {
     if (!pb.playing || frameCount <= 1) return;
 
     // Negative rates mean backwards. Raven's animation.cfg has e.g.
     // BOTH_UNCROUCH1 at -20; that is BOTH_CROUCH1 played backwards.
-    const int rate = fps != 0 ? fps : 20;
-    const float step = std::fabs(static_cast<float>(rate));
+    const double rate = fps != 0 ? fps : 20;
+    const float step = static_cast<float>(std::fabs(rate));
     pb.accumulator += dt * step;
 
     while (pb.accumulator >= 1.0f) {
