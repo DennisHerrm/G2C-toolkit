@@ -425,6 +425,81 @@ void testGlmWeightsLikeCarcass() {
           "REGRESSION: einziges Gewicht rundet auf 0 -> ein Gewicht, nicht vier (Carcass-Fehler)");
 }
 
+// Frame speeds with decimals (-framespeed 16.5): Carcass dropped them with
+// atoi, the engine reads them with atof. Plus the sign of a backwards speed
+// under -framestep, which used to come out as 1.
+void testFractionalSpeed() {
+    section("Framespeed mit Komma, Rueckwaertsspeed mit -framestep");
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / uniqueTestDir("fracspeed") / "base";
+    fs::create_directories(root / "models" / "players" / "t");
+    const std::string text =
+        "$aseanimgrabinit\r\n$scale 1.0\r\n"
+        "$aseanimgrab models/players/t/a.xsi -framespeed 16.5 -loop -1\r\n"
+        "$aseanimgrab models/players/t/b.xsi -framespeed -20 -additional 0 2 -1 12.5 B_PART\r\n"
+        "$aseanimgrabfinalize\r\n"
+        "$aseanimconvertmdx_noask models/players/t/root -makeskel models/players/t/t\r\n";
+    {
+        std::ofstream(root / "models" / "players" / "t" / "a.xsi") << ctAnim(10, 3.0f);
+        std::ofstream(root / "models" / "players" / "t" / "b.xsi") << ctAnim(4, 3.0f);
+        std::ofstream(root / "models" / "players" / "t" / "root.xsi") << ctMesh({"pelvis", "ltibia", "jaw"});
+        std::ofstream(root / "models" / "players" / "t" / "t.car", std::ios::binary) << text;
+    }
+    const std::string car = (root / "models" / "players" / "t" / "t.car").string();
+    auto script = g2::car::parseFile(car);
+    check(script.grabs.size() == 2 && script.grabs[0].frameSpeed && *script.grabs[0].frameSpeed == 16.5,
+          "REGRESSION -framespeed 16.5 gelesen (Fehler: 16)");
+    check(script.grabs[1].additional.size() == 1 && script.grabs[1].additional[0].frameSpeed == 12.5,
+          "REGRESSION -additional mit Speed 12.5 gelesen (Fehler: 12)");
+
+    // Saving: unchanged lines verbatim, a changed line keeps the decimals.
+    check(g2::car::writeScript(script) == text, "unveraendert gespeichert: byte-gleich");
+    script.grabs[0].loop = 0;
+    script.grabs[1].loop = 0;
+    const std::string w = g2::car::writeScript(script);
+    check(w.find("a.xsi -loop 0 -framespeed 16.5") != std::string::npos,
+          "geaenderte Zeile schreibt -framespeed 16.5");
+    check(w.find("-additional 0 2 -1 12.5 B_PART") != std::string::npos, "geaenderte Zeile schreibt -additional ... 12.5");
+
+    // Build: animation.cfg carries the decimals and the backwards sign.
+    g2::car::JobOptions jo;
+    jo.build.baseDir = root.string();
+    jo.outputDir = (root / "out").string();
+    jo.outputs = g2::car::JobOutputs{true, true, false, false, false, false};
+    const auto r = g2::car::runJob(g2::car::parseFile(car), car, jo);
+    const auto cfg = g2::readAnimationCfg(g2::readWholeFile((root / "out" / "animation.cfg").string()));
+    std::map<std::string, double> sp;
+    for (const auto& q : cfg) sp[q.name] = q.frameSpeed;
+    check(sp.count("A") && sp["A"] == 16.5, "REGRESSION animation.cfg: A mit 16.5 (Fehler: 16)");
+    check(sp.count("B") && sp["B"] == -20, "animation.cfg: B rueckwaerts mit -20");
+    check(sp.count("B_PART") && sp["B_PART"] == 12.5, "animation.cfg: B_PART mit 12.5");
+    {
+        const std::string t = g2::readWholeFile((root / "out" / "animation.cfg").string());
+        check(t.find("  16.5") != std::string::npos && t.find("16.50") == std::string::npos,
+              "in der Datei als \"16.5\", ganze Zahlen ohne Nachkommastellen");
+        check(t.find("  -20") != std::string::npos && t.find("-20.") == std::string::npos,
+              "ganze Zahl bleibt \"-20\"");
+    }
+    (void)r;
+
+    // -framestep 2: half the speed, sign kept.
+    jo.build.frameStep = 2;
+    const auto r2 = g2::car::runJob(g2::car::parseFile(car), car, jo);
+    check(r2.anim.sequences.size() == 3 && r2.anim.sequences[1].frameSpeed == -10,
+          "REGRESSION -framestep 2: -20 wird -10 (Fehler: 1)");
+    check(r2.anim.sequences[0].frameSpeed == 8.25, "-framestep 2: 16.5 wird 8.25");
+
+    // GLA -> .car: a hand-edited 16.5 in animation.cfg survives the export.
+    {
+        std::vector<g2::xsiexp::CfgSequence> in{{"X", 0, 10, -1, 16.5}, {"Y", 0, 4, -1, -12.5}};
+        const auto sc = g2::xsiexp::buildScript(g2::xsiexp::groupSequences(in), "models/players/t/", std::nullopt);
+        const std::string out = g2::car::writeScript(sc);
+        check(out.find("-framespeed 16.5") != std::string::npos,
+              "REGRESSION Export: 16.5 aus der animation.cfg landet als -framespeed 16.5 in der .car");
+        check(out.find("-12.5") != std::string::npos, "Export: Teilbereich mit -12.5");
+    }
+}
+
 void testMeshLikeCarcass() {
     section("GLM aus dotXSI wie Carcass: Zusammenlegen nach Wert, LODs, Tags, Glaetten");
     // Two triangles sharing an edge, but with SEPARATE position indices for

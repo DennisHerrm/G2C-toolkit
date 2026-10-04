@@ -1917,6 +1917,30 @@ int main(int argc, char** argv) {
         D.type("12");
         D.key(ImGuiKey_Enter);
         check(G[0].frameSpeed && *G[0].frameSpeed == 12, "Speed eingetippt: 12");
+        // REGRESSION: decimals - the engine reads 16.5, the field used to be
+        // an integer field.
+        D.click(D.find(tr(S::DlgFrameSpeed), "seqdlg"));
+        D.key(ImGuiKey_A, true);
+        D.type("16.5");
+        D.key(ImGuiKey_Enter);
+        check(G[0].frameSpeed && *G[0].frameSpeed == 16.5,
+              "REGRESSION Speed mit Komma eingetippt: 16.5 (Fehler: 16)");
+        // REGRESSION: a backwards speed was shown as the default 30, so its
+        // "+" turned -20 into 31 and the sequence played forwards.
+        G[0].frameSpeed = -20.0;
+        D.frames(3);
+        {
+            std::vector<const Item*> plus;
+            for (const Item& it : g_last)
+                if (it.window.find("seqdlg") != std::string::npos && it.label == "+") plus.push_back(&it);
+            if (plus.size() >= 2) {
+                D.click(plus[1]);
+                D.frames(2);
+            }
+            check(G[0].frameSpeed && *G[0].frameSpeed == -19,
+                  "REGRESSION Rueckwaerts-Speed: + macht aus -20 eine -19 (Fehler: 31 = Vorgabe 30 plus 1), ist " +
+                      (G[0].frameSpeed ? std::to_string(*G[0].frameSpeed) : std::string("leer")));
+        }
         {
             char lbl[96];
             std::snprintf(lbl, sizeof(lbl), tr(S::SpeedResetToXsi), 25);

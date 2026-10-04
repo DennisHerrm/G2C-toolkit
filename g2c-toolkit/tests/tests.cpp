@@ -3449,6 +3449,7 @@ int main() {
     run("testCarcassScriptSyntax", testCarcassScriptSyntax);
     run("testSkeletonBuild", testSkeletonBuild);
     run("testFrameStepAndOutputs", testFrameStepAndOutputs);
+    run("testFractionalSpeed", testFractionalSpeed);
     run("testGlmWeightsLikeCarcass", testGlmWeightsLikeCarcass);
     run("testMeshLikeCarcass", testMeshLikeCarcass);
     run("testAseAndMdr", testAseAndMdr);

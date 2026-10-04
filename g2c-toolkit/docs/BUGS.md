@@ -319,3 +319,14 @@ wie Carcass, wo es um bytegleiche Dateien geht (Rundung, Glaetten).
 
 Nicht nachgebaut, weil Carcass es selbst nicht kann: MD3-Ausgabe,
 `-playerparms` (head/upper/lower.mdr), `-weapon`.
+
+## Oktober 2026: Framespeed mit Komma
+
+| Fehler | Folge | Test |
+|---|---|---|
+| `-framespeed` und der Speed in `-additional` wurden als ganze Zahl gelesen | 16.5 aus einer handbearbeiteten animation.cfg wurde nach GLA -> XSI -> GLA zu 16 | `testFractionalSpeed` |
+| Sequenzdialog: Speed <= 0 galt als "kein Wert" | ein Rueckwaerts-Speed (-20) wurde als 30 angezeigt, "+" machte 31 daraus | Treiber 16b |
+| `-framestep` teilte den Speed mit `max(1, ...)` | Rueckwaerts-Speed wurde 1 statt der Haelfte | `testFractionalSpeed` |
+
+Jeder Test wurde gegengeprueft: mit dem alten Fehler wieder eingebaut schlaegt
+er an.

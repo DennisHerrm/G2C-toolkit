@@ -382,8 +382,13 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         }
         // Scales a frame number / speed of this file by the step.
         const auto byStep = [step](int v) { return step > 1 ? v / step : v; };
-        const auto speedByStep = [step](int v) {
-            return step > 1 ? std::max(1, static_cast<int>(std::lround(static_cast<double>(v) / step))) : v;
+        // Whole speeds stay whole (as in Carcass); the sign is kept - a
+        // backwards sequence used to come out at speed 1.
+        const auto speedByStep = [step](double v) {
+            if (step <= 1) return v;
+            const double m = v == std::floor(v) ? std::max(1.0, std::round(std::fabs(v) / step))
+                                                : std::fabs(v) / step;
+            return v < 0 ? -m : m;
         };
 
         res.frames.matrices.insert(res.frames.matrices.end(), L.frames.matrices.begin(),
@@ -391,7 +396,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
         L.frames.matrices.clear();
         L.frames.matrices.shrink_to_fit();
 
-        int speed = opt.defaultFrameSpeed;
+        double speed = opt.defaultFrameSpeed;
         if (g.frameSpeed) speed = *g.frameSpeed;
         else if (L.frameRate > 0) speed = L.frameRate;
 
@@ -417,7 +422,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
             fb.sourcePath = L.resolvedPath;
             fb.startFrame = cursor;
             fb.duration = L.frameCount;
-            fb.fps = L.frameRate > 0 ? speedByStep(L.frameRate) : L.frameRate;
+            fb.fps = L.frameRate > 0 ? static_cast<int>(speedByStep(L.frameRate)) : L.frameRate;
             // Per frame and with the sign flipped: the ramp on the root bone is
             // the counter-motion, averagevec is the motion itself. With
             // -framestep one kept frame covers `step` source frames.

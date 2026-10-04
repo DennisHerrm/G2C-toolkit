@@ -1574,7 +1574,8 @@ int cmdExport(int argc, char** argv) {
 
     struct CfgEntry {
         std::string name;
-        int start = 0, count = 0, loop = -1, fps = 20;
+        int start = 0, count = 0, loop = -1;
+        double fps = 20;
     };
     std::vector<CfgEntry> cfg;
 

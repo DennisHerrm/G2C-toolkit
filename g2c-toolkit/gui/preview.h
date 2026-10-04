@@ -86,6 +86,6 @@ struct Playback {
 };
 
 // dt in seconds, fps from animation.cfg (may be negative).
-void advancePlayback(Playback& pb, float dt, int fps, int frameCount);
+void advancePlayback(Playback& pb, float dt, double fps, int frameCount);
 
 }  // namespace g2::gui
