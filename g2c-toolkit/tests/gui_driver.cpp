@@ -2357,11 +2357,70 @@ int main(int argc, char** argv) {
             check(!G[0].loop, "leere Loop-Zelle entfernt -loop");
         }
 
+        // REGRESSION (review): undo closes the sequence dialog - it holds a
+        // row number that points to another sequence after the swap.
+        {
+            D.doubleClick(D.row("WALK_BBB"));
+            D.frames(2);
+            const bool opened = D.windowOpen("###seqdlg");
+            app->setFrameSpeed(mi, {0}, 5.0);
+            D.frames(3);
+            app->undo();
+            D.frames(2);
+            check(opened && !D.windowOpen("###seqdlg"), "REGRESSION Rückgängig schließt den Sequenzdialog");
+            // A new change after undo ends what could be redone.
+            check(app->canRedo(), "nach Rückgängig ist Wiederholen möglich");
+            app->setFrameSpeed(mi, {1}, -12.0);
+            D.frames(3);
+            check(!app->canRedo(), "REGRESSION neue Änderung leert Wiederholen");
+
+            // The same while TYPING right after an undo: the keystrokes used
+            // to be merged into the step before, and Ctrl+Y then threw them
+            // away.
+            app->setFrameSpeed(mi, {0}, 7.0);
+            D.frames(3);
+            app->undo();
+            D.frames(1);
+            D.doubleClick(D.row("WALK_AAA"));
+            D.frames(2);
+            D.click(D.find(tr(S::DlgFrameSpeed), "seqdlg"));
+            D.key(ImGuiKey_A, true);
+            D.type("33");
+            D.frames(2);
+            check(!app->canRedo(), "REGRESSION Tippen direkt nach Rückgängig leert Wiederholen");
+            D.key(ImGuiKey_Enter);
+            D.escape();
+            D.frames(2);
+        }
+
         // Saving shows a toast.
         const std::size_t toastsBefore = app->toastCount();
         app->saveDocument(mi);
         D.frames(2);
         check(app->toastCount() > toastsBefore || app->toastCount() == 4, "Speichern zeigt einen Hinweis");
+
+        // REGRESSION (review): "Save as" takes the undo history along; the
+        // original, opened again, starts without it.
+        {
+            const std::string other = (mdir / "m_kopie.car").string();
+            check(app->canUndo(), "vor Speichern unter: Rückgängig möglich");
+            app->saveDocumentAs(mi, other);
+            D.frames(2);
+            check(app->canUndo(), "REGRESSION Speichern unter: Historie wandert mit");
+            app->openCar(mpath);
+            D.frames(1);
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (app->documents()[k].path == mpath) app->activate(static_cast<int>(k));
+            D.frames(3);
+            const std::string activePath = app->documents()[static_cast<std::size_t>(app->activeTab())].path;
+            check(activePath == mpath && !app->canUndo(),
+                  "REGRESSION wieder geöffnetes Original hat keine fremde Historie (aktiv: " +
+                      fs::path(activePath).filename().string() + ", Rückgängig: " + (app->canUndo() ? "ja" : "nein") + ")");
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (app->documents()[k].path == other) mi = k;
+            D.click(D.findTab("###" + other));
+            D.frames(2);
+        }
 
         // Validate: there are issues (the .xsi files are missing), so the
         // panel opens by itself.

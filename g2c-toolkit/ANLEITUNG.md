@@ -4081,5 +4081,6 @@ Wer die Dateien doch Carcass geben will: in der Oberfläche "Wie Carcass
 runden und glätten" einschalten, auf der Kommandozeile `g2c export ... -carcass`.
 
 Deine 39 Ein-Frame-Animationen in `__new_anim/multiplayer` sind neu
-exportiert (die alten liegen in `C:\jka_animations\g2c_backupsmultiplayer_2frames_2026-10-12`); nach dem nächsten Bauen stimmen alle 177
+exportiert (die alten liegen in
+`C:\jka_animations\g2c_backups\multiplayer_2frames_2026-10-12`); nach dem nächsten Bauen stimmen alle 177
 MP-Sequenzen in Frames, Loop und Speed mit dem Original überein.

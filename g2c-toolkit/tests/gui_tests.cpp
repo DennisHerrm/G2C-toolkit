@@ -681,6 +681,34 @@ int main(){
     fs::remove_all(xd); fs::remove_all(r3);
   }
 
+  // REGRESSION (review): the "Issues" quick filter keeps its rows while an
+  // edit has made the results stale - it used to empty the table on every
+  // keystroke until the next check.
+  {
+    namespace fs = std::filesystem;
+    const fs::path rc = fs::temp_directory_path()/"g2c_gui_issuefilter";
+    fs::remove_all(rc); fs::create_directories(rc);
+    { std::ofstream f(rc/"m.car"); f<<"$aseanimgrabinit\n$aseanimgrab a.xsi\n$aseanimgrab b.xsi\n$aseanimgrabfinalize\n"; }
+    g2::gui::Platform pI;
+    g2::gui::App aI(std::move(pI));
+    aI.openCar((rc/"m.car").string());
+    auto& d = aI.documents()[0];
+    g2::car::Issue is;
+    is.level = g2::car::Issue::Level::Error;
+    is.message = "fehlt";
+    is.line = d.script.grabs[1].line;
+    d.validation.issues = {is};
+    d.validation.errors = 1;
+    d.validated = true;
+    aI.setRowFilterForTest(1);
+    ck(!aI.rowShownForTest(0, 0) && aI.rowShownForTest(0, 1), "Problemfilter: nur die Zeile mit Meldung");
+    g2::gui::touch(d);
+    ck(!d.validated && aI.rowShownForTest(0, 1), "REGRESSION Problemfilter: nach einer Änderung bleibt die Zeile stehen");
+    aI.setRowFilterForTest(0);
+    ck(aI.rowShownForTest(0, 0) && aI.rowShownForTest(0, 1), "ohne Filter alle Zeilen");
+    fs::remove_all(rc);
+  }
+
   // "Only missing": pick the whole folder again, only new .xsi go in.
   {
     const fs::path xd = fs::temp_directory_path()/"g2c_gui_onlynew";
@@ -1436,6 +1464,28 @@ int main(){
       const auto over2 = afs2.read("models/players/t/over.txt");
       ck(over2 && std::string(over2->begin(), over2->end()) == "new", "Assets: spaetere .pk3 überschreibt fruehere");
       ck(!afs2.read("models/players/t/nichtda.txt"), "Assets: fehlende Datei = leer");
+      // REGRESSION: sizes from a broken or ZIP64 archive were allocated as
+      // they came - 4 GB before the read failed, and the exception ended
+      // the program. Such entries are now left out.
+      {
+        fs::create_directories(dir / "kaputt");
+        zip(dir / "kaputt" / "broken.pk3",
+            {{"big/zip64.tga", {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, 8, 0xFFFFFFFFu},
+             {"big/riesig.tga", {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, 8, 300u * 1024u * 1024u},
+             {"big/ok.txt", {'o', 'k'}, 0, 2}});
+        g2::gui::AssetFs bfs;
+        bool threw = false;
+        try {
+          bfs.addFolder((dir / "kaputt").string());
+          ck(!bfs.exists("big/zip64.tga") && !bfs.exists("big/riesig.tga"),
+             "REGRESSION Assets: unsinnige Groessen im Archiv werden gar nicht erst aufgenommen");
+          const auto okf = bfs.read("big/ok.txt");
+          ck(okf && okf->size() == 2, "Assets: gesunde Eintraege derselben .pk3 bleiben lesbar");
+        } catch (...) {
+          threw = true;
+        }
+        ck(!threw, "REGRESSION Assets: kaputte .pk3 wirft nicht (Fehler: bad_alloc)");
+      }
       ck(afs2.list("shaders", ".shader").size() == 1, "Assets: Shaderdateien aufgelistet");
 
       const auto sh = g2::gui::loadShaderIndex(afs2);

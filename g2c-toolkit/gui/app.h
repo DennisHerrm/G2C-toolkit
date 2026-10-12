@@ -356,6 +356,11 @@ public:
 
     // Tests only: set the active tab without drawing the UI.
     void setActiveForTest(int i) { active_ = i; }
+    // Tests only: the table's quick filter and whether a row would be shown.
+    void setRowFilterForTest(int f) { rowFilter_ = f; }
+    bool rowShownForTest(std::size_t doc, std::size_t row) const {
+        return doc < docs_.size() && rowVisible(docs_[doc], row);
+    }
 
     // Select a tab from outside: sets active_ AND tells ImGui on the next draw
     // which tab to show.
