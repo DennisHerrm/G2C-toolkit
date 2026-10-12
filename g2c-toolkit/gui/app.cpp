@@ -189,8 +189,10 @@ void App::openScriptDialog() {
 }
 
 void App::openFolderDialog() {
-    const std::string dir = askFolder("carfolder", tr(S::DlgTitleCarFolder));
-    if (!dir.empty()) openFolder(dir);
+    // Several folders at once: 25 character folders side by side are one
+    // selection with Ctrl+A, not 25 trips through the dialog.
+    const auto dirs = askFolders("carfolder", tr(S::DlgTitleCarFolder));
+    if (!dirs.empty()) openFolders(dirs);
 }
 
 std::string App::askFolder(const char* purpose, const char* title) {
@@ -1148,6 +1150,99 @@ bool App::openPath(const std::string& path) {
     return false;
 }
 
+// The lower-case file name of a .car - what the choice groups by.
+static std::string carNameKey(const std::string& path) {
+    std::string n = fs::path(path).filename().string();
+    std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return n;
+}
+
+std::size_t App::openFolders(const std::vector<std::string>& roots) {
+    std::vector<std::string> found;
+    std::set<std::string> seen;
+    for (const auto& root : roots) {
+        const auto hits = car::scanDirectory(root);
+        log(LogLine::Kind::Info, trf(S::LogCarsUnder, hits.size(), root.c_str()));
+        for (const auto& f : hits) {
+            // The same file through overlapping folders counts once (Windows
+            // ignores case).
+            std::error_code ec;
+            std::string key = fs::weakly_canonical(f.path, ec).string();
+            std::transform(key.begin(), key.end(), key.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (seen.insert(key).second) found.push_back(f.path);
+        }
+    }
+    if (found.empty()) return 0;
+
+    std::map<std::string, std::size_t> counts;
+    for (const auto& p : found) ++counts[carNameKey(p)];
+    if (counts.size() == 1) {
+        for (const auto& p : found) openCar(p);
+        return found.size();
+    }
+    // Different names (e.g. _humanoid.car next to model.car): ask which.
+    carPick_.paths = found;
+    carPick_.folders = roots.size();
+    carPick_.counts = counts;
+    carPick_.chosen.clear();
+    for (const auto& [name, n] : counts) carPick_.chosen.insert(name);
+    return found.size();
+}
+
+std::size_t App::carPickConfirm(const std::set<std::string>& names) {
+    std::size_t opened = 0;
+    const auto paths = std::move(carPick_.paths);
+    carPick_ = CarPick{};
+    for (const auto& p : paths)
+        if (names.count(carNameKey(p)) && openCar(p)) ++opened;
+    return opened;
+}
+
+void App::drawCarPickDialog() {
+    if (carPick_.paths.empty()) return;
+    if (otherModalOpen("###carpick")) return;
+    if (!ImGui::IsPopupOpen("###carpick")) ImGui::OpenPopup("###carpick");
+    if (!ImGui::BeginPopupModal((std::string(tr(S::CarPickTitle)) + "###carpick").c_str(), nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    ImGui::TextUnformatted(trf(S::CarPickHead, carPick_.paths.size(), carPick_.folders).c_str());
+    ImGui::Spacing();
+    // Most frequent name first: the 25 _humanoid.car before the odd one.
+    std::vector<std::pair<std::string, std::size_t>> byCount(carPick_.counts.begin(), carPick_.counts.end());
+    std::stable_sort(byCount.begin(), byCount.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (const auto& [name, n] : byCount) {
+        bool on = carPick_.chosen.count(name) != 0;
+        const std::string lbl = name + " (" + std::to_string(n) + ")";
+        if (ImGui::Checkbox(lbl.c_str(), &on)) {
+            if (on) carPick_.chosen.insert(name);
+            else carPick_.chosen.erase(name);
+        }
+    }
+    if (ImGui::SmallButton(tr(S::SelectAll)))
+        for (const auto& [name, n] : carPick_.counts) carPick_.chosen.insert(name);
+    ImGui::SameLine();
+    if (ImGui::SmallButton(tr(S::SelectNone))) carPick_.chosen.clear();
+    ImGui::Spacing();
+    std::size_t files = 0;
+    for (const auto& [name, n] : carPick_.counts)
+        if (carPick_.chosen.count(name)) files += n;
+    ImGui::BeginDisabled(files == 0);
+    const bool go = ImGui::Button(trf(S::CarPickOpen, files).c_str());
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    const bool cancel = ImGui::Button(tr(S::BtnCancel)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (go || cancel) {
+        const auto chosen = carPick_.chosen;
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        if (go) carPickConfirm(chosen);
+        else carPick_ = CarPick{};
+        return;
+    }
+    ImGui::EndPopup();
+}
+
 std::size_t App::openFolder(const std::string& root) {
     const auto found = car::scanDirectory(root);
     log(LogLine::Kind::Info, trf(S::LogCarsUnder, found.size(), root.c_str()));
@@ -1616,20 +1711,24 @@ void App::queueOpen(std::vector<std::string> paths) {
 }
 
 void App::openPathsNow(const std::vector<std::string>& paths) {
-    std::vector<std::string> xsi;
+    std::vector<std::string> xsi, dirs;
     for (const std::string& p : paths) {
         std::string lower = p;
         for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        std::error_code ec;
         if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".xsi") == 0)
             xsi.push_back(p);
+        else if (fs::is_directory(p, ec))
+            dirs.push_back(p);   // several dropped folders: one search, one choice
         else
             openPath(p);
     }
+    if (!dirs.empty()) openFolders(dirs);
     if (!xsi.empty()) addXsiFiles(xsi, false);
 }
 
 bool App::otherModalOpen(const char* mine) const {
-    for (const char* id : {"###closedlg", "###overwrite", "###speeddlg", "###modeldlg", "confirmdel"})
+    for (const char* id : {"###closedlg", "###overwrite", "###speeddlg", "###modeldlg", "confirmdel", "###carpick"})
         if (std::strcmp(id, mine) != 0 && ImGui::IsPopupOpen(id)) return true;
     return false;
 }
@@ -6453,6 +6552,7 @@ void App::draw() {
         drawOverwriteDialog();
         drawSpeedDialog();
         drawModelDialog();
+        drawCarPickDialog();
         drawPalette();
     }
     ImGui::End();

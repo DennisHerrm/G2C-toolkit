@@ -681,6 +681,43 @@ int main(){
     fs::remove_all(xd); fs::remove_all(r3);
   }
 
+  // Several folders at once; with different .car names the user picks.
+  {
+    namespace fs = std::filesystem;
+    const fs::path rf = fs::temp_directory_path()/"g2c_gui_multifolder";
+    fs::remove_all(rf);
+    const char* body = "$aseanimgrabinit\n$aseanimgrab x.xsi\n$aseanimgrabfinalize\n";
+    for (int k = 0; k < 3; ++k) {
+      fs::create_directories(rf/"a"/("char" + std::to_string(k)));
+      std::ofstream(rf/"a"/("char" + std::to_string(k))/"_humanoid.car") << body;
+    }
+    fs::create_directories(rf/"b"/"char9");
+    std::ofstream(rf/"b"/"char9"/"_HUMANOID.car") << body;   // other case, same name
+    std::ofstream(rf/"b"/"char9"/"model.car") << body;
+
+    // Only _humanoid.car: opened right away, nothing to ask.
+    {
+      g2::gui::Platform p1;
+      g2::gui::App a1(std::move(p1));
+      ck(a1.openFolders({(rf/"a").string()}) == 3 && !a1.carPickPending() && a1.documents().size() == 3,
+         "Ordner: nur _humanoid.car - alle drei sofort geöffnet");
+    }
+    // Two folders, two names: ask; open only _humanoid.car.
+    {
+      g2::gui::Platform p2;
+      g2::gui::App a2(std::move(p2));
+      // The previous app's tabs are restored on start - not part of this test.
+      while (!a2.documents().empty()) a2.closeDocument(0);
+      ck(a2.openFolders({(rf/"a").string(), (rf/"b").string(), (rf/"a").string()}) == 5,
+         "mehrere Ordner: 5 .car gefunden (doppelt gewählter Ordner zählt einmal)");
+      ck(a2.carPickPending() && a2.documents().empty(), "verschiedene Namen: erst fragen, noch nichts geöffnet");
+      ck(a2.carPickConfirm({"_humanoid.car"}) == 4 && a2.documents().size() == 4,
+         "nur _humanoid.car gewählt: 4 geöffnet, model.car nicht (Groß-/Kleinschreibung egal)");
+      ck(!a2.carPickPending(), "Auswahl erledigt");
+    }
+    fs::remove_all(rf);
+  }
+
   // REGRESSION (review): the "Issues" quick filter keeps its rows while an
   // edit has made the results stale - it used to empty the table on every
   // keystroke until the next check.
