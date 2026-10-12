@@ -2451,11 +2451,34 @@ void testXsiExport() {
         // Accordingly, Raven's own 58 single-frame sequences are all
         // -additional sub-ranges of longer files.
         //
-        // That's why the frame is doubled: two identical frames, the
-        // animation unchanged, and Carcass can read the file.
-        const std::string one = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eo);
+        // By default it stays ONE frame (g2c reads it, the count in the
+        // animation.cfg stays 1). For Carcass it is doubled: two identical
+        // frames, the animation unchanged.
+        {
+            const std::string single = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eo);
+            check(single.find("0,\n  0,\n") != std::string::npos, "REGRESSION Standard: Framebereich 0..0 (Fehler: 0..1)");
+            const std::filesystem::path sd = std::filesystem::temp_directory_path() / uniqueTestDir("onefr1");
+            std::filesystem::create_directories(sd);
+            { std::ofstream o(sd / "s.xsi", std::ios::binary); o << single; }
+            const auto sa = g2::xsi::loadAnimation(g2::xsi::parseFile((sd / "s.xsi").string()), (sd / "s.xsi").string());
+            check(sa.firstFrame == 0 && sa.lastFrame == 0, "ein Frame in der Datei");
+            g2::xsi::EvalOptions sv;
+            sv.scale = sk.scale;
+            const auto sr = g2::xsi::evaluate(sk, sa, sv);
+            check(sr.frames.frameCount() == 1, "ein Frame ausgewertet - wie im Original");
+            double sd0 = 0.0;
+            for (int b = 0; b < nb; ++b)
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        sd0 = std::max(sd0, static_cast<double>(std::fabs(sr.frames.at(0, b).m[r][c] - gla.boneMatrix(3, b).m[r][c])));
+            check(sd0 < 2e-3, "der eine Frame entspricht dem Original (" + std::to_string(sd0) + ")");
+            { std::error_code rmEc; std::filesystem::remove_all(sd, rmEc); }
+        }
+        auto eoCarcass = eo;
+        eoCarcass.doubleSingleFrame = true;
+        const std::string one = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eoCarcass);
         check(one.find("0,\n  1,\n") != std::string::npos,
-              "Framebereich 0..1 statt 0..0");
+              "für Carcass: Framebereich 0..1 statt 0..0");
 
         // Both frames must have the same content.
         const std::filesystem::path od = std::filesystem::temp_directory_path() /
@@ -2487,6 +2510,18 @@ void testXsiExport() {
               "mehrframige Sequenz unverändert");
 
         { std::error_code rmEc; std::filesystem::remove_all(od, rmEc); }
+    }
+
+    step("Bildrate der exportierten Datei");
+    {
+        check(g2::xsiexp::sceneRateFor(30) == 30 && g2::xsiexp::sceneRateFor(10) == 10,
+              "Rate aus der animation.cfg (30, 10)");
+        check(g2::xsiexp::sceneRateFor(-15) == 15, "rückwärts: Betrag (-15 -> 15)");
+        check(g2::xsiexp::sceneRateFor(0) == 20, "unbekannt: 20");
+        g2::xsiexp::ExportOptions ro = eo;
+        ro.fps = g2::xsiexp::sceneRateFor(30);
+        const std::string t = g2::xsiexp::exportSequence(gla, {"rate", 0, 3}, ro);
+        check(t.find("  2,\n  30,\n}") != std::string::npos, "SI_Scene trägt 30");
     }
 
     step("BASEPOSE-Block");
@@ -3450,6 +3485,7 @@ int main() {
     run("testSkeletonBuild", testSkeletonBuild);
     run("testFrameStepAndOutputs", testFrameStepAndOutputs);
     run("testFractionalSpeed", testFractionalSpeed);
+    run("testOneFrameBuild", testOneFrameBuild);
     run("testGlmWeightsLikeCarcass", testGlmWeightsLikeCarcass);
     run("testMeshLikeCarcass", testMeshLikeCarcass);
     run("testAseAndMdr", testAseAndMdr);

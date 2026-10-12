@@ -330,3 +330,10 @@ Nicht nachgebaut, weil Carcass es selbst nicht kann: MD3-Ausgabe,
 
 Jeder Test wurde gegengeprueft: mit dem alten Fehler wieder eingebaut schlaegt
 er an.
+
+## Oktober 2026: Export
+
+| Fehler | Folge | Test |
+|---|---|---|
+| `g2c export` (Kommandozeile) schrieb immer 20 fps ins SI_Scene, die Oberfläche die Rate aus der animation.cfg | eine so exportierte Datei, ohne `-framespeed` gegrabbt, lief mit falscher Geschwindigkeit | `sceneRateFor` in tests.cpp |
+| Ein-Frame-Sequenzen wurden als zwei Frames exportiert (Carcass-Zwang) | die neu gebaute animation.cfg hatte 2 statt 1 Frame | "Ein-Frame-Sequenzen", `testOneFrameBuild` |

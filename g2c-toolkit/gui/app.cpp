@@ -913,12 +913,14 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     opt.origin = extract_.origin;
     opt.basePose = extract_.basePose;
     opt.version = extract_.xsiVersion;
+    // "Like Carcass": files Carcass can read, one-frame sequences doubled.
+    opt.doubleSingleFrame = settings_.carcassCompat;
 
     std::size_t ok = 0, failed = 0;
     for (const std::size_t r : rows) {
         if (r >= extract_.seqs.size()) continue;
         const ExtractSeq& s = extract_.seqs[r];
-        opt.fps = s.fps > 0 ? static_cast<int>(std::lround(s.fps)) : 20;
+        opt.fps = xsiexp::sceneRateFor(s.fps);
         // The .frames first, if there is one. If it's missing - or this
         // sequence is missing from it - the root motion can be reconstructed
         // from the GLA itself: it is stored there as a linear ramp on the
@@ -2324,6 +2326,8 @@ void App::applyStyle() {
     s.FramePadding = ImVec2(9, 5);
     s.ItemSpacing = ImVec2(8, 6);
     s.PopupBorderSize = 1.0f;
+    // Disabled controls clearly grey, not just a little dimmer.
+    s.DisabledAlpha = 0.38f;
     s.WindowPadding = ImVec2(12, 10);
     s.CellPadding = ImVec2(8, 4);
     s.ScrollbarSize = 12.0f;
@@ -2472,7 +2476,12 @@ void App::drawToolbar() {
     const bool have = !docs_.empty();
 
     ImGui::BeginDisabled(busy || !have);
+    // The shortcut in the tooltip: whoever hovers learns it on the way.
+    const auto keyTip = [](const char* keys) {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", keys);
+    };
     if (iconButton(ICON_SAVE, kIconInfo, tr(S::BtnSave))) saveDocument(static_cast<std::size_t>(active_));
+    keyTip("Ctrl+S");
     ImGui::SameLine();
     {
         std::size_t dirty = 0;
@@ -2481,6 +2490,7 @@ void App::drawToolbar() {
         if (ImGui::Button(dirty ? (std::string(tr(S::BtnSaveAll)) + " (" + std::to_string(dirty) + ")").c_str()
                                 : tr(S::BtnSaveAll)))
             saveAllDocuments();
+        keyTip("Ctrl+Shift+S");
         ImGui::EndDisabled();
     }
     ImGui::SameLine();
@@ -2501,11 +2511,14 @@ void App::drawToolbar() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.36f, 1.0f));
     const bool buildClicked = iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuild));
     ImGui::PopStyleColor(2);
+    keyTip("F5");
     if (buildClicked) startBuild(false);
     ImGui::SameLine();
     if (iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuildAll))) startBuild(true);
+    keyTip("Shift+F5");
     ImGui::SameLine();
     if (iconButton(ICON_VALIDATE, kIconWarn, tr(S::BtnValidate))) validateAll();
+    keyTip("F7");
     ImGui::SameLine();
     if (iconButton(ICON_SETTINGS, kIconInfo, tr(S::BtnModel)))
         openModelDialog(static_cast<std::size_t>(active_));
@@ -2517,6 +2530,7 @@ void App::drawToolbar() {
 
     ImGui::BeginDisabled(busy);
     if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::BtnOpenFolder))) openFolderDialog();
+    keyTip("Ctrl+Shift+O");
     ImGui::SameLine();
     ImGui::BeginDisabled(!have);
     // One button with a menu instead of four: files or a folder, for this
@@ -6123,10 +6137,9 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
     // A wide button centers its content; a fitted one has the padding.
     float x = width != 0.0f ? pos.x + (w - content) * 0.5f : pos.x + st.FramePadding.x;
     if (haveIcon) {
-        dl->AddText(ImVec2(x, y), IM_COL32(static_cast<int>(col.r * 255),
-                                           static_cast<int>(col.g * 255),
-                                           static_cast<int>(col.b * 255), 255),
-                    icon);
+        // GetColorU32 applies the style alpha - a disabled button's icon fades
+        // with its text instead of staying bright.
+        dl->AddText(ImVec2(x, y), ImGui::GetColorU32(ImVec4(col.r, col.g, col.b, col.a)), icon);
         x += iSize.x + gap;
     }
     dl->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_Text), text);
