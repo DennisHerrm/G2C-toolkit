@@ -153,6 +153,7 @@ enum class S {
     PvTextures, PvTexOff, PvSkin, PvTexMissing, PvTexSourceTip,
     WelcomeTitle, WelcomeRoot, WelcomeRootHint, WelcomeOpen, WelcomeOpenHint, WelcomeBuild, WelcomeBuildHint, PathRootChip, PathRefChip, PathRefAuto, PathChipTip, WritesLabel, OutputChipTip, BottomIssues, BottomToggleTip, ToastBuilt, ToastBuildErrors, ToastCancelled, ToastShowLog, ToastOpenFolder, ToastSaved, ToastDismiss, AddXsiMenuFiles, AddXsiMenuFolder, AddXsiMenuFilesAll, AddXsiMenuFolderAll, SettingsToggleTip,
     ChipAll, ChipProblems, ChipNoEnum, ChipBackwards, ChipParts, ChipTip, CellEditTip, BackwardsTip, MenuEdit, Undo, Redo, Palette, PaletteHint, PaletteNone, PaletteSeq, PaletteTab, PaletteMode, LogUndone, LogRedone,
+    CarPickTitle, CarPickHead, CarPickOpen,
 
     Count
 };
