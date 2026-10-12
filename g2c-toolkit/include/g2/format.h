@@ -64,7 +64,7 @@ struct MdxaHeader {
     std::int32_t ofsSkel;            // -> first MdxaSkel, absolute from file start
     std::int32_t ofsEnd;             // = file size
 };
-static_assert(sizeof(MdxaHeader) == 100, "MdxaHeader muss 100 Bytes gross sein");
+static_assert(sizeof(MdxaHeader) == 100, "MdxaHeader muss 100 Bytes groß sein");
 
 // 3x4 matrix, row-major: [row][col], col 3 is the translation.
 struct MdxaBone {
@@ -130,7 +130,7 @@ struct MdxmHeader {
     std::int32_t ofsSurfHierarchy;       // absolute from file start
     std::int32_t ofsEnd;                 // = file size
 };
-static_assert(sizeof(MdxmHeader) == 164, "MdxmHeader muss 164 Bytes gross sein");
+static_assert(sizeof(MdxmHeader) == 164, "MdxmHeader muss 164 Bytes groß sein");
 
 // Directly after the header: int[numSurfaces], offsets relative to the end of the header.
 struct MdxmSurfHierarchy {

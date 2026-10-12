@@ -4010,3 +4010,60 @@ Dabei behoben, jeweils mit Regressionstest:
   ein Klick auf "+" machte daraus 31, die Sequenz lief vorwaerts.
 - `-framestep` machte aus einem Rueckwaerts-Speed 1 statt der Haelfte
   (-20 wurde 1 statt -10).
+
+---
+
+## 75. Neue Oberfläche
+
+Alle drei Modi wurden aufgeräumt; die Knöpfe an der linken Kante tragen jetzt
+einen Untertitel, und g2c merkt sich den zuletzt benutzten Modus.
+
+### GLA -> XSI
+
+Links vier nummerierte Schritte: **GLA öffnen**, **Sequenzen wählen**,
+**Zielordner**, **Exportieren**. Ein erledigter Schritt wird grün. Unter den
+Export-Knöpfen steht, was noch fehlt ("Zuerst einen Zielordner wählen").
+Rechts die Liste der Sequenzen; ein Doppelklick zeigt eine Sequenz in der
+Vorschau. Ohne GLA steht rechts eine Seite mit einem großen "GLA öffnen" -
+eine .gla lässt sich auch einfach ins Fenster ziehen.
+
+### Vorschau
+
+Links die Sequenzliste mit Filter, rechts die Ansicht mit Zeitleiste.
+Tasten: Leertaste spielt/hält an, Pfeil links/rechts geht einen Frame,
+Pfeil hoch/runter wechselt die Sequenz.
+
+**GLM laden** zeigt ein Modell, das sich mit der Animation bewegt - mit
+Texturen wie im Spiel: Skin -> Shader -> Bild, aus losen Dateien (neben dem
+Modell und unter der Assetwurzel) und aus den .pk3 des Spiels. Die
+Steam-Installation wird gefunden; welche (z. B. "GameData Movie Duels"),
+wählt man unter "Texturen". Der Skin ist umschaltbar (model_default,
+model_red ...). Skelett und Drahtgitter lassen sich zuschalten. Eine .glm ins
+Fenster ziehen öffnet sie in der Vorschau.
+
+### XSI -> GLA
+
+- Ohne Skript eine Startseite: Assetwurzel, Skript öffnen, Bauen - mit den
+  zuletzt geöffneten Dateien.
+- Werkzeugleiste: "XSI hinzufügen" ist ein Menü (Dateien, Ordner, zu allen);
+  "Einstellungen" rechts blendet die Einstellungsspalte ein und aus. Ist sie
+  aus, zeigt eine Zeile über den Tabs den Zustand der Pfade.
+- "Schreibt:" neben dem Ausgabeordner schaltet die Ausgaben direkt um.
+- Schnellfilter über der Tabelle: Probleme, Ohne Enum, Rückwärts, Mit Teilen.
+- Loop und Speed per Doppelklick direkt in der Zelle ändern; leer = Standard.
+  Rückwärts-Speeds sind violett. Die Quellspalte zeigt den Dateinamen.
+- Nach einer Änderung prüft g2c das Skript kurz darauf von selbst.
+- Das Protokoll unten ist eingeklappt eine Zeile; es klappt bei Fehlern und
+  nach "Prüfen" mit Meldungen von selbst auf.
+- Hinweise unten rechts nach Bauen, Export und Speichern - mit
+  "Ordner öffnen".
+
+### Überall
+
+- **Rückgängig / Wiederholen**: Strg+Z / Strg+Y (Menü "Bearbeiten" und die
+  Pfeile in der Werkzeugleiste), je Skript bis 100 Schritte.
+- **Befehlssuche**: Strg+K, ein paar Buchstaben tippen, Enter - Aktionen,
+  Sequenzen des offenen Skripts und Tabs.
+- Fortschritt beim Bauen auch im Taskleisten-Symbol.
+- Echte Umlaute in allen deutschen Texten.
+- Dear ImGui 1.92.8 (vorher 1.92.1; die Backends waren sogar noch älter).

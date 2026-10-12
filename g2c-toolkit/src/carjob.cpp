@@ -266,10 +266,10 @@ Skeleton newSkeletonFor(const Script& script, const JobPlan& pl, const JobOption
                         std::vector<std::pair<std::string, std::vector<std::string>>>& capped) {
     say(JobLog::Info, "Skelett   : neu aus den Quelldateien (wie Carcass)");
     if (pl.glaName.empty())
-        throw std::runtime_error("Fuer ein neues Skelett fehlt -makeskel <pfad/name> auf der "
+        throw std::runtime_error("Für ein neues Skelett fehlt -makeskel <pfad/name> auf der "
                                  "$aseanimconvertmdx-Zeile - sonst hat die GLA keinen Namen");
     if (pl.meshSource.empty())
-        throw std::runtime_error("Fuer ein neues Skelett wird die Mesh-Quelle gebraucht ($aseanimconvertmdx "
+        throw std::runtime_error("Für ein neues Skelett wird die Mesh-Quelle gebraucht ($aseanimconvertmdx "
                                  "<root>) - sie bestimmt, welche Bones bleiben");
 
     BuildOptions bo = opt.build;
@@ -340,7 +340,7 @@ Skeleton newSkeletonFor(const Script& script, const JobPlan& pl, const JobOption
                 warn("Das neue Skelett hat andere Bones als die vorhandene GLA (" +
                      std::to_string(old.skeleton.bones.size()) + " -> " +
                      std::to_string(sb.skeleton.bones.size()) +
-                     ") - Modelle (GLM) fuer die alte GLA muessen neu gebaut werden");
+                     ") - Modelle (GLM) für die alte GLA müssen neu gebaut werden");
         } catch (const std::exception&) {
         }
     }
@@ -377,7 +377,7 @@ void runMdr(const Script& script, const JobPlan& pl, const JobOptions& opt, JobR
         } else if (a == "-weapon") {
             weapon = true;
         } else {
-            warn(cmd + ": unbekannte Angabe \"" + st->args[i] + "\" wird uebergangen");
+            warn(cmd + ": unbekannte Angabe \"" + st->args[i] + "\" wird übergangen");
         }
     }
     if (player)
@@ -476,7 +476,7 @@ JobResult runJob(const Script& script, const std::string& carPathIn, const JobOp
     const std::string& carPath = pl.carPath;
     res.kind = pl.kind;
     if (res.kind == ScriptKind::Empty)
-        throw std::runtime_error("Das Skript enthaelt weder $aseanimgrab noch $aseanimgrab_gla - "
+        throw std::runtime_error("Das Skript enthält weder $aseanimgrab noch $aseanimgrab_gla - "
                                  "es gibt nichts zu bauen");
     const fs::path carDir = fs::path(carPath).parent_path();
     const std::string& baseDir = pl.baseDir;
@@ -498,7 +498,7 @@ JobResult runJob(const Script& script, const std::string& carPathIn, const JobOp
     // mangled messages.
     if (!script.grabs.empty() && firstOf(script, Cmd::AseAnimGrabGla))
         throw std::runtime_error("$aseanimgrab_gla (fertige GLA benutzen) und $aseanimgrab (Animationen "
-                                 "lesen) im selben Skript - das eine schliesst das andere aus");
+                                 "lesen) im selben Skript - das eine schließt das andere aus");
     bool skew90 = false;
     if (script.convert) {
         const auto& xa = script.convert->extraArgs;
@@ -512,7 +512,7 @@ JobResult runJob(const Script& script, const std::string& carPathIn, const JobOp
                 skew90 = true;
             } else if (a == "-noskew90") {
             } else if (a == "-scale") {
-                throw std::runtime_error("-scale gehoert nicht auf die $aseanimconvertmdx-Zeile - "
+                throw std::runtime_error("-scale gehört nicht auf die $aseanimconvertmdx-Zeile - "
                                          "stattdessen \"$scale <wert>\" nach $aseanimgrabinit");
             } else if (a == "-skel") {
                 throw std::runtime_error("-skel gibt es nicht mehr - eine fertige GLA wird mit "
@@ -612,9 +612,9 @@ JobResult runJob(const Script& script, const std::string& carPathIn, const JobOp
         if (opt.outputs.gla && glaName.size() + 4 >= 64)
             throw std::runtime_error("GLA-Name \"" + glaName + ".gla\" hat " +
                                      std::to_string(glaName.size() + 4) +
-                                     " Zeichen, das Spiel erlaubt hoechstens 63 (MAX_QPATH)");
+                                     " Zeichen, das Spiel erlaubt höchstens 63 (MAX_QPATH)");
         if (opt.outputs.frames && glaName.size() + 7 >= 64)
-            warn("\"" + glaName + ".frames\" ist laenger als 63 Zeichen (MAX_QPATH)");
+            warn("\"" + glaName + ".frames\" ist länger als 63 Zeichen (MAX_QPATH)");
 
         res.anim = build(script, skel, carPath, opt.build);
         for (const auto& w : res.anim.warnings) warn(w);
@@ -699,7 +699,7 @@ JobResult runJob(const Script& script, const std::string& carPathIn, const JobOp
                     if (fs::exists(normal, se)) {
                         cfg = glaPath.parent_path() / "animation_skip.cfg";
                         warn("-framestep: animation_skip.cfg statt animation.cfg geschrieben, weil "
-                             "daneben die normale GLA liegt. Fuer das Spiel zusammen mit der _skip-GLA "
+                             "daneben die normale GLA liegt. Für das Spiel zusammen mit der _skip-GLA "
                              "in einen eigenen Ordner legen und in animation.cfg umbenennen.");
                     }
                 }
@@ -775,7 +775,7 @@ JobResult runJob(const Script& script, const std::string& carPathIn, const JobOp
                 if (!ec && !rel.empty() && rel.rfind("..", 0) != 0 && rel.size() >= 64)
                     throw std::runtime_error("GLM-Pfad \"" + rel + "\" hat " +
                                              std::to_string(rel.size()) +
-                                             " Zeichen, das Spiel erlaubt hoechstens 63 (MAX_QPATH)");
+                                             " Zeichen, das Spiel erlaubt höchstens 63 (MAX_QPATH)");
             }
 
             say(JobLog::Info, "Mesh      : " + xsiPath);

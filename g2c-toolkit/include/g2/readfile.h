@@ -20,9 +20,9 @@ namespace g2 {
 
 inline std::string readWholeFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht oeffnen");
+    if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht öffnen");
     const std::streamsize n = f.tellg();
-    if (n < 0) throw std::runtime_error("Kann Groesse von \"" + path + "\" nicht ermitteln");
+    if (n < 0) throw std::runtime_error("Kann Größe von \"" + path + "\" nicht ermitteln");
     std::string out(static_cast<std::size_t>(n), '\0');
     f.seekg(0);
     if (n > 0 && !f.read(out.data(), n))
@@ -34,9 +34,9 @@ inline std::string readWholeFile(const std::string& path) {
 // 22 MB GLA a second time and briefly held both copies in memory.
 inline std::vector<std::uint8_t> readWholeFileBytes(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht oeffnen");
+    if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht öffnen");
     const std::streamsize n = f.tellg();
-    if (n < 0) throw std::runtime_error("Kann Groesse von \"" + path + "\" nicht ermitteln");
+    if (n < 0) throw std::runtime_error("Kann Größe von \"" + path + "\" nicht ermitteln");
     std::vector<std::uint8_t> out(static_cast<std::size_t>(n));
     f.seekg(0);
     if (n > 0 && !f.read(reinterpret_cast<char*>(out.data()), n))

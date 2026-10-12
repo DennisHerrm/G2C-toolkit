@@ -101,6 +101,8 @@ struct Document {
     std::string  title;      // file name, shown in the tab bar
     car::Script  script;
     bool         dirty = false;
+    // Counts every change (see App::touch); undo and the automatic check use it.
+    std::uint64_t rev = 0;
     bool         open = true;
     std::string  loadError;
 
@@ -123,6 +125,13 @@ struct Document {
 
     void syncSelection() { selected.assign(script.grabs.size(), 0); }
 };
+
+// A change to a script: unsaved, to be checked again, and one step for undo.
+inline void touch(Document& d) {
+    d.dirty = true;
+    d.validated = false;
+    ++d.rev;
+}
 
 // Settings that apply to all tabs.
 struct Settings {
@@ -321,6 +330,19 @@ public:
     // A model shown in the preview, skinned with the playing animation.
     bool                loadPreviewGlm(const std::string& path);
     bool                previewGlmLoaded() const { return previewGlmLoaded_; }
+    // A short notification bottom right; with an optional button.
+    void                toast(LogLine::Kind kind, std::string text, std::string actionLabel = {},
+                              std::function<void()> action = {});
+    std::size_t         toastCount() const { return toasts_.size(); }
+    bool                bottomPanelOpen() const { return bottomOpen_[static_cast<int>(mode_)]; }
+    // Undo and redo per script (Ctrl+Z / Ctrl+Y).
+    bool                undo();
+    bool                redo();
+    bool                canUndo() const;
+    bool                canRedo() const;
+    // 0..1 while building, -1 otherwise (taskbar progress).
+    float               buildProgress() const;
+    void                openPalette() { paletteRequest_ = true; }
     // Textures live on the graphics card: released before the device goes.
     void                releaseGpuResources();
     bool                previewPlaying() const { return playback_.playing; }
@@ -379,7 +401,7 @@ public:
     // Appends files as $aseanimgrab. `toAll` distributes them to all tabs.
     std::size_t addXsiFiles(const std::vector<std::string>& files, bool toAll);
 
-    void validateDocument(std::size_t index);
+    void validateDocument(std::size_t index, bool light = false);
     void validateAll();
 
     bool loadEnums(const std::string& path);
@@ -640,6 +662,36 @@ private:
     static void hintText(const char* text);
     // Shared "no GLA yet" page of the extract and preview modes.
     void drawGlaEmptyState(bool forPreview);
+    float emptyStateHeight_ = 0.0f;
+
+    // Quick filter of the sequence table: 0 all, 1 issues, 2 no enum,
+    // 3 backwards, 4 with parts.
+    int   rowFilter_ = 0;
+    bool  rowHasIssue(const Document& d, std::size_t i) const;
+    // Loop/speed edited in place: row, column (0 loop, 1 speed), text.
+    int   editCellRow_ = -1;
+    int   editCellCol_ = -1;
+    bool  focusCellField_ = false;
+    char  editCellBuf_[32] = {};
+
+    // Undo: per script path, the states before each change.
+    struct UndoState {
+        std::vector<car::Script> undo, redo;
+        car::Script              base;
+        std::uint64_t            baseRev = 0;
+        bool                     baseSet = false;
+        double                   lastPush = 0.0;
+    };
+    std::map<std::string, UndoState> undo_;
+    void  trackUndo();
+
+    // Command palette (Ctrl+K).
+    bool  paletteRequest_ = false;
+    bool  paletteFocus_ = false;
+    char  paletteBuf_[128] = {};
+    int   paletteSel_ = 0;
+    void  drawPalette();
+    float welcomeW_ = 0.0f, welcomeH_ = 0.0f;
     void openGlaDialog();
     void drawExtractSteps(std::size_t nsel);
     void drawExtractList();
@@ -734,6 +786,40 @@ private:
     std::string          pvSkin_;        // file name of the chosen skin
     void                 refreshPreviewTextures();
     void                 releaseTextureCache();
+
+    // --- Notifications ("toasts") bottom right ----------------------------------
+    struct Toast {
+        LogLine::Kind         kind = LogLine::Kind::Info;
+        std::string           text;
+        std::string           actionLabel;
+        std::function<void()> action;
+        double                born = 0.0;   // seconds, steady clock
+        double                life = 5.0;
+    };
+    std::vector<Toast>   toasts_;
+    void                 drawToasts();
+
+    // --- Bottom panel (issues / log): open or folded, per mode ------------------
+    bool                 bottomOpen_[3] = {false, false, false};
+    std::size_t          badLogCount_ = 0;     // under logMutex_
+    std::size_t          badLogSeen_ = 0;
+    void                 drawBottomPanel(float height);
+
+    // --- Build end, noticed in the UI thread ------------------------------------
+    bool                 wasBuilding_ = false;
+    double               buildStarted_ = 0.0;
+    std::size_t          badAtBuildStart_ = 0;
+    std::size_t          buildCount_ = 0;
+    std::string          buildFirstOut_;
+    void                 onBuildFinished();
+
+    // --- Build mode pieces --------------------------------------------------------
+    void                 drawWelcome();
+    void                 drawPathStatus();
+    void                 drawOutputChips();
+    // Validation in the background after edits (cheap: no frame counts).
+    double               lastEditSeen_ = 0.0;
+    std::uint64_t        lastRevSeen_ = 0;
     double               previewLastTime_ = 0.0;
     ExtractState         extract_;
     char                 extractFilter_[128] = {0};

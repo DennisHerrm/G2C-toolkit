@@ -606,7 +606,7 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
                      "Aufruf: g2_gui_driver <arbeitsordner> [<assetwurzel> <referenz.gla> "
-                     "<anims.h> [<gross.car>]]\n");
+                     "<anims.h> [<groß.car>]]\n");
         return 2;
     }
     const fs::path work = fs::absolute(argv[1]);
@@ -712,7 +712,7 @@ int main(int argc, char** argv) {
                 D.click(D.find(tr(m)));
                 D.frames(2);
             }
-            check(D.popupOpen(), std::string("Menue oeffnet: ") + tr(m));
+            check(D.popupOpen(), std::string("Menue öffnet: ") + tr(m));
             D.escape();
             D.frames(2);
         }
@@ -726,7 +726,7 @@ int main(int argc, char** argv) {
         }
         check(std::fabs(ImGui::GetStyle().ItemInnerSpacing.x - before) < 0.01f &&
                   std::fabs(ImGui::GetStyle().IndentSpacing - indentBefore) < 0.01f,
-              "Hell/Dunkel sechsmal umgeschaltet: Abstaende unveraendert (" +
+              "Hell/Dunkel sechsmal umgeschaltet: Abstaende unverändert (" +
                   std::to_string(before) + " -> " +
                   std::to_string(ImGui::GetStyle().ItemInnerSpacing.x) + ")");
 
@@ -746,7 +746,7 @@ int main(int argc, char** argv) {
         check(D.windowOpen(tr(S::About)), "Info-Fenster offen");
         D.click(D.find(tr(S::DlgClose), tr(S::About)));
         D.frames(2);
-        check(!D.windowOpen(tr(S::About)), "Info-Fenster ueber Schliessen zu");
+        check(!D.windowOpen(tr(S::About)), "Info-Fenster über Schließen zu");
 
         // Empty actions without a script must do nothing.
         D.key(ImGuiKey_S, true);
@@ -774,7 +774,7 @@ int main(int argc, char** argv) {
         for (S s : {S::WriteFrames, S::WriteMesh, S::UseCache, S::CarcassMode, S::ReadFrameCounts})
             D.click(D.find(tr(s)));
         check(st.writeFrames == f0 && st.writeMesh == m0 && st.carcassCompat == k0,
-              "zweiter Klick stellt zurueck");
+              "zweiter Klick stellt zurück");
         {
             const bool g0 = st.writeGla, cf0 = st.writeCfg, i0 = st.writeInfo;
             for (S s : {S::WriteGla, S::WriteCfg, S::WriteInfo}) D.click(D.find(tr(s)));
@@ -782,19 +782,19 @@ int main(int argc, char** argv) {
                   "Haekchen GLA, animation.cfg und _info.txt reagieren");
             for (S s : {S::WriteGla, S::WriteCfg, S::WriteInfo}) D.click(D.find(tr(s)));
             check(st.writeGla == g0 && st.writeCfg == cf0 && st.writeInfo == i0,
-                  "zweiter Klick stellt GLA/cfg/_info zurueck");
+                  "zweiter Klick stellt GLA/cfg/_info zurück");
         }
         {
             const bool n0 = st.newSkeleton;
             D.click(D.find(tr(S::NewSkeleton)));
             check(st.newSkeleton != n0, "Haekchen \"Skelett neu bauen\" reagiert");
             D.click(D.find(tr(S::NewSkeleton)));
-            check(st.newSkeleton == n0, "zweiter Klick stellt es zurueck");
+            check(st.newSkeleton == n0, "zweiter Klick stellt es zurück");
             const bool o0 = st.onlyNewXsi;
             D.click(D.find(tr(S::OnlyNewXsi)));
             check(st.onlyNewXsi != o0, "Haekchen \"Nur neue XSI\" in der Werkzeugleiste reagiert");
             D.click(D.find(tr(S::OnlyNewXsi)));
-            check(st.onlyNewXsi == o0, "zweiter Klick stellt es zurueck");
+            check(st.onlyNewXsi == o0, "zweiter Klick stellt es zurück");
             check(D.find(tr(S::FrameStep)) != nullptr, "Feld Framestep vorhanden");
         }
 
@@ -807,7 +807,7 @@ int main(int argc, char** argv) {
                        (i.label == "..." || (!i.label.empty() && (unsigned char)i.label[0] >= 0xE0));
             });
             D.click(btn);
-            check(st.baseDir == base.string(), "Assetwurzel ueber Ordnerdialog gesetzt");
+            check(st.baseDir == base.string(), "Assetwurzel über Ordnerdialog gesetzt");
             st.referenceGla = refGla.string();
             st.enumPath = enums.string();
             app->loadEnums(enums.string());
@@ -847,26 +847,26 @@ int main(int argc, char** argv) {
     }
 
     // =====================================================================
-    step("3. Skripte oeffnen (Menue, Ordner, Tabs)");
+    step("3. Skripte öffnen (Menue, Ordner, Tabs)");
     guardedStep("Oeffnen", [&] {
         if (!real) {
-            out("    (ohne echte Daten uebersprungen)\n");
+            out("    (ohne echte Daten übersprungen)\n");
             return;
         }
         nextFiles.push_back({smallCar.string()});
         D.menu(tr(S::MenuFile), tr(S::OpenScript));
         D.frames(2);
-        check(app->documents().size() == 1, "Datei > Skript oeffnen: ein Tab");
+        check(app->documents().size() == 1, "Datei > Skript öffnen: ein Tab");
 
         nextFolder.push_back((cars / "b").string());
         D.menu(tr(S::MenuFile), tr(S::OpenFolder));
         D.frames(2);
-        check(app->documents().size() == 2, "Datei > Ordner oeffnen: zweiter Tab");
+        check(app->documents().size() == 2, "Datei > Ordner öffnen: zweiter Tab");
 
         // The same file must not open twice.
         nextFiles.push_back({smallCar.string()});
         D.menu(tr(S::MenuFile), tr(S::OpenScript));
-        check(app->documents().size() == 2, "dieselbe Datei nicht doppelt geoeffnet");
+        check(app->documents().size() == 2, "dieselbe Datei nicht doppelt geöffnet");
 
         // Click tabs.
         const Item* t0 = D.findTab("###" + app->documents()[0].path);
@@ -893,7 +893,7 @@ int main(int argc, char** argv) {
             D.frames(3);
             check(app->documents().size() == 2 && app->activeTab() == 1 &&
                       D.shownTab(p1).find(p1) != std::string::npos,
-                  "nach dem Neustart ist der zuletzt aktive Tab gewaehlt");
+                  "nach dem Neustart ist der zuletzt aktive Tab gewählt");
             D.click(D.findTab("###" + app->documents()[0].path));
             D.frames(2);
         }
@@ -945,7 +945,7 @@ int main(int argc, char** argv) {
                 if (d.selected[k] && std::find(visible.begin(), visible.end(), k) == visible.end())
                     ++hiddenSel;
             check(hiddenSel == 0, "Umschalt+Klick mit Filter waehlt KEINE ausgeblendeten Zeilen (" +
-                                      std::to_string(hiddenSel) + " ausgeblendet gewaehlt)");
+                                      std::to_string(hiddenSel) + " ausgeblendet gewählt)");
         }
         // Clear the filter.
         D.click(filt);
@@ -973,7 +973,7 @@ int main(int argc, char** argv) {
         D.frames(2);
         // Dropped "before row 5": afterwards a sits at index 4.
         check(nameAt(4) == a, "Zeile 1 per Ziehen hinter Zeile 4 verschoben (jetzt: " + grabNames(d) + ")");
-        check(d.dirty, "Skript als geaendert markiert");
+        check(d.dirty, "Skript als geändert markiert");
         check(g2::gui::App::isRootGrab(d.script.grabs.back()), "root bleibt die letzte Zeile");
 
         // Drag a multi-selection as a block.
@@ -1024,11 +1024,11 @@ int main(int argc, char** argv) {
             int vtx = 0;
             ziehe(m, 6, 0.8f, &vtx);
             check(vtx > 0, "beim Ziehen erscheint die Einfuegelinie");
-            check(nameAt(6) == m, "untere Haelfte von Zeile 6: dahinter eingefuegt (" + grabNames(d) + ")");
+            check(nameAt(6) == m, "untere Haelfte von Zeile 6: dahinter eingefügt (" + grabNames(d) + ")");
 
             const std::string m2 = nameAt(0);
             ziehe(m2, 3, 0.2f, nullptr);
-            check(nameAt(2) == m2, "obere Haelfte von Zeile 3: davor eingefuegt (" + grabNames(d) + ")");
+            check(nameAt(2) == m2, "obere Haelfte von Zeile 3: davor eingefügt (" + grabNames(d) + ")");
 
             // Drag below a heading: the heading stays on top, the sequence
             // sits below it.
@@ -1048,7 +1048,7 @@ int main(int argc, char** argv) {
                 check(posM + 1 == posZ && !d.script.grabs[posM].commentsBefore.empty() &&
                           d.script.grabs[posM].commentsBefore.front() == ueber &&
                           d.script.grabs[posZ].commentsBefore.empty(),
-                      "unter eine Ueberschrift gezogen: Ueberschrift bleibt darueber");
+                      "unter eine Ueberschrift gezogen: Ueberschrift bleibt darüber");
             } else {
                 check(false, "Testdaten ohne Ueberschrift");
             }
@@ -1084,7 +1084,7 @@ int main(int argc, char** argv) {
                 D.frames(3);
             }
             const bool otherUnchanged = grabNames(other) == before1;
-            check(otherUnchanged, "Zeile auf anderen Tab gezogen: das ANDERE Skript bleibt unveraendert");
+            check(otherUnchanged, "Zeile auf anderen Tab gezogen: das ANDERE Skript bleibt unverändert");
             (void)before0;
             // Back to the first tab.
             D.click(D.findTab("###" + d.path));
@@ -1136,7 +1136,7 @@ int main(int argc, char** argv) {
 
         const std::size_t c0 = d.script.grabs[2].commentsBefore.size();
         ctx(2, S::AddDivider);
-        check(d.script.grabs[2].commentsBefore.size() == c0 + 1, "Trennlinie eingefuegt");
+        check(d.script.grabs[2].commentsBefore.size() == c0 + 1, "Trennlinie eingefügt");
 
         ctx(2, S::AddComment);
         D.type("Testkommentar aus dem Treiber");
@@ -1157,18 +1157,18 @@ int main(int argc, char** argv) {
         std::snprintf(pasteLbl, sizeof(pasteLbl), tr(S::PasteAfter), std::size_t{1});
         D.click(D.find(pasteLbl));
         D.frames(3);
-        check(d.script.grabs.size() == n0 + 1, "Einfuegen danach: eine Zeile mehr");
+        check(d.script.grabs.size() == n0 + 1, "Einfügen danach: eine Zeile mehr");
 
         // Delete with confirmation: first No, then Yes.
         ctx(6, S::DeleteSeq);
-        check(D.popupOpen(), "Loeschen fragt nach");
+        check(D.popupOpen(), "Löschen fragt nach");
         D.click(D.find(tr(S::No)));
         D.frames(2);
-        check(d.script.grabs.size() == n0 + 1, "Nein loescht nichts");
+        check(d.script.grabs.size() == n0 + 1, "Nein löscht nichts");
         ctx(6, S::DeleteSeq);
         D.click(D.findEnds(tr(S::DeleteSeq), "confirmdel"));
         D.frames(2);
-        check(d.script.grabs.size() == n0, "Ja loescht genau eine");
+        check(d.script.grabs.size() == n0, "Ja löscht genau eine");
 
         // Cut = copy + delete with confirmation.
         ctx(1, S::Cut);
@@ -1189,7 +1189,7 @@ int main(int argc, char** argv) {
         };
         D.doubleClick(D.row(nameAt(2)));
         D.frames(2);
-        check(D.windowOpen("###seqdlg"), "Doppelklick oeffnet den Sequenzdialog");
+        check(D.windowOpen("###seqdlg"), "Doppelklick öffnet den Sequenzdialog");
         // Large enough that all buttons lie within the visible area.
         ImGui::SetWindowSize("###seqdlg", ImVec2(1200, 1150));
         ImGui::SetWindowPos("###seqdlg", ImVec2(360, 60));
@@ -1298,7 +1298,7 @@ int main(int argc, char** argv) {
         });
         D.doubleClick(tc, false);
         const bool dlg = D.windowOpen("###seqdlg");
-        check(!dlg, "Doppelklick auf den Zeilenkommentar oeffnet NICHT den Sequenzdialog");
+        check(!dlg, "Doppelklick auf den Zeilenkommentar öffnet NICHT den Sequenzdialog");
         if (dlg) {
             D.frames(3);
             D.click(D.find(tr(S::DlgClose), "###seqdlg"));
@@ -1313,13 +1313,13 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
-    step("9. Pruefen und Meldungsliste");
-    guardedStep("Pruefen", [&] {
+    step("9. Prüfen und Meldungsliste");
+    guardedStep("Prüfen", [&] {
         if (!real || app->documents().empty()) return;
         D.click(D.findIconButton(tr(S::BtnValidate), "##main"));
         D.frames(3);
         const auto& d = app->documents()[static_cast<std::size_t>(app->activeTab())];
-        check(d.validated, "Knopf Pruefen hat geprueft");
+        check(d.validated, "Knopf Prüfen hat geprüft");
         D.click(D.findTab(tr(S::TabIssues)));
         D.frames(2);
         const Item* issue = D.findIf([](const Item& i) { return i.label == "##row"; });
@@ -1342,7 +1342,7 @@ int main(int argc, char** argv) {
         check(!d.outputDir.empty(), "Standardordner gesetzt");
 
         // Unsaved change before building.
-        check(d.dirty, "Skript hat ungespeicherte Aenderungen");
+        check(d.dirty, "Skript hat ungespeicherte Änderungen");
         const std::string onDiskBefore = readAll(d.path);
         D.click(D.findIconButton(tr(S::BtnBuild), "##main"));
         D.waitBuild();
@@ -1366,8 +1366,16 @@ int main(int argc, char** argv) {
         D.click(D.findIconButton(tr(S::BtnBuildAll), "##main"));
         D.waitBuild();
         check(logHas(*app, "t_gui.gla"), "Alle bauen: Protokoll meldet die GLA");
+        D.frames(2);
+        check(app->toastCount() > 0, "nach dem Bauen erscheint ein Hinweis unten rechts");
 
-        // Log: open the output folder.
+        // Log: open the output folder. The panel may be folded - open it with
+        // its arrow, as a user would.
+        if (!app->bottomPanelOpen()) {
+            D.click(D.findById("##bottomtoggle", "bottom"));
+            D.frames(2);
+        }
+        check(app->bottomPanelOpen(), "Pfeil klappt Protokoll und Meldungen auf");
         if (!D.findTab(tr(S::TabLog))) out("    (Reiter %s nicht gefunden)\n", tr(S::TabLog));
         D.click(D.findTab(tr(S::TabLog)));
         D.frames(2);
@@ -1376,13 +1384,13 @@ int main(int argc, char** argv) {
                 D.findEnds(tr(S::CopyLog)) != nullptr);
         }
         D.click(D.findEnds(tr(S::OpenOutputDir)));
-        check(!revealed.empty(), "Ausgabeordner oeffnen ruft den Explorer");
+        check(!revealed.empty(), "Ausgabeordner öffnen ruft den Explorer");
         D.click(D.findEnds(tr(S::CopyLog)));
         check(logHas(*app, "Zeilen") || true, "Protokoll kopieren");
     });
 
     // =====================================================================
-    step("10b. Ausgaben waehlen, Modell-Skript");
+    step("10b. Ausgaben wählen, Modell-Skript");
     guardedStep("Ausgaben", [&] {
         if (!real || app->documents().empty()) return;
         auto& st = app->settings();
@@ -1405,7 +1413,7 @@ int main(int argc, char** argv) {
         std::size_t files = 0;
         for (const auto& e : fs::directory_iterator(only, ec)) (void)e, ++files;
         check(fs::exists(only / "animation.cfg") && files == 1,
-              "nur animation.cfg gewaehlt: genau eine Datei geschrieben (" + std::to_string(files) + ")");
+              "nur animation.cfg gewählt: genau eine Datei geschrieben (" + std::to_string(files) + ")");
 
         // Only the GLA.
         fs::remove_all(only);
@@ -1416,7 +1424,7 @@ int main(int argc, char** argv) {
         files = 0;
         for (const auto& e : fs::directory_iterator(only, ec)) (void)e, ++files;
         check(files == 1 && !fs::exists(only / "animation.cfg"),
-              "nur GLA gewaehlt: keine animation.cfg, eine Datei (" + std::to_string(files) + ")");
+              "nur GLA gewählt: keine animation.cfg, eine Datei (" + std::to_string(files) + ")");
         st = saved;
 
         // A model script ($aseanimgrab_gla): GLM only, against the GLA it
@@ -1443,7 +1451,7 @@ int main(int argc, char** argv) {
         st.baseDir = mb.string();
         st.referenceGla = (work / "gibt_es_nicht.gla").string();   // the script's GLA must win
         const std::size_t before = app->documents().size();
-        check(app->openCar((md / "model.car").string()), "Modell-Skript geoeffnet");
+        check(app->openCar((md / "model.car").string()), "Modell-Skript geöffnet");
         const std::size_t mi = app->documents().size() - 1;
         check(app->documents().size() == before + 1 && app->activeTab() == static_cast<int>(mi),
               "Modell-Skript ist der aktive Tab");
@@ -1484,7 +1492,7 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
-    step("11. Speichern, Sicherung, Schliessen");
+    step("11. Speichern, Sicherung, Schließen");
     guardedStep("Speichern", [&] {
         if (!real || app->documents().empty()) return;
         auto& d = app->documents()[0];
@@ -1499,14 +1507,14 @@ int main(int argc, char** argv) {
         check(app->documents()[0].validated, "F7 prueft (steht so im Menue)");
         const std::size_t titles0 = dialogTitles.size();
         D.key(ImGuiKey_O, true);
-        check(dialogTitles.size() > titles0, "Strg+O oeffnet den Dateidialog");
+        check(dialogTitles.size() > titles0, "Strg+O öffnet den Dateidialog");
 
         // Ctrl+W: a clean tab closes, a modified one asks first.
         const std::size_t n0 = app->documents().size();
         for (auto& x : app->documents()) x.dirty = false;
         D.key(ImGuiKey_W, true);
         D.frames(2);
-        check(app->documents().size() == n0 - 1, "Strg+W schliesst den aktiven Tab");
+        check(app->documents().size() == n0 - 1, "Strg+W schließt den aktiven Tab");
         nextFiles.push_back({smallCar.string()});
         D.menu(tr(S::MenuFile), tr(S::OpenScript));
         app->documents()[static_cast<std::size_t>(app->activeTab())].dirty = true;
@@ -1520,7 +1528,7 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
-    step("12. GLA -> XSI: oeffnen, waehlen, exportieren, vergleichen");
+    step("12. GLA -> XSI: öffnen, wählen, exportieren, vergleichen");
     fs::path glaDir;
     guardedStep("Extract", [&] {
         if (!real) return;
@@ -1589,16 +1597,16 @@ int main(int argc, char** argv) {
         D.click(D.findById("##xsiver", "extract"));
         D.frames(2);
         D.click(D.findIf([](const Item& i) { return displayOf(i.label) == "3.5"; }));
-        check(ex.xsiVersion == g2::xsiexp::ExportOptions::Version::V35, "dotXSI 3.5 gewaehlt");
+        check(ex.xsiVersion == g2::xsiexp::ExportOptions::Version::V35, "dotXSI 3.5 gewählt");
 
         // Everything with .car. A .car already exists: it must ask first and
         // make a backup before replacing it.
         const fs::path carOut = outX / "t_gui.car";
-        writeText(carOut, "// eigene Datei, darf nicht still ueberschrieben werden\n");
+        writeText(carOut, "// eigene Datei, darf nicht still überschrieben werden\n");
         D.click(D.findIconButton(tr(S::ExportAllWithCar), "extract"));
         D.frames(3);
         check(D.popupOpen() && readAll(carOut).find("eigene Datei") != std::string::npos,
-              "vorhandene Dateien: erst Rueckfrage, noch nichts ueberschrieben");
+              "vorhandene Dateien: erst Rueckfrage, noch nichts überschrieben");
         {
             const Item* ow = D.find(tr(S::Overwrite), "###overwrite");
             if (!ow) {
@@ -1627,7 +1635,7 @@ int main(int argc, char** argv) {
             } catch (const std::exception&) {
                 ok = false;
             }
-            check(ok, "exportierte .car ist lesbar und vollstaendig");
+            check(ok, "exportierte .car ist lesbar und vollständig");
         }
 
         // Comparison with another animation.cfg.
@@ -1643,7 +1651,7 @@ int main(int argc, char** argv) {
         D.click(D.find(tr(S::SelectMissing)));
         nsel = 0;
         for (char c : ex.selected) nsel += c ? 1 : 0;
-        check(nsel == ex.seqs.size() - 2, "Fehlende gewaehlt: " + std::to_string(nsel));
+        check(nsel == ex.seqs.size() - 2, "Fehlende gewählt: " + std::to_string(nsel));
         D.click(D.find(tr(S::OnlyMissing)));
         D.frames(2);
         check(ex.onlyMissing && exRow(ex.seqs[0].name) == nullptr, "Nur fehlende: vorhandene ausgeblendet");
@@ -1688,7 +1696,7 @@ int main(int argc, char** argv) {
             check(!app->previewPlaying(), "Leertaste haelt an");
             D.key(ImGuiKey_DownArrow);
             D.frames(1);
-            check(app->previewSequence() == 2 || ex.seqs.size() == 2, "Pfeil runter: naechste Sequenz");
+            check(app->previewSequence() == 2 || ex.seqs.size() == 2, "Pfeil runter: nächste Sequenz");
         }
         // Double-click in the GLA -> XSI list opens the preview on that row.
         {
@@ -1755,7 +1763,7 @@ int main(int argc, char** argv) {
         D.frames(2);
         bool ok = app->documents().size() == n0 + 1 && app->documents().back().loadError.empty() &&
                   !app->documents().back().script.grabs.empty();
-        check(ok, "Skript in Ordner mit Umlaut geoeffnet (UTF-8-Pfad aus Dialog/Ziehen)");
+        check(ok, "Skript in Ordner mit Umlaut geöffnet (UTF-8-Pfad aus Dialog/Ziehen)");
     });
 
     // =====================================================================
@@ -1830,7 +1838,7 @@ int main(int argc, char** argv) {
             app->addXsiFolder(folder.string(), false);
             check(d.script.grabs.size() - before == expected,
                   "Nur neue XSI, echtes Skript: " + std::to_string(d.script.grabs.size() - before) +
-                      " eingefuegt, erwartet " + std::to_string(expected) + " (" + folder.filename().string() + ")");
+                      " eingefügt, erwartet " + std::to_string(expected) + " (" + folder.filename().string() + ")");
             const std::size_t mid = d.script.grabs.size();
             app->addXsiFolder(folder.string(), false);
             check(d.script.grabs.size() == mid, "Nur neue XSI, echtes Skript: zweiter Durchlauf fuegt nichts ein");
@@ -1926,7 +1934,7 @@ int main(int argc, char** argv) {
             for (const Item& it : g_last)
                 if (it.window.find("seqdlg") != std::string::npos && it.label == "+") plus.push_back(&it);
             // Loop field first, speed field second.
-            check(plus.size() >= 2, "Plus-Knoepfe fuer Loop und Speed da");
+            check(plus.size() >= 2, "Plus-Knoepfe für Loop und Speed da");
             if (plus.size() >= 2) {
                 D.click(plus[1]);
                 D.frames(2);
@@ -1998,7 +2006,7 @@ int main(int argc, char** argv) {
             std::snprintf(lbl, sizeof(lbl), tr(S::SetSpeedRows), std::size_t{3});
             D.click(D.find(lbl));
             D.frames(2);
-            check(D.popupOpen(), "Framespeed fuer 3 Zeilen: Dialog offen");
+            check(D.popupOpen(), "Framespeed für 3 Zeilen: Dialog offen");
             D.click(D.findIf([](const Item& i) { return i.label == "##speed"; }));
             D.key(ImGuiKey_A, true);
             D.type("15");
@@ -2023,7 +2031,7 @@ int main(int argc, char** argv) {
             D.click(D.find(tr(S::SpeedAllFromXsi)));
             D.frames(2);
             check(!G[0].frameSpeed && !G[1].frameSpeed && !G[2].frameSpeed,
-                  "\"Wie in der .xsi\" fuer alle: -framespeed entfernt");
+                  "\"Wie in der .xsi\" für alle: -framespeed entfernt");
         }
 
         // ---- Split parts shown by name, details on demand.
@@ -2120,7 +2128,7 @@ int main(int argc, char** argv) {
         D.click(D.find(tr(S::ModelKeepMotion), "modeldlg"));
         D.click(D.find(tr(S::BtnCancel), "modeldlg"));
         D.frames(2);
-        check(md.script.keepMotion && !md.dirty, "Abbrechen aendert nichts");
+        check(md.script.keepMotion && !md.dirty, "Abbrechen ändert nichts");
 
         // ---- Dependent models.
         {
@@ -2145,9 +2153,9 @@ int main(int argc, char** argv) {
         D.menu(tr(S::MenuFile), tr(S::SaveAs));
         D.frames(2);
         check(fs::exists(mini / "kopie.car") && fs::path(md.path).filename() == "kopie.car",
-              "Speichern unter: Tab gehoert jetzt zu kopie.car");
+              "Speichern unter: Tab gehört jetzt zu kopie.car");
         check(!app->recentFiles().empty() && fs::path(app->recentFiles().front()).filename() == "kopie.car",
-              "zuletzt geoeffnet: kopie.car oben");
+              "zuletzt geöffnet: kopie.car oben");
 
         st.baseDir = oldBase;
         if (!oldEnums.empty()) app->loadEnums(oldEnums);
@@ -2241,7 +2249,7 @@ int main(int argc, char** argv) {
         const std::string cfgOnly = readAll(outDir / "animation.cfg");
         check(cfgSpeed(cfgOnly, "BOTH_A1_SPECIAL") == 33, "Nur animation.cfg: BOTH_A1_SPECIAL mit Speed 33");
         check(cfgSpeed(cfgOnly, "BOTH_A3_T__B_") == 40 && cfgSpeed(cfgOnly, "FACE_TALK1") == 5,
-              "uebrige Zeilen unveraendert (40, 5)");
+              "uebrige Zeilen unverändert (40, 5)");
         bool anyGla = false;
         for (const auto& e : fs::directory_iterator(outDir, ec))
             if (e.path().extension() == ".gla") anyGla = true;
@@ -2263,6 +2271,118 @@ int main(int argc, char** argv) {
 
     // =====================================================================
     // Regression tests for the GUI findings of the code review of 2026-10-03.
+    step("16d. Moderne Oberflaeche: Filter-Chips, Zelle bearbeiten, Rueckgaengig, Befehlssuche");
+    guardedStep("Modern", [&] {
+        if (D.popupOpen()) D.escape();
+        app->setMode(g2::gui::App::Mode::Build);
+        const fs::path mdir = work / "modern";
+        fs::create_directories(mdir);
+        writeText(mdir / "m.car",
+                  "$aseanimgrabinit\n"
+                  "$aseanimgrab models/m/walk_aaa.xsi -loop 0 -framespeed 20\n"
+                  "$aseanimgrab models/m/walk_bbb.xsi -framespeed -15\n"
+                  "$aseanimgrab models/m/walk_ccc.xsi -framespeed 30 -additional 0 1 -1 20 CCC_PART\n"
+                  "$aseanimgrabfinalize\n"
+                  "$aseanimconvertmdx_noask models/m/root -makeskel models/m/m\n");
+        const std::string mpath = (mdir / "m.car").string();
+        app->openCar(mpath);
+        D.frames(2);
+        D.click(D.findTab("###" + mpath));
+        D.frames(3);
+        std::size_t mi = 0;
+        for (std::size_t k = 0; k < app->documents().size(); ++k)
+            if (app->documents()[k].path == mpath) mi = k;
+        auto& G = app->documents()[mi].script.grabs;
+
+        // Quick filter "backwards": only WALK_BBB is left.
+        {
+            char lbl[64];
+            std::snprintf(lbl, sizeof(lbl), tr(S::ChipBackwards), static_cast<std::size_t>(1));
+            const Item* chip = D.find(lbl);
+            check(chip != nullptr, "Filter-Chip \"Rueckwaerts (1)\" vorhanden");
+            D.click(chip);
+            D.frames(2);
+            check(D.row("WALK_AAA") == nullptr && D.row("WALK_BBB") != nullptr, "Rueckwaerts-Chip zeigt nur WALK_BBB");
+            std::snprintf(lbl, sizeof(lbl), tr(S::ChipAll), G.size());
+            D.click(D.find(lbl));
+            D.frames(2);
+            check(D.row("WALK_AAA") != nullptr, "\"Alle\" zeigt wieder alle Zeilen");
+        }
+
+        // Double-click the speed cell of WALK_AAA, type 16,5, Enter.
+        // The cell is the item with that text in the row's height (the table
+        // headers are no items for the driver).
+        const auto cellOf = [&](const std::string& rowName, const std::string& text) -> std::optional<Item> {
+            const Item* r = D.row(rowName);
+            if (!r) return std::nullopt;
+            const float y = Driver::center(*r).y;
+            const Item* c = D.findIf([&](const Item& i) {
+                return i.window.find("seqs") != std::string::npos && displayOf(i.label) == text && i.bb.Min.y <= y &&
+                       i.bb.Max.y >= y && &i != r;
+            });
+            if (!c) return std::nullopt;
+            return *c;
+        };
+        {
+            const auto cell = cellOf("WALK_AAA", "20");
+            check(cell.has_value(), "Speed-Zelle von WALK_AAA gefunden");
+            if (cell) {
+                D.doubleClick(&*cell, false);
+                D.frames(2);
+                D.key(ImGuiKey_A, true);
+                D.type("16,5");
+                D.key(ImGuiKey_Enter);
+                D.frames(3);
+            }
+            check(G[0].frameSpeed && *G[0].frameSpeed == 16.5, "Speed direkt in der Zelle geaendert: 16,5 -> 16.5");
+        }
+        // Undo / redo with the keyboard.
+        D.key(ImGuiKey_Z, true);
+        D.frames(2);
+        check(G[0].frameSpeed && *G[0].frameSpeed == 20, "Strg+Z macht die Aenderung rueckgaengig (20)");
+        D.key(ImGuiKey_Y, true);
+        D.frames(2);
+        check(G[0].frameSpeed && *G[0].frameSpeed == 16.5, "Strg+Y stellt sie wieder her (16.5)");
+        // Emptying the loop cell removes -loop (default).
+        {
+            const auto cell = cellOf("WALK_AAA", "0");
+            if (cell) {
+                D.doubleClick(&*cell, false);
+                D.frames(2);
+                D.key(ImGuiKey_A, true);
+                D.key(ImGuiKey_Backspace);
+                D.key(ImGuiKey_Enter);
+                D.frames(3);
+            }
+            check(!G[0].loop, "leere Loop-Zelle entfernt -loop");
+        }
+
+        // Saving shows a toast.
+        const std::size_t toastsBefore = app->toastCount();
+        app->saveDocument(mi);
+        D.frames(2);
+        check(app->toastCount() > toastsBefore || app->toastCount() == 4, "Speichern zeigt einen Hinweis");
+
+        // Validate: there are issues (the .xsi files are missing), so the
+        // panel opens by itself.
+        D.click(D.findIconButton(tr(S::BtnValidate), "##main"));
+        D.frames(2);
+        check(app->bottomPanelOpen(), "Pruefen mit Meldungen klappt den unteren Bereich auf");
+
+        // Command palette: Ctrl+K, type, Enter.
+        D.key(ImGuiKey_K, true);
+        D.frames(2);
+        check(D.popupOpen(), "Strg+K oeffnet die Befehlssuche");
+        D.type(tr(S::ModePreview));
+        D.frames(1);
+        D.key(ImGuiKey_Enter);
+        D.frames(2);
+        check(app->mode() == g2::gui::App::Mode::Preview, "Befehlssuche: \"Vorschau\" + Enter wechselt den Modus");
+        app->setMode(g2::gui::App::Mode::Build);
+        D.frames(2);
+    });
+
+    // =====================================================================
     step("16c. Code-Review: Regressionen der Oberflaeche");
     guardedStep("Review", [&] {
         const fs::path rv = work / "review";
@@ -2326,10 +2446,10 @@ int main(int argc, char** argv) {
         app->requestQuit();   // the window close button meanwhile
         D.frames(4);
         check(shown("###speeddlg") && !shown("###closedlg"),
-              "REGRESSION: Schliessen-Frage wartet, Framespeed-Dialog bleibt sichtbar (vorher beide unsichtbar)");
+              "REGRESSION: Schließen-Frage wartet, Framespeed-Dialog bleibt sichtbar (vorher beide unsichtbar)");
         D.click(D.find(tr(S::BtnCancel), "speeddlg"));
         D.frames(4);
-        check(shown("###closedlg"), "danach erscheint die Schliessen-Frage");
+        check(shown("###closedlg"), "danach erscheint die Schließen-Frage");
         D.click(D.find(tr(S::No), "closedlg"));
         D.frames(3);
         check(!app->quitApproved() && !shown("###closedlg"), "Nein: g2c bleibt offen");
@@ -2350,7 +2470,7 @@ int main(int argc, char** argv) {
         }
         D.frames(3);
         check(app->documents().size() == before + 1 && indexOf("rc.car") >= 0,
-              "weitergereichte Datei wird im naechsten Bild geoeffnet");
+              "weitergereichte Datei wird im nächsten Bild geöffnet");
 
         for (const char* f : {"ra.car", "rb.car", "rc.car"}) {
             const int k = indexOf(f);
@@ -2411,11 +2531,11 @@ int main(int argc, char** argv) {
         D.click(D.find(tr(S::UpdNotes)));
         D.frames(2);
         check(opened.size() == 1 && opened[0].find("/releases/tag/v9.0.0") != std::string::npos,
-              "\"Was ist neu?\" oeffnet die Seite der Version");
+              "\"Was ist neu?\" öffnet die Seite der Version");
 
         D.click(D.find(tr(S::UpdLater)));
         D.frames(2);
-        check(D.find(tr(S::UpdInstall)) == nullptr, "\"Spaeter\" blendet die Leiste aus");
+        check(D.find(tr(S::UpdInstall)) == nullptr, "\"Später\" blendet die Leiste aus");
 
         D.menu(tr(S::MenuView), tr(S::UpdCheckNow));
         ua->updater()->wait();
@@ -2425,7 +2545,7 @@ int main(int argc, char** argv) {
         D.click(D.find(tr(S::UpdSkip)));
         D.frames(2);
         check(ua->settings().skippedUpdate == "v9.0.0" && D.find(tr(S::UpdInstall)) == nullptr,
-              "\"Diese Version ueberspringen\" merkt sich v9.0.0");
+              "\"Diese Version überspringen\" merkt sich v9.0.0");
 
         // Settings bar: its section sits at the bottom, scroll there first.
         if (const Item* any = D.findIf([](const Item& i) { return i.window.find("settings") != std::string::npos; }))
@@ -2437,7 +2557,7 @@ int main(int argc, char** argv) {
         check(ua->settings().checkUpdates != autoBefore, "Haken \"Beim Start nach Updates suchen\" schaltet um");
         D.click(D.find(tr(S::UpdAuto), "settings"));
         D.frames(2);
-        check(ua->settings().checkUpdates == autoBefore, "und wieder zurueck");
+        check(ua->settings().checkUpdates == autoBefore, "und wieder zurück");
         check(D.findById("##updchannel", "settings") != nullptr, "Kanalauswahl vorhanden");
 
         // A manual check shows even a skipped version.
@@ -2456,7 +2576,7 @@ int main(int argc, char** argv) {
         D.click(D.find(tr(S::UpdOpenPage)));
         D.frames(2);
         check(!opened.empty() && opened.back() == "https://github.com/DennisHerrm/G2C-toolkit/releases",
-              "Download-Seite geoeffnet");
+              "Download-Seite geöffnet");
         D.click(D.find(tr(S::DlgClose), "updbanner"));
         D.frames(2);
         check(D.find(tr(S::UpdOpenPage)) == nullptr, "Fehlerleiste geschlossen");
@@ -2484,7 +2604,7 @@ int main(int argc, char** argv) {
         D.frames(2);
         D.click(D.find(tr(S::UpdRestart)));
         D.frames(3);
-        check(D.popupOpen() && !ua->restartRequested(), "Neustart fragt nach ungespeicherten Aenderungen");
+        check(D.popupOpen() && !ua->restartRequested(), "Neustart fragt nach ungespeicherten Änderungen");
         D.click(D.find(tr(S::No)));
         D.frames(3);
         check(!ua->restartRequested() && !ua->quitApproved(), "\"Nein\": kein Neustart, kein Beenden");
@@ -2507,14 +2627,14 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
-    step("18. Alle schliessen");
-    guardedStep("Schliessen", [&] {
+    step("18. Alle schließen");
+    guardedStep("Schließen", [&] {
         if (app->documents().empty()) return;
         for (auto& d : app->documents()) d.dirty = true;
         D.menu(tr(S::MenuFile), tr(S::CloseAll));
         D.frames(2);
         check(!app->documents().empty() || D.popupOpen(),
-              "Alle schliessen mit ungespeicherten Aenderungen fragt nach");
+              "Alle schließen mit ungespeicherten Änderungen fragt nach");
     });
 
     // --- Summary ---

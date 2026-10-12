@@ -160,8 +160,8 @@ SkeletonBuildResult buildSkeleton(const std::vector<const xsi::AnimFile*>& anims
     for (const auto& wname : weighted) {
         const auto it = index.find(keyOf(wname));
         if (it == index.end())
-            throw std::runtime_error("Bone \"" + wname + "\" traegt Gewichte im Mesh, kommt aber in keiner "
-                                     "Animationsdatei vor - ohne ihn laesst sich das Skelett nicht bauen");
+            throw std::runtime_error("Bone \"" + wname + "\" trägt Gewichte im Mesh, kommt aber in keiner "
+                                     "Animationsdatei vor - ohne ihn lässt sich das Skelett nicht bauen");
         bones[it->second].used = true;
     }
     for (const auto& b : bones)
@@ -237,7 +237,7 @@ SkeletonBuildResult buildSkeleton(const std::vector<const xsi::AnimFile*>& anims
         Bone o;
         o.name = xsi::glaBoneName(b.name);
         if (!glaNames.insert(lower(o.name)).second)
-            throw std::runtime_error("Zwei Bones heissen in der GLA \"" + o.name + "\" (nach dem Entfernen von "
+            throw std::runtime_error("Zwei Bones heißen in der GLA \"" + o.name + "\" (nach dem Entfernen von "
                                      "\"_always_\")");
         if (b.always) o.flags |= fmt::kBoneFlagAlwaysXform;
         if (opt.keepMotion && lower(o.name) == "motion") o.flags |= fmt::kBoneFlagAlwaysXform;
@@ -277,7 +277,7 @@ SkeletonBuildResult buildSkeleton(const std::vector<const xsi::AnimFile*>& anims
         for (std::size_t i = 0; i < reached.size(); ++i)
             if (!reached[i]) lost += (lost.empty() ? "" : ", ") + sk.bones[i].name;
         if (!lost.empty())
-            throw std::runtime_error("Diese Bones haengen nicht unter \"" + sk.bones[0].name +
+            throw std::runtime_error("Diese Bones hängen nicht unter \"" + sk.bones[0].name +
                                      "\" (zweite Wurzel in den Dateien?): " + lost);
     }
 
@@ -287,7 +287,7 @@ SkeletonBuildResult buildSkeleton(const std::vector<const xsi::AnimFile*>& anims
         const Bone& b = sk.bones[i];
         if (!(b.flags & fmt::kBoneFlagAlwaysXform) || b.parent < 0) continue;
         if (!bones[static_cast<std::size_t>(b.parent)].used && b.parent != 0)
-            res.warnings.push_back("\"" + b.name + "\" wird immer transformiert, haengt aber an \"" +
+            res.warnings.push_back("\"" + b.name + "\" wird immer transformiert, hängt aber an \"" +
                                    sk.bones[static_cast<std::size_t>(b.parent)].name +
                                    "\", das kein Mesh-Teil benutzt");
     }
@@ -303,14 +303,14 @@ SkeletonBuildResult buildSkeleton(const std::vector<const xsi::AnimFile*>& anims
         for (const auto& n : ref)
             if (!have.count(n)) missing += (missing.empty() ? "" : ", ") + n;
         throw std::runtime_error("Das Skelett passt nicht zur Referenz ($aseanimref_gla)" +
-                                 (extra.empty() ? std::string() : " - zusaetzlich: " + extra) +
+                                 (extra.empty() ? std::string() : " - zusätzlich: " + extra) +
                                  (missing.empty() ? std::string() : " - fehlt: " + missing));
     }
 
     for (const auto& c : spellingClashes)
         res.warnings.push_back("Bone in verschiedener Schreibweise, als derselbe behandelt: " + c);
     for (const auto& c : parentConflicts)
-        res.warnings.push_back("Bone \"" + c + "\" haengt in den Dateien an verschiedenen Eltern - "
+        res.warnings.push_back("Bone \"" + c + "\" hängt in den Dateien an verschiedenen Eltern - "
                                "die letzte Datei gilt (wie bei Carcass)");
     if (!baseDeviations.empty()) {
         std::string list;

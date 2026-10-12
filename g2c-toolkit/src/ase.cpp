@@ -264,8 +264,8 @@ Scene parse(const std::string& text, const std::string& baseDir) {
                                 if (stop) continue;
                                 if (b >= static_cast<long>(localBones.size()))
                                     throw std::runtime_error("ASE \"" + o.rawName + "\": Bone-Index " + std::to_string(b) +
-                                                             " ausserhalb der *MESH_BONE_LIST (" +
-                                                             std::to_string(localBones.size()) + " Eintraege)");
+                                                             " außerhalb der *MESH_BONE_LIST (" +
+                                                             std::to_string(localBones.size()) + " Einträge)");
                                 bv.w.push_back(BoneWeight{localBones[static_cast<std::size_t>(b)], w});
                             }
                             o.boneVerts.push_back(std::move(bv));
@@ -387,7 +387,7 @@ MdrResult buildMdr(const MdrInput& in) {
     for (const auto& o : sc.objects) {
         if (isLodCopy(o.name)) continue;
         if (o.name.rfind("tag_", 0) == 0)
-            throw std::runtime_error("Objekt \"" + o.rawName + "\" hat einen alten Tag-Namen - Tags heissen \"bolt_...\"");
+            throw std::runtime_error("Objekt \"" + o.rawName + "\" hat einen alten Tag-Namen - Tags heißen \"bolt_...\"");
         objs.push_back(&o);
     }
     if (objs.empty()) throw std::runtime_error("MDR: keine Objekte in LOD 0");
@@ -443,7 +443,7 @@ MdrResult buildMdr(const MdrInput& in) {
                         static_cast<double>(m.m[2][c]) * m.m[2][c];
             if (std::fabs(sq[0] - sq[1]) > 0.001 || std::fabs(sq[0] - sq[2]) > 0.001 || std::fabs(sq[1] - sq[2]) > 0.001)
                 throw std::runtime_error("Bone \"" + sk.bones[static_cast<std::size_t>(b)].name +
-                                         "\" ist in Frame " + std::to_string(f) + " ungleichmaessig skaliert");
+                                         "\" ist in Frame " + std::to_string(f) + " ungleichmäßig skaliert");
             for (double v : sq) {
                 mn = std::min(mn, v);
                 mx = std::max(mx, v);
@@ -451,7 +451,7 @@ MdrResult buildMdr(const MdrInput& in) {
         }
         if (mx - mn > 0.001)
             throw std::runtime_error("Bone \"" + sk.bones[static_cast<std::size_t>(b)].name +
-                                     "\" aendert seine Skalierung ueber die Frames");
+                                     "\" ändert seine Skalierung über die Frames");
         boneScale[wi] = F(std::sqrt((mn + mx) / 2.0));
         for (std::size_t f = 0; f < nFrames; ++f) {
             Mat3x4 m = in.frames[f][static_cast<std::size_t>(b)];

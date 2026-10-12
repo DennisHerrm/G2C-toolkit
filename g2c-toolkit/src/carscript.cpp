@@ -342,7 +342,7 @@ void parseInto(Script& script, const std::string& text, const std::string& origi
                 } catch (const std::exception&) {
                     throw std::runtime_error("$include in \"" + originName + "\" Zeile " +
                                              std::to_string(lineNo) + ": kann \"" + p.string() +
-                                             "\" nicht oeffnen");
+                                             "\" nicht öffnen");
                 }
                 parseInto(script, sub, p.string(), opt, depth + 1, baseDirForIncludes,
                           depth == 0 ? st.includeId : fromInclude, nextIncludeId);
@@ -458,7 +458,7 @@ double Statement::argNumber(std::size_t i, const char* what) const {
     // fields - undefined behaviour, in practice INT_MIN in animation.cfg.
     if (!std::isfinite(out) || std::fabs(out) > 2.0e9)
         throw std::runtime_error(std::string(what) + " in \"" + file + "\" Zeile " +
-                                 std::to_string(line) + ": \"" + s + "\" liegt ausserhalb des Zahlenbereichs");
+                                 std::to_string(line) + ": \"" + s + "\" liegt außerhalb des Zahlenbereichs");
     return out;
 }
 

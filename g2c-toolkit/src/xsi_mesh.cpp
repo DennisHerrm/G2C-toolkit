@@ -574,7 +574,7 @@ void reorderTag(GSurf& s) {
     };
     const int h = strictMax(L);
     if (h < 0)
-        throw std::runtime_error("Tag \"" + s.rawName + "\": das Dreieck braucht eine eindeutig laengste Seite "
+        throw std::runtime_error("Tag \"" + s.rawName + "\": das Dreieck braucht eine eindeutig längste Seite "
                                  "(gleichseitige Tags haben keine Richtung)");
     L[static_cast<std::size_t>(h)] = -1.0f;
     int m = strictMax(L);
@@ -662,12 +662,12 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
     if (!movedUp.empty()) {
         std::string list;
         for (const auto& b : movedUp) list += (list.empty() ? "" : ", ") + b;
-        res.stats.notes.push_back("Gewichte von " + list + " auf den naechsten Bone im Skelett darueber");
+        res.stats.notes.push_back("Gewichte von " + list + " auf den nächsten Bone im Skelett darüber");
     }
     if (!outside.empty()) {
         std::string list;
         for (const auto& b : outside) list += (list.empty() ? "" : ", ") + b;
-        warn.push_back("Gewichte auf Bones ausserhalb des Skeletts (" + list + ") fallen weg");
+        warn.push_back("Gewichte auf Bones außerhalb des Skeletts (" + list + ") fallen weg");
     }
 
     // --- Grab every mesh ---------------------------------------------------
@@ -682,7 +682,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         s.lod = lodOfName(nd.name);
         if (s.lod > 0 && nd.name.find("tag_") != std::string::npos) continue;
         if (s.lod == 0 && nd.name.rfind("tag_", 0) == 0)
-            throw std::runtime_error("Mesh \"" + nd.name + "\" hat einen alten Tag-Namen - Tags heissen "
+            throw std::runtime_error("Mesh \"" + nd.name + "\" hat einen alten Tag-Namen - Tags heißen "
                                      "\"bolt_...\"");
         if (nd.material.size() > 1 && nd.material[1] == ':')
             throw std::runtime_error("Material \"" + nd.material + "\" von \"" + nd.name +
@@ -733,7 +733,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                 }
                 for (std::size_t k = 0; k < nTri; ++k)
                     if (tl->values[at + k].asInt().value_or(0) != 3)
-                        throw std::runtime_error("Mesh \"" + nd.name + "\" enthaelt Vierecke - nur Dreiecke");
+                        throw std::runtime_error("Mesh \"" + nd.name + "\" enthält Vierecke - nur Dreiecke");
                 at += nTri;
             }
             const std::size_t n = nTri * 3;
@@ -783,7 +783,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                 }
             }
             if (!ok) {
-                warn.push_back("Dreiecksliste von \"" + nd.name + "\" abgeschnitten oder mit ungueltigem Index");
+                warn.push_back("Dreiecksliste von \"" + nd.name + "\" abgeschnitten oder mit ungültigem Index");
                 continue;
             }
 
@@ -818,13 +818,13 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                     const int pi = p[corner];
                     if (pi < 0 || static_cast<std::size_t>(pi) >= worldPos.size())
                         throw std::runtime_error("Mesh \"" + nd.name + "\": Positionsindex " + std::to_string(pi) +
-                                                 " ausserhalb der Punktliste");
+                                                 " außerhalb der Punktliste");
                     GVert v;
                     v.p = worldPos[static_cast<std::size_t>(pi)];
                     if (gotN && nrm) {
                         const int ix = nn[corner];
                         if (ix < 0 || static_cast<std::size_t>(ix) >= nrm->count())
-                            throw std::runtime_error("Mesh \"" + nd.name + "\": Normalenindex ausserhalb");
+                            throw std::runtime_error("Mesh \"" + nd.name + "\": Normalenindex außerhalb");
                         std::array<float, 3> nz = cmVec(N, conv(*nrm, static_cast<std::size_t>(ix)));
                         const float l = F(std::sqrt(static_cast<double>(F((static_cast<double>(nz[2]) * nz[2] + static_cast<double>(nz[1]) * nz[1]) + static_cast<double>(nz[0]) * nz[0]))));
                         if (l > 1e-10f) {
@@ -841,7 +841,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
                     if (gotU && uv) {
                         const int ix = uu[corner];
                         if (ix < 0 || static_cast<std::size_t>(ix) >= uv->count())
-                            throw std::runtime_error("Mesh \"" + nd.name + "\": UV-Index ausserhalb");
+                            throw std::runtime_error("Mesh \"" + nd.name + "\": UV-Index außerhalb");
                         uu0 = uv->values[2 * static_cast<std::size_t>(ix)];
                         vv0 = uv->values[2 * static_cast<std::size_t>(ix) + 1];
                         if (vv0 < 0.0f) vv0 = F(static_cast<double>(vv0) + 1.0);
@@ -893,7 +893,7 @@ MeshImportResult importMesh(const Document& doc, const MeshImportOptions& opt) {
         sf.parentName = p >= 0 ? nodes[static_cast<std::size_t>(p)].name : std::string();
     }
     if (vertsWithoutWeights)
-        warn.push_back(std::to_string(vertsWithoutWeights) + " Vertices ohne Gewicht - an Bone 0 gehaengt "
+        warn.push_back(std::to_string(vertsWithoutWeights) + " Vertices ohne Gewicht - an Bone 0 gehängt "
                        "(Carcass bricht hier ab)");
     finishMesh(surfs, opt, res, false);
     return res;
@@ -920,7 +920,7 @@ void finishMesh(std::vector<GSurf>& surfs, const MeshImportOptions& opt, MeshImp
         for (const auto& s : surfs)
             if (s.lod == static_cast<int>(L) && L >= lods.size()) more = true;
         if (more) {
-            warn.push_back("LOD " + std::to_string(L) + " folgt nach einer Luecke und wird nicht benutzt");
+            warn.push_back("LOD " + std::to_string(L) + " folgt nach einer Lücke und wird nicht benutzt");
             break;
         }
     }
@@ -928,7 +928,7 @@ void finishMesh(std::vector<GSurf>& surfs, const MeshImportOptions& opt, MeshImp
         if (lods[L].size() != lods[0].size())
             throw std::runtime_error("LOD " + std::to_string(L) + " hat " + std::to_string(lods[L].size()) +
                                      " Surfaces, LOD 0 hat " + std::to_string(lods[0].size()) +
-                                     " - alle LODs muessen gleich viele haben");
+                                     " - alle LODs müssen gleich viele haben");
 
     const auto parentMeshName = [](const GSurf& s) { return s.parentName; };
 
@@ -1079,11 +1079,11 @@ void finishMesh(std::vector<GSurf>& surfs, const MeshImportOptions& opt, MeshImp
                 if (sf.vertices.size() > 1000 || sf.triangles.size() > 2000)
                     warn.push_back("Surface \"" + sf.name + "\": " + std::to_string(sf.vertices.size()) +
                                    " Vertices, " + std::to_string(sf.triangles.size()) +
-                                   " Dreiecke - Jedi Academy laedt hoechstens 1000 Vertices und 2000 "
+                                   " Dreiecke - Jedi Academy lädt höchstens 1000 Vertices und 2000 "
                                    "Dreiecke pro Surface");
                 else if (sf.vertices.size() > 500)
                     res.stats.notes.push_back("Surface \"" + sf.name + "\": " + std::to_string(sf.vertices.size()) +
-                                              " Vertices - ueber 500 keine Stencil-Schatten");
+                                              " Vertices - über 500 keine Stencil-Schatten");
                 if (sf.triangles.empty()) warn.push_back("Surface \"" + sf.name + "\" hat keine Dreiecke");
                 if (sf.flags & fmt::kSurfFlagIsBolt) ++res.stats.tags;
                 if (sf.flags & fmt::kSurfFlagOff) ++res.stats.offSurfaces;
@@ -1114,8 +1114,8 @@ void finishMesh(std::vector<GSurf>& surfs, const MeshImportOptions& opt, MeshImp
         for (std::size_t i = 0; i < L0.size(); ++i)
             if (!seen[i]) lost += (lost.empty() ? "" : ", ") + L0[i]->rawName;
         if (!lost.empty())
-            throw std::runtime_error("Diese Surfaces haengen nicht unter der ersten (\"" + L0[0]->rawName +
-                                     "\"): " + lost + " - alle Meshes muessen unter dem ersten Mesh liegen");
+            throw std::runtime_error("Diese Surfaces hängen nicht unter der ersten (\"" + L0[0]->rawName +
+                                     "\"): " + lost + " - alle Meshes müssen unter dem ersten Mesh liegen");
     }
 
     res.stats.surfaces = L0.size();
@@ -1145,7 +1145,7 @@ MeshImportResult importMeshAse(const ase::Scene& scene, const MeshImportOptions&
         s.lod = lodOfName(o.name);
         if (s.lod > 0 && o.name.find("tag_") != std::string::npos) continue;
         if (s.lod == 0 && o.name.rfind("tag_", 0) == 0)
-            throw std::runtime_error("Objekt \"" + o.rawName + "\" hat einen alten Tag-Namen - Tags heissen \"bolt_...\"");
+            throw std::runtime_error("Objekt \"" + o.rawName + "\" hat einen alten Tag-Namen - Tags heißen \"bolt_...\"");
         s.material = o.materialRef >= 0 && static_cast<std::size_t>(o.materialRef) < scene.materials.size()
                          ? scene.materials[static_cast<std::size_t>(o.materialRef)]
                          : std::string();
@@ -1199,7 +1199,7 @@ MeshImportResult importMeshAse(const ase::Scene& scene, const MeshImportOptions&
         }
         surfs.push_back(std::move(s));
     }
-    if (surfs.empty()) throw std::runtime_error("ASE: keine Objekte fuer die GLM");
+    if (surfs.empty()) throw std::runtime_error("ASE: keine Objekte für die GLM");
     finishMesh(surfs, opt, res, true);
     return res;
 }

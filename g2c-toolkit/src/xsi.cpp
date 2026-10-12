@@ -87,7 +87,7 @@ public:
             advance();
             const std::size_t start = i_;
             while (i_ < s_.size() && s_[i_] != '"') {
-                if (s_[i_] == '\n') fail("Zeichenkette ueber Zeilenende hinaus");
+                if (s_[i_] == '\n') fail("Zeichenkette über Zeilenende hinaus");
                 ++i_;
             }
             if (i_ >= s_.size()) fail("Zeichenkette nicht geschlossen");
@@ -121,7 +121,7 @@ bool isIdentStart(char c) {
 }
 
 void parseBody(Scanner& sc, Template& out, int depth) {
-    if (depth > 256) sc.fail("Templates zu tief verschachtelt (moeglicher Zyklus)");
+    if (depth > 256) sc.fail("Templates zu tief verschachtelt (möglicher Zyklus)");
 
     for (;;) {
         sc.skipTrivia();
@@ -204,7 +204,7 @@ Version parseHeader(Scanner& sc) {
     Version v;
     v.raw = ver;
     if (ver.size() < 7)
-        throw std::runtime_error("Unverstaendliche dotXSI-Versionskennung \"" + ver + "\"");
+        throw std::runtime_error("Unverständliche dotXSI-Versionskennung \"" + ver + "\"");
 
     const std::string digits = ver.substr(0, 4);
     const std::string kind = ver.substr(4);
@@ -224,8 +224,8 @@ Version parseHeader(Scanner& sc) {
 
     if (v.binary)
         throw std::runtime_error(
-            "Binaeres dotXSI (" + ver +
-            ") wird nicht unterstuetzt. Carcass kann es auch nicht — es akzeptiert nur "
+            "Binäres dotXSI (" + ver +
+            ") wird nicht unterstützt. Carcass kann es auch nicht — es akzeptiert nur "
             "0101txt, 0103txt, 0300txt und 0350txt.");
 
     // In all variants, the version tag is followed by one more number
@@ -241,7 +241,7 @@ Version parseHeader(Scanner& sc) {
 
 std::string Version::toString() const {
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%d.%d%s", major, minor, binary ? " (binaer)" : "");
+    std::snprintf(buf, sizeof(buf), "%d.%d%s", major, minor, binary ? " (binär)" : "");
     return buf;
 }
 
