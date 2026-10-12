@@ -500,6 +500,35 @@ void testFractionalSpeed() {
     }
 }
 
+// A one-frame .xsi (as the exporter now writes them) builds to one frame:
+// the animation.cfg keeps the original count instead of 2.
+void testOneFrameBuild() {
+    section("Ein-Frame-XSI bauen");
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / uniqueTestDir("oneframe") / "base";
+    fs::create_directories(root / "models" / "players" / "t");
+    std::ofstream(root / "models" / "players" / "t" / "one.xsi") << ctAnim(1, 3.0f);
+    std::ofstream(root / "models" / "players" / "t" / "two.xsi") << ctAnim(4, 3.0f);
+    std::ofstream(root / "models" / "players" / "t" / "root.xsi") << ctMesh({"pelvis", "ltibia", "jaw"});
+    std::ofstream(root / "models" / "players" / "t" / "t.car")
+        << "$aseanimgrabinit\r\n$scale 1.0\r\n"
+           "$aseanimgrab models/players/t/one.xsi -loop -1\r\n"
+           "$aseanimgrab models/players/t/two.xsi\r\n"
+           "$aseanimgrabfinalize\r\n"
+           "$aseanimconvertmdx_noask models/players/t/root -makeskel models/players/t/t\r\n";
+    const std::string car = (root / "models" / "players" / "t" / "t.car").string();
+    g2::car::JobOptions jo;
+    jo.build.baseDir = root.string();
+    jo.outputDir = (root / "out").string();
+    jo.outputs = g2::car::JobOutputs{true, true, false, false, false, false};
+    const auto r = g2::car::runJob(g2::car::parseFile(car), car, jo);
+    check(r.anim.sequences.size() == 2 && r.anim.sequences[0].frameCount == 1,
+          "Ein-Frame-Datei ergibt eine Sequenz mit 1 Frame");
+    check(r.anim.sequences.size() == 2 && r.anim.sequences[1].targetFrame == 1,
+          "die nächste Sequenz beginnt bei Frame 1");
+    check(r.anim.totalFrames() == 5, "GLA mit 1 + 4 Frames");
+}
+
 void testMeshLikeCarcass() {
     section("GLM aus dotXSI wie Carcass: Zusammenlegen nach Wert, LODs, Tags, Glätten");
     // Two triangles sharing an edge, but with SEPARATE position indices for

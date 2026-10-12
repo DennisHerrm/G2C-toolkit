@@ -74,6 +74,11 @@ struct ExportOptions {
     };
     BasePose basePose = BasePose::World;
 
+    // A sequence of ONE frame: written as one frame (the default - g2c reads
+    // it and the animation.cfg keeps the original count), or as two identical
+    // frames for Carcass, which rejects one-frame files.
+    bool doubleSingleFrame = false;
+
     // Which dotXSI version goes into the header.
     //
     // The difference is not just the number: v3.0 NAMES its templates
@@ -206,6 +211,12 @@ car::Script buildScript(const Grouping& g, const std::string& xsiPrefix,
                         bool keepMotion = false, const std::string& makeSkel = {});
 
 // Produces the contents of a dotXSI file for the given section.
+// The frame rate for an exported file's SI_Scene, from the sequence's speed
+// in the animation.cfg: a .car line without -framespeed builds at exactly
+// this rate. Backwards (negative) plays the same frames, so the magnitude;
+// 0 (unknown) gives 20.
+int sceneRateFor(double cfgSpeed);
+
 std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
                            const ExportOptions& opt);
 

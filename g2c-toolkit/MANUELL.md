@@ -66,7 +66,7 @@ build\g2_tests.exe
 ## Erwartete Ausgabe
 
 ```
-605/605 Pruefungen bestanden
+616/616 Pruefungen bestanden
 ```
 
 ## Oberflaeche automatisch durchklicken

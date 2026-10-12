@@ -1276,6 +1276,7 @@ void usage() {
         "        -force             vorhandene Dateien überschreiben\n"
         "        -makeskel <pfad>   -makeskel im erzeugten .car\n"
         "        -xsi 3.0|3.5       dotXSI-Fassung, -basepose world|local|none\n"
+        "        -carcass           Ein-Frame-Sequenzen als zwei Frames (für Carcass)\n"
         "  g2c makecar <ordner> [-o <a.car>] [-root <root.xsi>] [-makeskel <pfad>]\n"
         "        Aus einem Ordner voller .xsi ein .car erzeugen\n"
         "        -basedir <pfad>  -enums <anims.h>  -origin x y z\n"
@@ -1494,6 +1495,7 @@ int cmdExport(int argc, char** argv) {
     bool keepMotion = false;
     std::string makeSkel;
     g2::xsiexp::ExportOptions::BasePose basePose = g2::xsiexp::ExportOptions::BasePose::World;
+    bool doubleSingleFrame = false;
     bool writeScale = true;
     g2::xsiexp::ExportOptions::Version xsiVersion = g2::xsiexp::ExportOptions::Version::V30;
 
@@ -1527,6 +1529,7 @@ int cmdExport(int argc, char** argv) {
             else basePose = g2::xsiexp::ExportOptions::BasePose::World;
         }
         else if (a == "-makecar" && i + 1 < argc) makeCarPath = argv[++i];
+        else if (a == "-carcass") doubleSingleFrame = true;   // one-frame sequences as two frames
         else if (a == "-force") force = true;
         // argFloat instead of stof: with stof "-scale 0,64" silently gave 0,
         // and the GLA's scale was used without any notice.
@@ -1552,6 +1555,7 @@ int cmdExport(int argc, char** argv) {
     g2::xsiexp::ExportOptions opt;
     opt.basePose = basePose;
     opt.version = xsiVersion;
+    opt.doubleSingleFrame = doubleSingleFrame;
     opt.scale = scale > 0.0f ? scale : (gla.skeleton.scale > 0.0f ? gla.skeleton.scale : 0.64f);
     opt.origin = origin;
 
@@ -1672,6 +1676,15 @@ int cmdExport(int argc, char** argv) {
         if (!selected(s.name)) continue;
         try {
             g2::xsiexp::ExportOptions one = opt;
+            // The rate from the animation.cfg into SI_Scene - as the UI does.
+            // It used to stay at 20: a file exported here and grabbed
+            // without -framespeed then played at the wrong speed.
+            {
+                double speed = 0.0;
+                for (const auto& e : cfg)
+                    if (e.name == s.name && e.start == s.startFrame) speed = e.fps;
+                one.fps = g2::xsiexp::sceneRateFor(speed);
+            }
             // The .frames first, if there is one - it is the first-hand source.
             // If it is missing, the motion can be reconstructed from the GLA
             // itself: Carcass adds it as a linear ramp onto the root bone, and

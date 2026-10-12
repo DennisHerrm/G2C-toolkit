@@ -4067,3 +4067,19 @@ Fenster ziehen öffnet sie in der Vorschau.
 - Fortschritt beim Bauen auch im Taskleisten-Symbol.
 - Echte Umlaute in allen deutschen Texten.
 - Dear ImGui 1.92.8 (vorher 1.92.1; die Backends waren sogar noch älter).
+
+---
+
+## 76. Ein-Frame-Sequenzen bleiben ein Frame
+
+GLA -> XSI schreibt eine Sequenz mit einem Frame jetzt als genau einen Frame.
+Bisher wurde sie verdoppelt, weil Carcass Ein-Frame-Dateien ablehnt; die neu
+gebaute animation.cfg sagte dann 2 statt 1, und jeder Timer, den das Spiel aus
+der Länge ableitet, verdoppelte sich. g2c liest Ein-Frame-Dateien.
+
+Wer die Dateien doch Carcass geben will: in der Oberfläche "Wie Carcass
+runden und glätten" einschalten, auf der Kommandozeile `g2c export ... -carcass`.
+
+Deine 39 Ein-Frame-Animationen in `__new_anim/multiplayer` sind neu
+exportiert (die alten liegen in `C:\jka_animations\g2c_backupsmultiplayer_2frames_2026-10-12`); nach dem nächsten Bauen stimmen alle 177
+MP-Sequenzen in Frames, Loop und Speed mit dem Original überein.
