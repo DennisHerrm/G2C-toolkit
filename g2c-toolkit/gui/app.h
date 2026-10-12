@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "gui/assets.h"
 #include "gui/i18n.h"
 #include "gui/icons.h"
 #include "gui/preview.h"
@@ -21,6 +22,7 @@
 #include "g2/carbuild.h"
 #include "g2/carscript.h"
 #include "g2/carvalidate.h"
+#include "g2/mdxm.h"
 
 #include <atomic>
 #include <deque>
@@ -75,6 +77,16 @@ struct Platform {
     // Version of this build. Tests pretend to be an older release.
     update::BuildInfo build = update::thisBuild();
 
+    // --- Textures for the preview (DirectX in main_win32.cpp) ---------------
+    //
+    // Uploads RGBA pixels and returns an ImTextureID, 0 on failure. Missing in
+    // the tests: the preview then shades the model without textures.
+    std::function<std::uint64_t(int w, int h, const std::uint8_t* rgba)> createTexture;
+    std::function<void(std::uint64_t id)> destroyTexture;
+    // An ImDrawCallback that switches to a repeating sampler, so texture
+    // coordinates outside 0..1 tile as in the game. nullptr = clamp.
+    void* wrapSampler = nullptr;
+
     // Opens a web page in the browser: release notes, download page.
     std::function<void(const std::string& url)> openUrl;
 
@@ -89,6 +101,8 @@ struct Document {
     std::string  title;      // file name, shown in the tab bar
     car::Script  script;
     bool         dirty = false;
+    // Counts every change (see App::touch); undo and the automatic check use it.
+    std::uint64_t rev = 0;
     bool         open = true;
     std::string  loadError;
 
@@ -112,17 +126,40 @@ struct Document {
     void syncSelection() { selected.assign(script.grabs.size(), 0); }
 };
 
+// A change to a script: unsaved, to be checked again, and one step for undo.
+inline void touch(Document& d) {
+    d.dirty = true;
+    d.validated = false;
+    ++d.rev;
+}
+
 // Settings that apply to all tabs.
 struct Settings {
     std::string enumPath;      // anims.h
     std::string baseDir;       // root under which models/ lives
     std::string referenceGla;  // skeleton source
 
+    // What a build writes - every file can be switched off (JobOutputs).
+    bool writeGla = true;
+    bool writeCfg = true;
     bool writeFrames = true;
     bool writeMesh = true;
     bool writeSkin = true;
+    bool writeInfo = true;
     bool useCache = true;
     bool carcassCompat = false;
+    // Build the skeleton anew from the sources (as Carcass always did) even
+    // when a GLA exists; its bone order is kept if the bones are the same.
+    bool newSkeleton = false;
+    // Carcass's -framestep: keep every n-th frame (1 = all).
+    int  frameStep = 1;
+
+    // Adding .xsi (files, folders, drag and drop) skips every file the script
+    // already grabs - pick the whole folder, only the new ones go in. On by
+    // default: the same file twice from adding is practically always a
+    // mistake (deliberate duplicates with another frame range come from
+    // copy/paste or the sequence dialog, which this does not touch).
+    bool onlyNewXsi = true;
 
     // Create a .car.bak on the first save.
     //
@@ -241,7 +278,7 @@ public:
         int         start = 0;
         int         count = 0;
         int         loopFrame = -1;
-        int         fps = 20;
+        double      fps = 20;
     };
 
     struct ExtractState {
@@ -289,6 +326,26 @@ public:
     };
 
     Mode                mode() const { return mode_; }
+    int                 previewSequence() const { return previewSeq_; }
+    // A model shown in the preview, skinned with the playing animation.
+    bool                loadPreviewGlm(const std::string& path);
+    bool                previewGlmLoaded() const { return previewGlmLoaded_; }
+    // A short notification bottom right; with an optional button.
+    void                toast(LogLine::Kind kind, std::string text, std::string actionLabel = {},
+                              std::function<void()> action = {});
+    std::size_t         toastCount() const { return toasts_.size(); }
+    bool                bottomPanelOpen() const { return bottomOpen_[static_cast<int>(mode_)]; }
+    // Undo and redo per script (Ctrl+Z / Ctrl+Y).
+    bool                undo();
+    bool                redo();
+    bool                canUndo() const;
+    bool                canRedo() const;
+    // 0..1 while building, -1 otherwise (taskbar progress).
+    float               buildProgress() const;
+    void                openPalette() { paletteRequest_ = true; }
+    // Textures live on the graphics card: released before the device goes.
+    void                releaseGpuResources();
+    bool                previewPlaying() const { return playback_.playing; }
     void                setMode(Mode m) { mode_ = m; }
     ExtractState&       extract() { return extract_; }
     const ExtractState& extract() const { return extract_; }
@@ -299,6 +356,11 @@ public:
 
     // Tests only: set the active tab without drawing the UI.
     void setActiveForTest(int i) { active_ = i; }
+    // Tests only: the table's quick filter and whether a row would be shown.
+    void setRowFilterForTest(int f) { rowFilter_ = f; }
+    bool rowShownForTest(std::size_t doc, std::size_t row) const {
+        return doc < docs_.size() && rowVisible(docs_[doc], row);
+    }
 
     // Select a tab from outside: sets active_ AND tells ImGui on the next draw
     // which tab to show.
@@ -344,7 +406,7 @@ public:
     // Appends files as $aseanimgrab. `toAll` distributes them to all tabs.
     std::size_t addXsiFiles(const std::vector<std::string>& files, bool toAll);
 
-    void validateDocument(std::size_t index);
+    void validateDocument(std::size_t index, bool light = false);
     void validateAll();
 
     bool loadEnums(const std::string& path);
@@ -412,6 +474,9 @@ public:
 
     // Append all .xsi files of a folder - recursively, sorted.
     std::size_t addXsiFolder(const std::string& folder, bool toAll);
+    // Keys of every .xsi the script grabs (resolved like the build does);
+    // used by Settings::onlyNewXsi.
+    std::set<std::string> grabbedXsiKeys(const Document& d) const;
 
     // Frame count of a source file, if already known. -1 = not read yet,
     // -2 = not found.
@@ -428,7 +493,7 @@ public:
     // The table used to show "auto" and the dialog 0 for most sequences -
     // Assimilate showed the real number, and nobody could see how fast an
     // animation actually runs.
-    int effectiveSpeed(const car::GrabDirective& g) const;
+    double effectiveSpeed(const car::GrabDirective& g) const;
 
     // Start frame of every grab in the GLA, as the build lays them out. -1
     // from the first grab whose frame count is not known yet.
@@ -482,7 +547,7 @@ public:
     // Sets -framespeed on several rows at once; nullopt removes it again
     // (back to the rate from the .xsi). Returns the number of rows changed.
     std::size_t setFrameSpeed(std::size_t docIndex, const std::vector<std::size_t>& rows,
-                              std::optional<int> speed);
+                              std::optional<double> speed);
 
     // Remember settings across sessions.
     // Folder for settings and window state.
@@ -592,8 +657,49 @@ private:
     //
     // Without an icon font only the text is drawn, and the button is
     // correspondingly narrower.
+    // width: 0 = fit the text, < 0 = fill the row (content centered).
     static bool iconButton(const char* icon, const IconColor& col, const char* text,
-                           bool small = false);
+                           bool small = false, float width = 0.0f);
+    // Numbered heading for the guided panels; green with a check when done.
+    void stepHeader(int n, const char* title, bool done);
+    // Muted wrapped line with an info icon: why a button is disabled, what
+    // to do next.
+    static void hintText(const char* text);
+    // Shared "no GLA yet" page of the extract and preview modes.
+    void drawGlaEmptyState(bool forPreview);
+    float emptyStateHeight_ = 0.0f;
+
+    // Quick filter of the sequence table: 0 all, 1 issues, 2 no enum,
+    // 3 backwards, 4 with parts.
+    int   rowFilter_ = 0;
+    bool  rowHasIssue(const Document& d, std::size_t i) const;
+    // Loop/speed edited in place: row, column (0 loop, 1 speed), text.
+    int   editCellRow_ = -1;
+    int   editCellCol_ = -1;
+    bool  focusCellField_ = false;
+    char  editCellBuf_[32] = {};
+
+    // Undo: per script path, the states before each change.
+    struct UndoState {
+        std::vector<car::Script> undo, redo;
+        car::Script              base;
+        std::uint64_t            baseRev = 0;
+        bool                     baseSet = false;
+        double                   lastPush = 0.0;
+    };
+    std::map<std::string, UndoState> undo_;
+    void  trackUndo();
+
+    // Command palette (Ctrl+K).
+    bool  paletteRequest_ = false;
+    bool  paletteFocus_ = false;
+    char  paletteBuf_[128] = {};
+    int   paletteSel_ = 0;
+    void  drawPalette();
+    float welcomeW_ = 0.0f, welcomeH_ = 0.0f;
+    void openGlaDialog();
+    void drawExtractSteps(std::size_t nsel);
+    void drawExtractList();
     void drawStatusBar();
     void applyStyle();
     void refreshTabTitles();
@@ -658,6 +764,67 @@ private:
     PreviewCamera        previewCam_;
     Playback             playback_;
     int                  previewSeq_ = -1;
+    MdxmFile             previewGlm_;
+    bool                 previewGlmLoaded_ = false;
+    std::string          previewGlmPath_;
+    bool                 pvShowMesh_ = true;
+    bool                 pvShowSkeleton_ = true;
+    bool                 pvWireframe_ = false;
+    // Textures of the preview model.
+    struct PreviewTextures {
+        std::vector<std::string>             gameDirs;   // detected GameData folders
+        bool                                 gameDirsScanned = false;
+        std::string                          fsKey;      // what fs and shaders were built for
+        std::string                          activeSource; // GameData folder in use
+        AssetFs                              fs;
+        std::map<std::string, std::string>   shaders;
+        std::vector<std::string>             skins;      // game paths
+        std::string                          skin;       // in use
+        std::vector<std::uint64_t>           perSurface; // LOD 0 surface -> texture
+        std::vector<char>                    hidden;     // switched off by the skin
+        std::map<std::string, std::uint64_t> cache;      // image -> texture
+        std::size_t                          missing = 0;
+        bool                                 dirty = true;
+    };
+    PreviewTextures      pvTex_;
+    std::string          pvTexSource_;   // GameData folder; "-" = none, "" = first found
+    std::string          pvSkin_;        // file name of the chosen skin
+    void                 refreshPreviewTextures();
+    void                 releaseTextureCache();
+
+    // --- Notifications ("toasts") bottom right ----------------------------------
+    struct Toast {
+        LogLine::Kind         kind = LogLine::Kind::Info;
+        std::string           text;
+        std::string           actionLabel;
+        std::function<void()> action;
+        double                born = 0.0;   // seconds, steady clock
+        double                life = 5.0;
+    };
+    std::vector<Toast>   toasts_;
+    void                 drawToasts();
+
+    // --- Bottom panel (issues / log): open or folded, per mode ------------------
+    bool                 bottomOpen_[3] = {false, false, false};
+    std::size_t          badLogCount_ = 0;     // under logMutex_
+    std::size_t          badLogSeen_ = 0;
+    void                 drawBottomPanel(float height);
+
+    // --- Build end, noticed in the UI thread ------------------------------------
+    bool                 wasBuilding_ = false;
+    double               buildStarted_ = 0.0;
+    std::size_t          badAtBuildStart_ = 0;
+    std::size_t          buildCount_ = 0;
+    std::string          buildFirstOut_;
+    void                 onBuildFinished();
+
+    // --- Build mode pieces --------------------------------------------------------
+    void                 drawWelcome();
+    void                 drawPathStatus();
+    void                 drawOutputChips();
+    // Validation in the background after edits (cheap: no frame counts).
+    double               lastEditSeen_ = 0.0;
+    std::uint64_t        lastRevSeen_ = 0;
     double               previewLastTime_ = 0.0;
     ExtractState         extract_;
     char                 extractFilter_[128] = {0};
@@ -700,7 +867,7 @@ private:
     // "Set framespeed" for several rows: which rows of which script.
     std::vector<std::size_t> speedRows_;
     std::string              speedDocPath_;
-    int                      speedValue_ = 20;
+    double                   speedValue_ = 20;
 
     // Created in the constructor when the platform offers network access.
     std::unique_ptr<update::Updater> updater_;

@@ -422,6 +422,11 @@ car::Script buildScript(const Grouping& g, const std::string& xsiPrefix,
     return sc;
 }
 
+int sceneRateFor(double cfgSpeed) {
+    if (cfgSpeed == 0.0 || !std::isfinite(cfgSpeed)) return 20;
+    return std::max(1, static_cast<int>(std::lround(std::fabs(cfgSpeed))));
+}
+
 std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
                            const ExportOptions& opt) {
     const auto& skel = gla.skeleton;
@@ -429,24 +434,21 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     if (numBones == 0) throw std::runtime_error("GLA ohne Skelett");
     if (seq.frameCount <= 0) throw std::runtime_error("Sequenz ohne Frames");
 
-    // A single-frame sequence is written as TWO identical frames.
-    //
-    // Carcass rejects an .xsi with only one frame:
+    // A single-frame sequence stays ONE frame - unless Carcass is meant to
+    // read the file. Carcass rejects an .xsi with only one frame:
     //
     //   XSI file-format doesn't support 1-frames files 100% legally,
     //   re-export this file please!
     //
-    // Accordingly, all 58 of Raven's own single-frame sequences are
-    // "-additional" subranges of longer files; there are no standalone
-    // single-frame files there.
-    //
-    // The second frame is a copy of the first, so the animation is unchanged.
-    // Anyone generating the script via "Alles + .car" gets -additional anyway
-    // and never notices; anyone exporting a single sequence can build it with
-    // this file instead of not at all.
-    const int outFrames = seq.frameCount == 1 ? 2 : seq.frameCount;
+    // (all 58 of Raven's own single-frame sequences are "-additional"
+    // subranges of longer files). For Carcass the frame is doubled - the
+    // animation is unchanged, but the rebuilt animation.cfg then says 2
+    // frames where the original said 1, and every timer the game derives
+    // from the length doubles. g2c reads one-frame files, so by default the
+    // count is kept.
+    const int outFrames = seq.frameCount == 1 && opt.doubleSingleFrame ? 2 : seq.frameCount;
     if (seq.startFrame < 0 || seq.startFrame + seq.frameCount > gla.numFrames)
-        throw std::runtime_error("Sequenzbereich liegt ausserhalb der GLA");
+        throw std::runtime_error("Sequenzbereich liegt außerhalb der GLA");
 
     const float scale = opt.scale > 0.0f ? opt.scale : 1.0f;
     const Mat3x4 C = axisC();
@@ -493,7 +495,7 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             }
         }
         if (topo.size() != static_cast<std::size_t>(numBones))
-            throw std::runtime_error("Skelett enthaelt einen Zyklus");
+            throw std::runtime_error("Skelett enthält einen Zyklus");
     }
 
     for (int f = 0; f < outFrames; ++f) {

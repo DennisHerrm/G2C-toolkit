@@ -143,7 +143,7 @@ static void testReviewGui() {
     g2::gui::App app{g2::gui::Platform{}};
     ck(app.documents().size() == 1, "B wiederhergestellt, C fehlt auf der Platte");
     ck(!app.documents().empty() && fs::path(app.documents()[app.activeTab()].path).filename() == "b.car",
-       "REGRESSION: der aktive Tab kommt nach Pfad zurueck");
+       "REGRESSION: der aktive Tab kommt nach Pfad zurück");
     app.openCar(A.string());
     ck(app.documents().back().outputDir == (root / "outA").string(),
        "REGRESSION: Ausgabeordner eines geschlossenen Skripts im Ordner 'a=b' bleibt erhalten");
@@ -253,7 +253,7 @@ static void testUpdater() {
     ck(none, "kaputtes JSON abgelehnt, auch 100000 Ebenen tief");
     const auto odd = upd::parseRelease("{\"tag_name\":\"v1.0.0\",\"assets\":[{\"name\":\"x\"},{\"browser_download_url\":\"u\"},"
                                        "{\"name\":\"g2c.exe\",\"browser_download_url\":\"u\",\"size\":-5}],\"prerelease\":\"ja\"}");
-    ck(odd && odd->assets.size() == 1 && odd->assets[0].size == 0 && !odd->prerelease, "unvollstaendige Eintraege uebergangen");
+    ck(odd && odd->assets.size() == 1 && odd->assets[0].size == 0 && !odd->prerelease, "unvollstaendige Einträge übergangen");
   }
 
   // Which release is worth offering?
@@ -318,7 +318,7 @@ static void testUpdater() {
     ck(upd::replaceFile(d / "g2c.exe", d / "neu2").empty(), "zweites Mal trotz altem .old");
     ck(slurp(d / "g2c.exe") == "MZneu2" && slurp(d / "g2c.exe.old") == "MZneu", "richtige Reihenfolge");
     ck(!upd::replaceFile(d / "g2c.exe", d / "fehlt").empty(), "fehlende Quelle gemeldet");
-    ck(slurp(d / "g2c.exe") == "MZneu2", "Ziel nach Fehlschlag unveraendert");
+    ck(slurp(d / "g2c.exe") == "MZneu2", "Ziel nach Fehlschlag unverändert");
     // A failed swap already cleared the old .old - put one back, as a real
     // update leaves it.
     spit(d / "g2c.exe.old", "MZrest");
@@ -361,7 +361,7 @@ static void testUpdater() {
     u.wait();
     auto st = u.status();
     ck(st.phase == upd::Phase::Available && st.release.tag == "v1.1.0", "neue Version gefunden");
-    ck(fs::file_size(dir / "g2c.exe") == 5, "Pruefen allein aendert nichts");
+    ck(fs::file_size(dir / "g2c.exe") == 5, "Prüfen allein ändert nichts");
     u.install();
     u.wait();
     st = u.status();
@@ -369,7 +369,7 @@ static void testUpdater() {
     ck(slurp(dir / "g2c.exe") == newExe, "g2c.exe ersetzt");
     ck(slurp(dir / "g2c-cli.exe") == newCli, "g2c-cli.exe daneben mit ersetzt");
     ck(slurp(dir / "g2c.exe.old") == "MZalt", "alte Exe als .old");
-    ck(st.done == st.total && st.total == newExe.size() + newCli.size(), "Fortschritt vollstaendig");
+    ck(st.done == st.total && st.total == newExe.size() + newCli.size(), "Fortschritt vollständig");
     ck(!leftovers(), "keine .download-Reste");
     u.install();
     u.wait();
@@ -380,12 +380,12 @@ static void testUpdater() {
     next.startup(false, upd::Channel::Stable);
     next.wait();
     ck(!fs::exists(dir / "g2c.exe.old") && !fs::exists(dir / "g2c-cli.exe.old"), ".old beim Start aufgeraeumt");
-    ck(next.status().phase == upd::Phase::Idle, "ohne Auftrag keine Pruefung");
+    ck(next.status().phase == upd::Phase::Idle, "ohne Auftrag keine Prüfung");
     const int before = srv.gets;
     next.startup(true, upd::Channel::Stable);
     next.wait();
     ck(srv.gets == before + 1 && next.status().phase == upd::Phase::UpToDate && !next.status().manual,
-       "automatische Pruefung: aktuell, still");
+       "automatische Prüfung: aktuell, still");
   }
 
   // Every failure: reported, nothing replaced, nothing left behind.
@@ -440,7 +440,7 @@ static void testUpdater() {
     s.duringDownload = [&u] { u.cancel(); };
   });
   failCase("keine Verbindung", upd::Error::Network, [&](FakeServer& s, upd::Updater&) { s.pages.clear(); });
-  failCase("noch nichts veroeffentlicht", upd::Error::NoRelease, [&](FakeServer& s, upd::Updater&) {
+  failCase("noch nichts veröffentlicht", upd::Error::NoRelease, [&](FakeServer& s, upd::Updater&) {
     s.pages[upd::apiUrl(upd::Channel::Stable)] = {404, "{\"message\": \"Not Found\"}"};
   });
   failCase("Ratenlimit", upd::Error::Network, [&](FakeServer& s, upd::Updater&) {
@@ -512,7 +512,7 @@ static void testUpdater() {
     older.wait();
     ck(older.status().phase == upd::Phase::Available, "neuerer Snapshot");
     older.dismiss();
-    ck(older.status().phase == upd::Phase::Idle, "Spaeter -> Ruhe");
+    ck(older.status().phase == upd::Phase::Idle, "Später -> Ruhe");
   }
 
   // The App: checks by itself as a release, never as a self-built version,
@@ -553,7 +553,7 @@ static void testUpdater() {
       a.updater()->wait();
       ck(a.settings().updateChannel == 1 && a.settings().skippedUpdate == "v1.1.0" && !a.settings().checkUpdates,
          "Update-Einstellungen gespeichert");
-      ck(srv.gets == 1, "abgeschaltet: keine Pruefung beim Start");
+      ck(srv.gets == 1, "abgeschaltet: keine Prüfung beim Start");
       ck(a.updateChannel() == upd::Channel::Snapshot, "gewaehlter Kanal gilt");
     }
     {
@@ -598,11 +598,11 @@ int main(){
 
   ck(app.documents().empty(),"startet ohne Dokumente");
   const std::size_t n = app.openFolder(root.string());
-  ck(n==3,"drei .car aus Unterordnern geoeffnet");
+  ck(n==3,"drei .car aus Unterordnern geöffnet");
   ck(app.documents().size()==3,"drei Tabs");
 
   app.openCar((root/"a.car").string());
-  ck(app.documents().size()==3,"dieselbe Datei wird nicht doppelt geoeffnet");
+  ck(app.documents().size()==3,"dieselbe Datei wird nicht doppelt geöffnet");
 
   const fs::path xd0 = fs::temp_directory_path()/"g2c_xsi_real";
   fs::remove_all(xd0);
@@ -610,13 +610,13 @@ int main(){
   const std::size_t touched = app.addXsiFiles({(xd0/"n1.xsi").string(),(xd0/"n2.xsi").string()}, true);
   ck(touched==3,"XSI an alle Tabs angehaengt");
   for (auto&d:app.documents()) ck(d.script.grabs.size()==3,"jeder Tab hat jetzt drei Grabs");
-  for (auto&d:app.documents()) ck(d.dirty,"als geaendert markiert");
+  for (auto&d:app.documents()) ck(d.dirty,"als geändert markiert");
 
   app.addXsiFiles({(xd0/"n3.xsi").string()}, false);
   ck(app.documents()[app.activeTab()].script.grabs.size()==4,"nur der aktive Tab bekam die vierte");
 
   app.validateAll();
-  ck(app.documents()[0].validated,"Pruefung gelaufen");
+  ck(app.documents()[0].validated,"Prüfung gelaufen");
   ck(app.documents()[0].validation.errors>0,"fehlende Dateien werden bemerkt");
 
   app.closeDocument(0);
@@ -625,7 +625,7 @@ int main(){
 
   app.closeDocument(0); app.closeDocument(0);
   ck(app.documents().empty(),"alle geschlossen");
-  ck(app.activeTab()==0,"Index zurueckgesetzt");
+  ck(app.activeTab()==0,"Index zurückgesetzt");
 
   // Tab titles must be distinguishable. In a model tree all scripts have the
   // same name; then the folder decides.
@@ -640,7 +640,7 @@ int main(){
     g2::gui::Platform p2;
     g2::gui::App a2(std::move(p2));
     a2.openFolder(r2.string());
-    ck(a2.documents().size()==3,"drei gleichnamige Skripte geoeffnet");
+    ck(a2.documents().size()==3,"drei gleichnamige Skripte geöffnet");
     std::set<std::string> titles;
     for (auto&d:a2.documents()) titles.insert(d.title);
     ck(titles.size()==3,"Tabtitel sind unterscheidbar");
@@ -681,6 +681,82 @@ int main(){
     fs::remove_all(xd); fs::remove_all(r3);
   }
 
+  // REGRESSION (review): the "Issues" quick filter keeps its rows while an
+  // edit has made the results stale - it used to empty the table on every
+  // keystroke until the next check.
+  {
+    namespace fs = std::filesystem;
+    const fs::path rc = fs::temp_directory_path()/"g2c_gui_issuefilter";
+    fs::remove_all(rc); fs::create_directories(rc);
+    { std::ofstream f(rc/"m.car"); f<<"$aseanimgrabinit\n$aseanimgrab a.xsi\n$aseanimgrab b.xsi\n$aseanimgrabfinalize\n"; }
+    g2::gui::Platform pI;
+    g2::gui::App aI(std::move(pI));
+    aI.openCar((rc/"m.car").string());
+    auto& d = aI.documents()[0];
+    g2::car::Issue is;
+    is.level = g2::car::Issue::Level::Error;
+    is.message = "fehlt";
+    is.line = d.script.grabs[1].line;
+    d.validation.issues = {is};
+    d.validation.errors = 1;
+    d.validated = true;
+    aI.setRowFilterForTest(1);
+    ck(!aI.rowShownForTest(0, 0) && aI.rowShownForTest(0, 1), "Problemfilter: nur die Zeile mit Meldung");
+    g2::gui::touch(d);
+    ck(!d.validated && aI.rowShownForTest(0, 1), "REGRESSION Problemfilter: nach einer Änderung bleibt die Zeile stehen");
+    aI.setRowFilterForTest(0);
+    ck(aI.rowShownForTest(0, 0) && aI.rowShownForTest(0, 1), "ohne Filter alle Zeilen");
+    fs::remove_all(rc);
+  }
+
+  // "Only missing": pick the whole folder again, only new .xsi go in.
+  {
+    const fs::path xd = fs::temp_directory_path()/"g2c_gui_onlynew";
+    fs::remove_all(xd); fs::create_directories(xd/"unter");
+    for (auto n : {"a.xsi","b.xsi","unter/c.xsi"}) makeXsi(xd/n);
+    const fs::path rc = fs::temp_directory_path()/"g2c_gui_onlynew_car";
+    fs::remove_all(rc); fs::create_directories(rc);
+    // Already grabbed: a.xsi with a different case, c without its extension
+    // (Carcass appends .XSI) - both must count as present.
+    { std::ofstream f(rc/"m.car"); f<<"$aseanimgrabinit\n$aseanimgrab A.XSI\n$aseanimgrab unter/c\n"
+                                       "$aseanimgrabfinalize\n"; }
+    { std::ofstream f(rc/"n.car"); f<<"$aseanimgrabinit\n$aseanimgrabfinalize\n"; }
+
+    g2::gui::Platform pN;
+    g2::gui::App aN(std::move(pN));
+    aN.settings().baseDir = xd.string();
+    ck(g2::gui::Settings{}.onlyNewXsi,"Nur neue XSI ist von Haus aus an");
+    aN.settings().onlyNewXsi = true;
+    aN.openCar((rc/"m.car").string());
+    const auto gm = [&]() -> const g2::gui::Document& {
+      for (auto& d : aN.documents()) if (fs::path(d.path).filename() == "m.car") return d;
+      return aN.documents()[0];
+    };
+    ck(aN.addXsiFolder(xd.string(), false)==1,"Nur neue XSI: Skript wurde geändert");
+    ck(gm().script.grabs.size()==3,"Nur neue XSI: nur b.xsi kam dazu");
+    ck(gm().script.grabs.back().file=="b.xsi","Nur neue XSI: neue Zeile relativ zur Assetwurzel");
+    ck(aN.addXsiFolder(xd.string(), false)==0,"Nur neue XSI: zweiter Durchlauf ändert nichts");
+    ck(gm().script.grabs.size()==3,"Nur neue XSI: keine doppelten Zeilen");
+
+    makeXsi(xd/"d.xsi");
+    aN.addXsiFiles({(xd/"d.xsi").string(),(xd/"d.xsi").string()}, false);
+    ck(gm().script.grabs.size()==4,"Nur neue XSI: dieselbe Datei zweimal auf einmal - einmal eingefügt");
+
+    // To all: each script gets what IT is missing.
+    aN.openCar((rc/"n.car").string());
+    ck(aN.addXsiFiles({(xd/"a.xsi").string(),(xd/"d.xsi").string()}, true)==1,
+       "Nur fehlende, zu allen: nur das Skript ohne die Dateien wurde geändert");
+    for (auto& d : aN.documents())
+      ck(d.script.grabs.size()==(fs::path(d.path).filename()=="n.car" ? 2u : 4u),
+         "Nur fehlende, zu allen: jedes Skript hat jede Datei genau einmal");
+
+    // Off: the old behaviour, everything is appended.
+    aN.settings().onlyNewXsi = false;
+    aN.addXsiFiles({(xd/"a.xsi").string()}, false);
+    ck(aN.documents()[aN.activeTab()].script.grabs.size()==3,"ohne Haken wird wie bisher alles angehaengt");
+    fs::remove_all(xd); fs::remove_all(rc);
+  }
+
   // Separate output location per script.
   {
     const fs::path r4 = fs::temp_directory_path()/"g2c_gui_out";
@@ -713,15 +789,15 @@ int main(){
     g2::gui::Platform p5;
     g2::gui::App a5(std::move(p5));
     a5.openCar((r5/"s.car").string());
-    ck(a5.documents().size()==1,"Skript geoeffnet");
+    ck(a5.documents().size()==1,"Skript geöffnet");
     const size_t before = a5.documents()[0].script.grabs.size();
 
     makeXsi(r5/"c.xsi");
     a5.addXsiFiles({(r5/"c.xsi").string()}, false);
-    ck(a5.documents()[0].dirty,"nach Aenderung als geaendert markiert");
+    ck(a5.documents()[0].dirty,"nach Aenderung als geändert markiert");
 
     ck(a5.saveDocument(0),"gespeichert");
-    ck(!a5.documents()[0].dirty,"danach nicht mehr geaendert");
+    ck(!a5.documents()[0].dirty,"danach nicht mehr geändert");
     ck(fs::exists(r5/"s.car.bak"),"Sicherung wurde angelegt");
 
     // Read it back: the content must be complete.
@@ -818,18 +894,28 @@ int main(){
     setLanguage(before);
     ck(leer==0,"kein leerer Uebersetzungseintrag");
 
-    // German and English texts may only contain Latin-1.
+    // German and English texts may only contain Latin-1 (umlauts and ß are
+    // fine, an em dash or typographic quotes are not).
     //
-    // For these languages the font atlas is baked with GetGlyphRangesDefault,
-    // i.e. 0x20 to 0xFF. An em dash or a typographic quotation mark lies
-    // above that and shows up as a question mark - which is exactly how the
-    // menu ended up showing "Assetwurzel ? enthaelt models".
+    // The window loads glyphs on demand from Segoe UI, but if that font is
+    // missing, ImGui's built-in fallback only covers 0x20 to 0xFF - and a
+    // character above that shows up as a question mark, which is how the menu
+    // once showed "Assetwurzel ? enthaelt models". The texts are UTF-8, so
+    // whole code points are decoded and compared.
     int ausserhalb=0;
     for (int l=0;l<2;l++) {
       setLanguage((Lang)l);
-      for (int i=0;i<(int)S::Count;i++)
-        for (const unsigned char* q=(const unsigned char*)tr((S)i); *q; ++q)
-          if (*q >= 0x80) { ausserhalb++; break; }
+      for (int i=0;i<(int)S::Count;i++) {
+        const unsigned char* q=(const unsigned char*)tr((S)i);
+        while (*q) {
+          unsigned cp=*q;
+          int extra = cp>=0xF0 ? 3 : cp>=0xE0 ? 2 : cp>=0xC0 ? 1 : 0;
+          if (extra) cp &= (0x3Fu >> extra);
+          ++q;
+          for (int e=0;e<extra && *q;++e,++q) cp = (cp<<6) | (*q & 0x3Fu);
+          if (cp > 0xFF) { ausserhalb++; break; }
+        }
+      }
     }
     ck(ausserhalb==0,"de/en enthalten nur darstellbare Zeichen");
 
@@ -927,7 +1013,7 @@ int main(){
     ck(names()=="bcad","a steht jetzt an dritter Stelle");
     ck(a9.moveGrab(0,3,0),"ans andere Ende verschoben");
     ck(names()=="dbca","d steht vorn");
-    ck(!a9.moveGrab(0,0,0),"gleiche Position aendert nichts");
+    ck(!a9.moveGrab(0,0,0),"gleiche Position ändert nichts");
     ck(!a9.moveGrab(0,9,0),"unmoegliche Position wird abgewiesen");
 
     // The selection must move along, otherwise a later delete hits the
@@ -940,18 +1026,18 @@ int main(){
     ck(d9.selected[3]==1 && d9.selected[0]==0,"die Auswahl ist mitgewandert");
 
     // Delete several at once; the indices must not shift.
-    ck(a9.deleteGrabs(0,{0,2})==2,"zwei geloescht");
+    ck(a9.deleteGrabs(0,{0,2})==2,"zwei gelöscht");
     ck(names()=="cd","die richtigen beiden sind weg: b und a");
     ck(a9.documents()[0].selected.size()==2,"Auswahlfeld bleibt gleich lang");
-    ck(a9.documents()[0].dirty,"als geaendert markiert");
+    ck(a9.documents()[0].dirty,"als geändert markiert");
 
     // New script: must be valid and readable again.
     const std::string neu = (r9/"neu.car").string();
     ck(a9.newCar(neu),"neues Skript angelegt");
     ck(fs::exists(neu),"Datei liegt auf der Platte");
-    ck(a9.documents().size()==2,"als Tab geoeffnet");
+    ck(a9.documents().size()==2,"als Tab geöffnet");
     ck(a9.documents()[1].script.convert.has_value(),
-       "enthaelt die Konvertierungsanweisung");
+       "enthält die Konvertierungsanweisung");
 
     // A new script must be able to ACCEPT grabs. Without the init/finalize
     // frame writeScript doesn't write them, and the file would be silently empty.
@@ -964,7 +1050,7 @@ int main(){
     aZ.openCar(neu);
     ck(aZ.documents()[0].script.grabs.size()==1,
        "der Grab steht wirklich in der Datei");
-    ck(!a9.newCar(neu),"vorhandene Datei wird nicht ueberschrieben");
+    ck(!a9.newCar(neu),"vorhandene Datei wird nicht überschrieben");
 
     fs::remove_all(r9);
   }
@@ -1007,7 +1093,7 @@ int main(){
     makeXsi(rA/"neu.xsi");
     aA.addXsiFiles({(rA/"neu.xsi").string()}, false);
     ck(aA.documents()[0].script.grabs.back().file=="root.xsi",
-       "auch nach dem Hinzufuegen steht root zuletzt");
+       "auch nach dem Hinzufügen steht root zuletzt");
     const auto& gs = aA.documents()[0].script.grabs;
     // Without an asset root set, the path is stored as absolute.
     ck(fs::path(gs[gs.size()-2].file).filename()=="neu.xsi",
@@ -1028,7 +1114,7 @@ int main(){
 
     g2::gui::Platform pB;
     g2::gui::App aB(std::move(pB));
-    ck(aB.openPath((rB/"x.car").string()),".car wird als Skript geoeffnet");
+    ck(aB.openPath((rB/"x.car").string()),".car wird als Skript geöffnet");
     ck(aB.documents().size()==1,"ein Tab");
     ck(aB.openPath((rB/"s.gla").string()),".gla setzt die Referenz");
     ck(aB.settings().referenceGla==(rB/"s.gla").string(),"Referenz wurde gesetzt");
@@ -1055,7 +1141,7 @@ int main(){
       // The uploaded GLA sits next to animation.cfg, so the automatic lookup
       // already kicks in here - exactly as intended.
       ck(aC.extract().seqs.size()>1,"Begleitdatei sofort mitgeladen");
-      ck(aC.extract().origin.has_value(),"Versatz aus der GLA geschaetzt");
+      ck(aC.extract().origin.has_value(),"Versatz aus der GLA geschätzt");
 
       // Companion files are looked up next to the GLA itself.
       {
@@ -1210,11 +1296,11 @@ int main(){
     const std::size_t n = aF.selectMissing();
     ck(n==1,"genau eine fehlt");
     std::size_t sel=0; for (char c : aF.extract().selected) if (c) sel++;
-    ck(sel==1,"genau eine ausgewaehlt");
+    ck(sel==1,"genau eine ausgewählt");
     // And the right one at that.
     for (size_t i=0;i<aF.extract().seqs.size();++i)
       if (aF.extract().selected[i])
-        ck(aF.extract().seqs[i].name=="BOTH_SPEZIAL","die richtige ausgewaehlt");
+        ck(aF.extract().seqs[i].name=="BOTH_SPEZIAL","die richtige ausgewählt");
 
     // An unreadable file must not clear the comparison.
     ck(!aF.loadCompareCfg((cr/"gibtsnicht.cfg").string()),"fehlende Datei abgewiesen");
@@ -1250,9 +1336,9 @@ int main(){
     ck(aP.clipboardSize()==2,"zwei in der Ablage");
 
     // Paste into the OTHER script - that is the actual purpose.
-    ck(aP.pasteGrabs(B,0)==2,"in das andere Skript eingefuegt");
-    ck(names(B)=="xzq","davor eingefuegt, Reihenfolge erhalten");
-    ck(aP.documents()[B].dirty,"als geaendert markiert");
+    ck(aP.pasteGrabs(B,0)==2,"in das andere Skript eingefügt");
+    ck(names(B)=="xzq","davor eingefügt, Reihenfolge erhalten");
+    ck(aP.documents()[B].dirty,"als geändert markiert");
 
     // The grab's settings must come along, not just the name.
     const auto& g0 = aP.documents()[B].script.grabs[0];
@@ -1260,18 +1346,18 @@ int main(){
     ck(g0.frameSpeed && *g0.frameSpeed==40,"Framespeed mitkopiert");
 
     // The source stays untouched.
-    ck(names(A)=="xyz","Kopieren aendert die Quelle nicht");
+    ck(names(A)=="xyz","Kopieren ändert die Quelle nicht");
 
     // Cutting removes them there.
     ck(aP.cutGrabs(A,{1})==1,"eine ausgeschnitten");
     ck(names(A)=="xz","aus der Quelle entfernt");
-    ck(aP.pasteGrabs(B,3)==1,"ans Ende eingefuegt");
+    ck(aP.pasteGrabs(B,3)==1,"ans Ende eingefügt");
     ck(names(B)=="xzqy","am Ende gelandet");
 
     // The clipboard stays valid after pasting - pasting multiple times
     // must work.
-    ck(aP.pasteGrabs(B,0)==1,"nochmals eingefuegt");
-    ck(names(B)=="yxzqy","zweimal eingefuegt");
+    ck(aP.pasteGrabs(B,0)==1,"nochmals eingefügt");
+    ck(names(B)=="yxzqy","zweimal eingefügt");
 
     // Nonsensical targets must not crash.
     ck(aP.pasteGrabs(B,9999)==1,"Position hinter dem Ende wird geklemmt");
@@ -1299,7 +1385,7 @@ int main(){
 
     PreviewCamera cam;
     frameAll(cam, b);
-    ck(cam.distance > b.radius(), "Kamera steht ausserhalb des Modells");
+    ck(cam.distance > b.radius(), "Kamera steht außerhalb des Modells");
     ck(std::fabs(cam.target[2]-10.0f)<1e-4f,"Blickpunkt in der Mitte");
 
     // The look-at point must land in the center of the image.
@@ -1326,17 +1412,165 @@ int main(){
     projectPoint({{0,0,20}}, side, 800, 600, xo, yo, dо);
     ck(yo < ym, "hoeher liegender Punkt erscheint weiter oben");
 
+    // Game files for the textures: .pk3 archives, priorities, shaders, skins.
+    {
+      namespace fs = std::filesystem;
+      const fs::path dir = fs::temp_directory_path() / "g2c_assets_test";
+      fs::remove_all(dir);
+      fs::create_directories(dir / "base" / "models" / "players" / "t");
+      // A .pk3 by hand: one stored entry, one deflated ("hello").
+      const auto zip = [](const fs::path& p, const std::vector<std::tuple<std::string, std::vector<std::uint8_t>, std::uint16_t, std::uint32_t>>& files) {
+        std::vector<std::uint8_t> out, dirb;
+        const auto w16 = [](std::vector<std::uint8_t>& v, std::uint32_t x) { v.push_back(x & 0xff); v.push_back((x >> 8) & 0xff); };
+        const auto w32 = [&](std::vector<std::uint8_t>& v, std::uint32_t x) { w16(v, x & 0xffff); w16(v, x >> 16); };
+        for (const auto& [name, data, method, size] : files) {
+          const std::uint32_t off = static_cast<std::uint32_t>(out.size());
+          w32(out, 0x04034b50); w16(out, 20); w16(out, 0); w16(out, method); w32(out, 0); w32(out, 0);
+          w32(out, static_cast<std::uint32_t>(data.size())); w32(out, size); w16(out, static_cast<std::uint32_t>(name.size())); w16(out, 0);
+          out.insert(out.end(), name.begin(), name.end()); out.insert(out.end(), data.begin(), data.end());
+          w32(dirb, 0x02014b50); w16(dirb, 20); w16(dirb, 20); w16(dirb, 0); w16(dirb, method); w32(dirb, 0); w32(dirb, 0);
+          w32(dirb, static_cast<std::uint32_t>(data.size())); w32(dirb, size); w16(dirb, static_cast<std::uint32_t>(name.size()));
+          w16(dirb, 0); w16(dirb, 0); w16(dirb, 0); w16(dirb, 0); w32(dirb, 0); w32(dirb, off);
+          dirb.insert(dirb.end(), name.begin(), name.end());
+        }
+        const std::uint32_t dirOff = static_cast<std::uint32_t>(out.size());
+        out.insert(out.end(), dirb.begin(), dirb.end());
+        w32(out, 0x06054b50); w16(out, 0); w16(out, 0); w16(out, static_cast<std::uint32_t>(files.size()));
+        w16(out, static_cast<std::uint32_t>(files.size())); w32(out, static_cast<std::uint32_t>(dirb.size())); w32(out, dirOff); w16(out, 0);
+        std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+      };
+      const std::string shader = "// comment\nmodels/players/t/body\n{\n  q3map_nolightmap\n  {\n    map $lightmap\n  }\n  {\n"
+                                 "    map models/players/t/body_diffuse.tga\n    rgbGen lightingDiffuse\n  }\n}\n"
+                                 "models/players/t/anim\n{\n  {\n    animMap 10 models/players/t/f1 models/players/t/f2\n  }\n}\n";
+      zip(dir / "base" / "assets0.pk3",
+          {{"shaders/t.shader", std::vector<std::uint8_t>(shader.begin(), shader.end()), 0, static_cast<std::uint32_t>(shader.size())},
+           {"Models/Players/T/Hello.TXT", {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, 8, 5},
+           {"models/players/t/body_diffuse.jpg", {1, 2, 3}, 0, 3},
+           {"models/players/t/over.txt", {'o', 'l', 'd'}, 0, 3}});
+      zip(dir / "base" / "assets1.pk3", {{"models/players/t/over.txt", {'n', 'e', 'w'}, 0, 3}});
+      std::ofstream(dir / "base" / "models" / "players" / "t" / "loose.txt") << "loose";
+      std::ofstream(dir / "base" / "models" / "players" / "t" / "over.txt") << "mine";
+
+      g2::gui::AssetFs afs;
+      afs.addFolder((dir / "base").string());
+      ck(afs.archiveCount() == 2, "Assets: zwei .pk3 gefunden");
+      const auto hello = afs.read("models/players/t/hello.txt");
+      ck(hello && std::string(hello->begin(), hello->end()) == "hello", "Assets: gepackter Eintrag entpackt, Gross-/Kleinschreibung egal");
+      const auto over = afs.read("models\\players\\t\\over.txt");
+      ck(over && std::string(over->begin(), over->end()) == "mine", "Assets: lose Datei vor .pk3");
+      fs::remove(dir / "base" / "models" / "players" / "t" / "over.txt");
+      g2::gui::AssetFs afs2;
+      afs2.addFolder((dir / "base").string());
+      const auto over2 = afs2.read("models/players/t/over.txt");
+      ck(over2 && std::string(over2->begin(), over2->end()) == "new", "Assets: spaetere .pk3 überschreibt fruehere");
+      ck(!afs2.read("models/players/t/nichtda.txt"), "Assets: fehlende Datei = leer");
+      // REGRESSION: sizes from a broken or ZIP64 archive were allocated as
+      // they came - 4 GB before the read failed, and the exception ended
+      // the program. Such entries are now left out.
+      {
+        fs::create_directories(dir / "kaputt");
+        zip(dir / "kaputt" / "broken.pk3",
+            {{"big/zip64.tga", {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, 8, 0xFFFFFFFFu},
+             {"big/riesig.tga", {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, 8, 300u * 1024u * 1024u},
+             {"big/ok.txt", {'o', 'k'}, 0, 2}});
+        g2::gui::AssetFs bfs;
+        bool threw = false;
+        try {
+          bfs.addFolder((dir / "kaputt").string());
+          ck(!bfs.exists("big/zip64.tga") && !bfs.exists("big/riesig.tga"),
+             "REGRESSION Assets: unsinnige Groessen im Archiv werden gar nicht erst aufgenommen");
+          const auto okf = bfs.read("big/ok.txt");
+          ck(okf && okf->size() == 2, "Assets: gesunde Eintraege derselben .pk3 bleiben lesbar");
+        } catch (...) {
+          threw = true;
+        }
+        ck(!threw, "REGRESSION Assets: kaputte .pk3 wirft nicht (Fehler: bad_alloc)");
+      }
+      ck(afs2.list("shaders", ".shader").size() == 1, "Assets: Shaderdateien aufgelistet");
+
+      const auto sh = g2::gui::loadShaderIndex(afs2);
+      ck(sh.count("models/players/t/body") && sh.at("models/players/t/body") == "models/players/t/body_diffuse.tga",
+         "Shader: erstes Bild, $lightmap übersprungen");
+      ck(sh.count("models/players/t/anim") && sh.at("models/players/t/anim") == "models/players/t/f1",
+         "Shader: animMap nimmt das erste Bild");
+      ck(g2::gui::resolveImage(afs2, sh, "models/players/t/body") == "models/players/t/body_diffuse.jpg",
+         "Bild: .tga fehlt, .jpg wird genommen (wie die Engine)");
+      ck(g2::gui::resolveImage(afs2, sh, "models/players/t/gibtsnicht").empty(), "Bild: nichts gefunden = leer");
+
+      const auto skin = g2::gui::parseSkin("head,models/players/t/head\r\nhead_cap_torso_off,*off\n\ntorso , \"models/players/t/body\"\n");
+      ck(skin.size() == 3 && skin.at("torso") == "models/players/t/body" && skin.at("head_cap_torso_off") == "*off",
+         "Skin: Flaeche -> Shader, *off, Leerzeichen und Anfuehrungszeichen");
+
+      // A 2x1 uncompressed 32-bit TGA.
+      const std::vector<std::uint8_t> tga{0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 32, 0x28,
+                                          10, 20, 30, 255, 40, 50, 60, 128};
+      const auto img = g2::gui::decodeImage(tga);
+      ck(img && img->width == 2 && img->height == 1 && img->rgba.size() == 8 && img->rgba[0] == 30 &&
+             img->rgba[2] == 10 && img->rgba[7] == 128,
+         "Bild: TGA dekodiert (BGRA -> RGBA)");
+      ck(!g2::gui::decodeImage({1, 2, 3}), "Bild: Unsinn wird abgelehnt");
+      ck(g2::gui::baseOfAssetPath((dir / "base" / "models" / "players" / "t" / "model.glm").string()) == (dir / "base").string(),
+         "Assetwurzel aus dem Modellpfad");
+      fs::remove_all(dir);
+    }
+
+    // A model in the preview: skinned with the bone, tags and "off"
+    // surfaces left out, sorted far to near.
+    {
+      g2::MdxaFile gla;
+      gla.skeleton.bones.resize(1);
+      g2::Mesh mesh;
+      mesh.lods.resize(1);
+      const auto surf = [](std::uint32_t flags, float x) {
+        g2::Surface s;
+        s.flags = flags;
+        for (int i = 0; i < 3; ++i) {
+          g2::Vertex v;
+          v.position[0] = x + (i == 1 ? 4.0f : 0.0f);
+          v.position[2] = i == 2 ? 4.0f : 0.0f;
+          v.weights.push_back({0, 1.0f});
+          s.vertices.push_back(v);
+        }
+        s.triangles.push_back(g2::Triangle{{0, 1, 2}});
+        return s;
+      };
+      mesh.lods[0].surfaces = {surf(0, 0.0f), surf(1, 10.0f), surf(2, 20.0f), surf(0, -10.0f)};
+      PreviewCamera mc; mc.yawDeg = 0; mc.pitchDeg = 0; mc.distance = 100; mc.target = {{0, 0, 0}};
+      std::vector<g2::Mat3x4> rest(1, g2::Mat3x4::identity());
+      const auto t0 = buildMeshTriangles(mesh, gla, rest, mc, 800, 600);
+      ck(t0.size() == 2, "Modell: Tag- und _off-Flächen weggelassen (2 von 4 Dreiecken)");
+      ck(t0.size() == 2 && t0[0].depth >= t0[1].depth, "Modell: von hinten nach vorne sortiert");
+      // Seen face-on, a surface is fully lit; edge-on it is dark.
+      {
+        float best = 0.0f;
+        for (float yaw : {0.0f, 90.0f}) {
+          PreviewCamera fc = mc; fc.yawDeg = yaw;
+          for (const auto& t : buildMeshTriangles(mesh, gla, rest, fc, 800, 600)) best = std::max(best, t.shade);
+        }
+        ck(best > 0.95f && best <= 1.0f, "Modell: Flaeche frontal gesehen voll beleuchtet");
+      }
+      // The bone moves up by 20: the model follows it.
+      std::vector<g2::Mat3x4> up(1, g2::Mat3x4::identity());
+      up[0].m[2][3] = 20.0f;
+      const auto t1 = buildMeshTriangles(mesh, gla, up, mc, 800, 600);
+      float y0 = 0, y1 = 0;
+      for (const auto& t : t0) y0 += t.y[0];
+      for (const auto& t : t1) y1 += t.y[0];
+      ck(t1.size() == 2 && y1 < y0, "Modell folgt dem Bone (hoeher = weiter oben)");
+      ck(buildMeshTriangles(mesh, gla, {}, mc, 800, 600).empty(), "ohne Pose kein Modell, kein Absturz");
+    }
+
     // Play back at the sequence's rate.
     Playback pb; pb.playing = true;
     advancePlayback(pb, 0.5f, 20, 30);      // 0.5 s at 20 frames/s = 10
     ck(pb.frame==10,"zehn Frames weiter");
     advancePlayback(pb, 1.5f, 20, 30);      // another 30 -> wraps around
-    ck(pb.frame==10,"laeuft um");
+    ck(pb.frame==10,"läuft um");
 
     // A negative rate means backwards - that is how Raven's cfg has it.
     Playback rb; rb.playing = true; rb.frame = 20;
     advancePlayback(rb, 0.5f, -20, 30);
-    ck(rb.frame==10,"negative Rate laeuft rueckwaerts");
+    ck(rb.frame==10,"negative Rate läuft rückwärts");
 
     // When paused, nothing moves.
     Playback sb; sb.playing = false; sb.frame = 5;
@@ -1363,27 +1597,27 @@ int main(){
     g2::gui::Platform pS;
     g2::gui::App aS(std::move(pS));
     aS.openCar((sd/"_humanoid.car").string());
-    ck(aS.documents().size()==1,"Skript geoeffnet");
+    ck(aS.documents().size()==1,"Skript geöffnet");
     ck(aS.documents()[0].script.grabs.size()==1,"ein Grab");
 
     makeXsi(sd/"neu.xsi");
     aS.addXsiFiles({(sd/"neu.xsi").string()}, false);
-    ck(aS.documents()[0].dirty,"als geaendert markiert");
+    ck(aS.documents()[0].dirty,"als geändert markiert");
     ck(aS.documents()[0].script.grabs.size()==2,"zwei Grabs im Speicher");
 
     // The disk still holds the old state.
     {
       const auto vorher = g2::car::parseFile((sd/"_humanoid.car").string());
-      ck(vorher.grabs.size()==1,"Datei traegt noch den alten Stand");
+      ck(vorher.grabs.size()==1,"Datei trägt noch den alten Stand");
     }
 
     // Saving must store the new state.
     ck(aS.saveDocument(0),"gespeichert");
     {
       const auto nachher = g2::car::parseFile((sd/"_humanoid.car").string());
-      ck(nachher.grabs.size()==2,"Datei traegt jetzt den neuen Stand");
+      ck(nachher.grabs.size()==2,"Datei trägt jetzt den neuen Stand");
     }
-    ck(!aS.documents()[0].dirty,"nicht mehr als geaendert markiert");
+    ck(!aS.documents()[0].dirty,"nicht mehr als geändert markiert");
 
     fs::remove_all(sd);
   }
@@ -1456,7 +1690,7 @@ int main(){
     };
     g2::gui::App aS(std::move(pS));
     const auto einer = aS.askFolders("test","");
-    ck(einer.size()==1,"Rueckfall auf Einzelauswahl");
+    ck(einer.size()==1,"Rückfall auf Einzelauswahl");
 
     // And without any selection nothing may happen.
     g2::gui::Platform pN;
@@ -1666,7 +1900,7 @@ int main(){
     ck(sc.grabs[2].commentsBefore.empty(),"bei C weg");
 
     // The text must stay unchanged along the way.
-    ck(sc.trailingComments[0]=="// TRENNER","Text unveraendert");
+    ck(sc.trailingComments[0]=="// TRENNER","Text unverändert");
 
     fs::remove_all(dd);
   }

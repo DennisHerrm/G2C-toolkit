@@ -68,7 +68,7 @@ void requireSize(const std::vector<std::uint8_t>& d, std::size_t off, std::size_
 // each one individually before use.
 std::size_t checkedOffset(std::int32_t v, const char* what) {
     if (v < 0)
-        throw std::runtime_error(std::string("GLA beschaedigt: negativer Offset bei ") + what);
+        throw std::runtime_error(std::string("GLA beschädigt: negativer Offset bei ") + what);
     return static_cast<std::size_t>(v);
 }
 
@@ -101,7 +101,7 @@ std::vector<std::string> Skeleton::validate() const {
             errs.push_back("Bone \"" + b.name + "\" existiert mehrfach (Index " +
                            std::to_string(it->second) + " und " + std::to_string(i) + ")");
         if (b.parent >= static_cast<int>(bones.size()) || b.parent < -1)
-            errs.push_back("Bone \"" + b.name + "\" hat ungueltigen Parent-Index " +
+            errs.push_back("Bone \"" + b.name + "\" hat ungültigen Parent-Index " +
                            std::to_string(b.parent));
         if (b.parent == static_cast<int>(i))
             errs.push_back("Bone \"" + b.name + "\" ist sein eigener Parent");
@@ -151,7 +151,7 @@ Mat3x4 affineInverse(const Mat3x4& m) {
 
     const float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
     if (std::fabs(det) < 1e-12f)
-        throw std::runtime_error("Basispose ist singulaer und nicht invertierbar");
+        throw std::runtime_error("Basispose ist singulär und nicht invertierbar");
     const float id = 1.0f / det;
 
     Mat3x4 out;
@@ -178,7 +178,7 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
     const auto errs = skel.validate();
     if (!errs.empty()) {
         std::ostringstream os;
-        os << "Skelett ist ungueltig:";
+        os << "Skelett ist ungültig:";
         for (const auto& e : errs) os << "\n  - " << e;
         throw std::runtime_error(os.str());
     }
@@ -256,7 +256,7 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
     // The frame index is only 3 bytes wide. Carcass doesn't check this.
     if (pool.size() > fmt::kMaxBonePoolEntries)
         throw std::runtime_error("Bone-Pool hat " + std::to_string(pool.size()) +
-                                 " Eintraege, der 24-Bit-Index erlaubt maximal " +
+                                 " Einträge, der 24-Bit-Index erlaubt maximal " +
                                  std::to_string(fmt::kMaxBonePoolEntries));
 
     // --- Assemble the file ------------------------------------------------
@@ -274,7 +274,7 @@ MdxaWriteResult writeMdxa(const Skeleton& skel, const AnimationFrames& frames,
 
     const std::size_t headerEnd = buf.size();
     if (headerEnd != sizeof(fmt::MdxaHeader))
-        throw std::logic_error("Header-Groesse stimmt nicht mit MdxaHeader ueberein");
+        throw std::logic_error("Header-Größe stimmt nicht mit MdxaHeader überein");
 
     // Skel offset table. Values are relative to the end of the header.
     std::vector<std::size_t> patchSkelOffsets(numBones);
@@ -388,7 +388,7 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
         throw std::runtime_error("GLA hat negative Frame- oder Bone-Anzahl");
     if (ofsEnd > 0 && static_cast<std::size_t>(ofsEnd) != d.size())
         throw std::runtime_error("ofsEnd (" + std::to_string(ofsEnd) +
-                                 ") passt nicht zur Dateigroesse (" + std::to_string(d.size()) + ")");
+                                 ") passt nicht zur Dateigröße (" + std::to_string(d.size()) + ")");
 
     out.numFrames = numFrames;
 
@@ -412,8 +412,8 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
         // export. A value outside the skeleton would read or write foreign
         // memory there.
         if (b.parent < -1 || b.parent >= numBones || b.parent == i)
-            throw std::runtime_error("GLA beschaedigt: Bone \"" + b.name +
-                                     "\" hat ungueltigen Parent-Index " + std::to_string(b.parent));
+            throw std::runtime_error("GLA beschädigt: Bone \"" + b.name +
+                                     "\" hat ungültigen Parent-Index " + std::to_string(b.parent));
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c)
                 b.basePose.m[r][c] = rdF32(p + off + 72 + static_cast<std::size_t>(r * 4 + c) * 4);
@@ -425,7 +425,7 @@ MdxaFile readMdxa(const std::vector<std::uint8_t>& d) {
         int cur = i;
         for (int steps = 0; cur >= 0; ++steps) {
             if (steps > numBones)
-                throw std::runtime_error("GLA beschaedigt: Parent-Kette von Bone \"" +
+                throw std::runtime_error("GLA beschädigt: Parent-Kette von Bone \"" +
                                          out.skeleton.bones[static_cast<std::size_t>(i)].name +
                                          "\" bildet einen Kreis");
             cur = out.skeleton.bones[static_cast<std::size_t>(cur)].parent;

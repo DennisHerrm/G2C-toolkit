@@ -32,6 +32,8 @@ enum class Cmd {
     AseAnimGrabFinalize,
     AseAnimGrabGla,
     AseAnimRefGla,
+    // Carcass reads it and does nothing with it.
+    CfgNameFromCar,
     AseConvert,
     AseAnimConvert,
     AseAnimConvertMdx,
@@ -64,7 +66,9 @@ struct Sequence {
     int          targetFrame = 0;
     int          frameCount = 0;
     int          loopFrame = -1;
-    int          frameSpeed = 0;
+    // Frames per second; negative plays backwards. Not necessarily whole:
+    // the engine reads it with atof, and hand-edited configs use e.g. 16.5.
+    double       frameSpeed = 0;
     std::string  sourceFile;   // the .xsi the frames come from
     bool         fromAdditional = false;
     bool         insideQdSkip = false;
@@ -73,6 +77,11 @@ struct Sequence {
 // $aseanimgrab <file.xsi> [-loop N] [-framespeed N] [-enum NAME]
 //              [-qdskipstart] [-additional t c l s NAME]... [-qdskipstop]
 struct GrabDirective {
+    // The $basedir in force for this line (the last one before it), as
+    // written in the script; empty = the asset root. Carcass reads the file
+    // from <basedir><file> then.
+    std::string baseDir;
+
     // Comment lines that appear BEFORE this grab in the script.
     //
     // They are carried over into the generated animation.cfg. Anyone who
@@ -91,14 +100,16 @@ struct GrabDirective {
 
     std::string              file;
     std::optional<int>       loop;
-    std::optional<int>       frameSpeed;
+    // May have decimals (-framespeed 16.5). Carcass read it with atoi and
+    // dropped them; the engine does not, so g2c keeps them.
+    std::optional<double>    frameSpeed;
     std::optional<std::string> enumName;   // overrides the name from the file name
     bool                     hasQdSkip = false;
     struct Additional {
         int         targetOffset = 0;
         int         frameCount = 0;
         int         loopFrame = -1;
-        int         frameSpeed = 0;
+        double      frameSpeed = 0;
         std::string name;
         bool        insideQdSkip = false;
     };
@@ -205,6 +216,9 @@ struct Script {
     // Line ending of the file. A .car with plain LF used to come back with
     // CRLF on every line - a diff of the whole file.
     std::string newline = "\r\n";
+    // The last line had no line break (a file saved without one came back
+    // with one, a diff on the last line).
+    bool noFinalNewline = false;
 
     std::vector<Statement> statements;
 

@@ -3,6 +3,9 @@
 #include "gui/icons.h"
 #include "gui/preview.h"
 
+#include "g2/carbuild.h"
+#include "g2/carjob.h"
+#include "g2/format.h"
 #include "g2/mdxa.h"
 #include "g2/xsi_export.h"
 #include "g2/parallel.h"
@@ -14,16 +17,37 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 
 namespace g2::gui {
 namespace fs = std::filesystem;
+
+static double nowSeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Filter match ignoring case: "run" finds BOTH_RUN1.
+static bool containsNoCase(const std::string& hay, const char* needle) {
+    if (!needle || !*needle) return true;
+    const std::size_t n = std::strlen(needle);
+    if (n > hay.size()) return false;
+    for (std::size_t i = 0; i + n <= hay.size(); ++i) {
+        std::size_t j = 0;
+        while (j < n && std::tolower(static_cast<unsigned char>(hay[i + j])) ==
+                            std::tolower(static_cast<unsigned char>(needle[j])))
+            ++j;
+        if (j == n) return true;
+    }
+    return false;
+}
 
 BuildJob::~BuildJob() { join(); }
 
@@ -216,7 +240,7 @@ bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool 
             }
         }
     }
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     return true;
 }
@@ -274,11 +298,26 @@ void App::saveSettings() const {
     f << "basedir=" << settings_.baseDir << "\n";
     f << "refgla=" << settings_.referenceGla << "\n";
     f << "enums=" << settings_.enumPath << "\n";
+    f << "gla=" << (settings_.writeGla ? 1 : 0) << "\n";
+    f << "cfg=" << (settings_.writeCfg ? 1 : 0) << "\n";
+    f << "info=" << (settings_.writeInfo ? 1 : 0) << "\n";
     f << "frames=" << (settings_.writeFrames ? 1 : 0) << "\n";
     f << "mesh=" << (settings_.writeMesh ? 1 : 0) << "\n";
     f << "skin=" << (settings_.writeSkin ? 1 : 0) << "\n";
     f << "cache=" << (settings_.useCache ? 1 : 0) << "\n";
     f << "carcass=" << (settings_.carcassCompat ? 1 : 0) << "\n";
+    f << "newskel=" << (settings_.newSkeleton ? 1 : 0) << "\n";
+    f << "framestep=" << settings_.frameStep << "\n";
+    f << "onlynewxsi=" << (settings_.onlyNewXsi ? 1 : 0) << "\n";
+    f << "mode=" << static_cast<int>(mode_) << "\n";
+    f << "bottomopen=" << (bottomOpen_[0] ? 1 : 0) << (bottomOpen_[1] ? 1 : 0) << (bottomOpen_[2] ? 1 : 0) << "\n";
+    f << "showsettings=" << (showSettings_ ? 1 : 0) << "\n";
+    if (!previewGlmPath_.empty()) f << "pvglm=" << previewGlmPath_ << "\n";
+    f << "pvmesh=" << (pvShowMesh_ ? 1 : 0) << "\n";
+    f << "pvskel=" << (pvShowSkeleton_ ? 1 : 0) << "\n";
+    f << "pvwire=" << (pvWireframe_ ? 1 : 0) << "\n";
+    if (!pvTexSource_.empty()) f << "pvtexsrc=" << pvTexSource_ << "\n";
+    if (!pvSkin_.empty()) f << "pvskin=" << pvSkin_ << "\n";
     f << "backup=" << (settings_.keepBackup ? 1 : 0) << "\n";
     f << "readframes=" << (settings_.readFrameCounts ? 1 : 0) << "\n";
     f << "dark=" << (settings_.darkMode ? 1 : 0) << "\n";
@@ -347,11 +386,33 @@ void App::loadSettings() {
         if (key == "basedir") settings_.baseDir = val;
         else if (key == "refgla") settings_.referenceGla = val;
         else if (key == "enums") settings_.enumPath = val;
+        else if (key == "gla") settings_.writeGla = asBool();
+        else if (key == "cfg") settings_.writeCfg = asBool();
+        else if (key == "info") settings_.writeInfo = asBool();
         else if (key == "frames") settings_.writeFrames = asBool();
         else if (key == "mesh") settings_.writeMesh = asBool();
         else if (key == "skin") settings_.writeSkin = asBool();
         else if (key == "cache") settings_.useCache = asBool();
         else if (key == "carcass") settings_.carcassCompat = asBool();
+        else if (key == "newskel") settings_.newSkeleton = asBool();
+        else if (key == "framestep") settings_.frameStep = std::clamp(std::atoi(val.c_str()), 1, 1000);
+        else if (key == "onlynewxsi") settings_.onlyNewXsi = asBool();
+        // Reopen in the mode the program was closed in.
+        else if (key == "mode") mode_ = static_cast<Mode>(std::clamp(std::atoi(val.c_str()), 0, 2));
+        else if (key == "pvglm") {
+            // The model shown last time; quietly dropped if it is gone.
+            std::error_code ec;
+            if (fs::is_regular_file(val, ec)) loadPreviewGlm(val);
+        }
+        else if (key == "pvmesh") pvShowMesh_ = asBool();
+        else if (key == "pvskel") pvShowSkeleton_ = asBool();
+        else if (key == "pvwire") pvWireframe_ = asBool();
+        else if (key == "pvtexsrc") pvTexSource_ = val;
+        else if (key == "bottomopen") {
+            for (std::size_t m = 0; m < 3 && m < val.size(); ++m) bottomOpen_[m] = val[m] == '1';
+        }
+        else if (key == "showsettings") showSettings_ = asBool();
+        else if (key == "pvskin") pvSkin_ = val;
         else if (key == "backup") settings_.keepBackup = asBool();
         else if (key == "xsiver")
             extract_.xsiVersion = std::atoi(val.c_str()) == 35
@@ -403,6 +464,7 @@ void App::loadSettings() {
 
 void App::log(LogLine::Kind kind, std::string text) {
     std::lock_guard<std::mutex> lock(logMutex_);
+    if (kind == LogLine::Kind::Bad) ++badLogCount_;
     log_.push_back(LogLine{kind, std::move(text)});
     // Don't let it grow without bound - a batch build over hundreds of scripts
     // would otherwise quickly pile up more than anyone reads.
@@ -419,6 +481,8 @@ bool App::openCar(const std::string& path) {
             return true;
         }
     }
+    // A file opened anew starts without history (none of another tab's).
+    undo_.erase(path);
 
     Document d;
     d.path = path;
@@ -504,6 +568,131 @@ void App::refreshTabTitles() {
 }
 
 // --- Second mode: GLA back to dotXSI ---------------------------------------
+
+bool App::loadPreviewGlm(const std::string& path) {
+    try {
+        const auto bytes = readWholeFileBytes(path);
+        if (!isMdxm(bytes)) throw std::runtime_error("keine GLM (2LGM)");
+        MdxmFile glm = readMdxm(bytes);
+        std::size_t tris = 0;
+        if (!glm.mesh.lods.empty())
+            for (const auto& s : glm.mesh.lods[0].surfaces) tris += s.triangles.size();
+        previewGlm_ = std::move(glm);
+        previewGlmLoaded_ = true;
+        previewGlmPath_ = path;
+        pvTex_.dirty = true;
+        log(LogLine::Kind::Good, trf(S::LogGlmLoaded, fs::path(path).filename().string().c_str(), tris));
+        return true;
+    } catch (const std::exception& e) {
+        log(LogLine::Kind::Bad, trf(S::LogGlmFailed, (path + ": " + e.what()).c_str()));
+        return false;
+    }
+}
+
+void App::releaseTextureCache() {
+    if (platform_.destroyTexture)
+        for (const auto& [img, id] : pvTex_.cache)
+            if (id) platform_.destroyTexture(id);
+    pvTex_.cache.clear();
+    pvTex_.perSurface.clear();
+}
+
+void App::releaseGpuResources() {
+    releaseTextureCache();
+    pvTex_.dirty = true;
+}
+
+// Finds the texture of every surface of the preview model, as the game does:
+// skin -> shader -> image, from loose files and the game's .pk3 archives.
+void App::refreshPreviewTextures() {
+    auto& t = pvTex_;
+    if (!t.dirty) return;
+    t.dirty = false;
+    t.perSurface.clear();
+    t.hidden.clear();
+    t.skins.clear();
+    t.skin.clear();
+    t.missing = 0;
+    if (!previewGlmLoaded_ || previewGlm_.mesh.lods.empty()) return;
+
+    if (!t.gameDirsScanned) {
+        t.gameDirs = findGameDataFolders();
+        t.gameDirsScanned = true;
+    }
+    std::string source = pvTexSource_;
+    if (source.empty() && !t.gameDirs.empty()) {
+        // Default: a Movie Duels install if there is one, else the first.
+        source = t.gameDirs.front();
+        for (const auto& g : t.gameDirs)
+            if (containsNoCase(fs::path(g).filename().string(), "movie")) {
+                source = g;
+                break;
+            }
+    }
+
+    t.activeSource = source == "-" ? std::string() : source;
+    const std::string glmBase = baseOfAssetPath(previewGlmPath_);
+    const std::string key = glmBase + "|" + settings_.baseDir + "|" + source;
+    if (key != t.fsKey) {
+        releaseTextureCache();
+        t.fs = AssetFs{};
+        if (!glmBase.empty()) t.fs.addFolder(glmBase);
+        if (!settings_.baseDir.empty() && settings_.baseDir != glmBase) t.fs.addFolder(settings_.baseDir);
+        if (!source.empty() && source != "-")
+            for (const auto& f : gameDataSearchFolders(source)) t.fs.addFolder(f);
+        t.shaders = loadShaderIndex(t.fs);
+        t.fsKey = key;
+    }
+
+    // Skins in the model's folder; the chosen one, else model_default.skin.
+    std::string gameDir;
+    if (!glmBase.empty()) {
+        std::error_code ec;
+        const auto rel = fs::relative(fs::path(previewGlmPath_).parent_path(), glmBase, ec);
+        if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) gameDir = rel.generic_string();
+    }
+    if (!gameDir.empty()) t.skins = t.fs.list(gameDir, ".skin");
+    const auto fileOf = [](const std::string& p) { return gamePathKey(fs::path(p).filename().string()); };
+    const std::string stem = gamePathKey(fs::path(previewGlmPath_).stem().string());
+    for (const std::string& want : {gamePathKey(pvSkin_), std::string("model_default.skin"), stem + "_default.skin"}) {
+        if (!t.skin.empty() || want.empty()) continue;
+        for (const auto& s : t.skins)
+            if (fileOf(s) == want) t.skin = s;
+    }
+    std::map<std::string, std::string> skin;
+    if (!t.skin.empty())
+        if (const auto d = t.fs.read(t.skin)) skin = parseSkin(std::string(d->begin(), d->end()));
+
+    const auto& surfs = previewGlm_.mesh.lods[0].surfaces;
+    t.perSurface.assign(surfs.size(), 0);
+    t.hidden.assign(surfs.size(), 0);
+    for (std::size_t i = 0; i < surfs.size(); ++i) {
+        std::string shader = surfs[i].shader;
+        if (const auto it = skin.find(gamePathKey(surfs[i].name)); it != skin.end()) shader = it->second;
+        if (gamePathKey(shader) == "*off") {
+            t.hidden[i] = 1;
+            continue;
+        }
+        if (surfs[i].flags & (fmt::kSurfFlagIsBolt | fmt::kSurfFlagOff)) continue;
+        if (!platform_.createTexture) continue;
+        const std::string img = resolveImage(t.fs, t.shaders, shader);
+        if (img.empty()) {
+            ++t.missing;
+            continue;
+        }
+        if (const auto it = t.cache.find(img); it != t.cache.end()) {
+            t.perSurface[i] = it->second;
+            if (!it->second) ++t.missing;
+            continue;
+        }
+        std::uint64_t id = 0;
+        if (const auto bytes = t.fs.read(img))
+            if (const auto im = decodeImage(*bytes)) id = platform_.createTexture(im->width, im->height, im->rgba.data());
+        t.cache[img] = id;
+        t.perSurface[i] = id;
+        if (!id) ++t.missing;
+    }
+}
 
 bool App::loadGlaForExtract(const std::string& path) {
     try {
@@ -726,12 +915,14 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     opt.origin = extract_.origin;
     opt.basePose = extract_.basePose;
     opt.version = extract_.xsiVersion;
+    // "Like Carcass": files Carcass can read, one-frame sequences doubled.
+    opt.doubleSingleFrame = settings_.carcassCompat;
 
     std::size_t ok = 0, failed = 0;
     for (const std::size_t r : rows) {
         if (r >= extract_.seqs.size()) continue;
         const ExtractSeq& s = extract_.seqs[r];
-        opt.fps = s.fps > 0 ? s.fps : 20;
+        opt.fps = xsiexp::sceneRateFor(s.fps);
         // The .frames first, if there is one. If it's missing - or this
         // sequence is missing from it - the root motion can be reconstructed
         // from the GLA itself: it is stored there as a linear ramp on the
@@ -763,6 +954,13 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     }
     char msg[128];
     std::snprintf(msg, sizeof(msg), tr(S::Exported), ok);
+    {
+        const std::string outDir = extract_.outDir;
+        toast(ok ? LogLine::Kind::Good : LogLine::Kind::Warn, msg, platform_.revealInExplorer ? tr(S::ToastOpenFolder) : "",
+              [this, outDir] {
+                  if (platform_.revealInExplorer) platform_.revealInExplorer(outDir);
+              });
+    }
     log(failed ? LogLine::Kind::Warn : LogLine::Kind::Good, msg);
     return ok;
 }
@@ -928,6 +1126,18 @@ bool App::openPath(const std::string& path) {
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (ext == ".car") return openCar(path);
     if (ext == ".h") return loadEnums(path);
+    if (ext == ".glm") {
+        // A model is something to look at: always the preview.
+        if (!loadPreviewGlm(path)) return false;
+        mode_ = Mode::Preview;
+        return true;
+    }
+    if (ext == ".gla" && mode_ != Mode::Build) {
+        // In the extract and preview modes a GLA is something to look into,
+        // not the reference skeleton of a build.
+        loadGlaForExtract(path);
+        return extract_.loaded;
+    }
     if (ext == ".gla") {
         settings_.referenceGla = path;
         log(LogLine::Kind::Good, trf(S::LogRefGlaSet, path.c_str()));
@@ -951,6 +1161,7 @@ void App::closeDocument(std::size_t index) {
     resetRowState();
     if (index >= docs_.size()) return;
     const std::string path = docs_[index].path;
+    undo_.erase(path);
     // Its output folder outlives the tab: reopened later (or next session) it
     // is there again. It used to be forgotten as soon as the tab closed.
     if (!docs_[index].outputDir.empty()) savedOutputs_[path] = docs_[index].outputDir;
@@ -1022,10 +1233,10 @@ void App::drawSpeedDialog() {
         return;
     ImGui::TextUnformatted(trf(S::SetSpeedHead, speedRows_.size()).c_str());
     ImGui::SetNextItemWidth(140 * settings_.dpiScale);
-    ImGui::InputInt("##speed", &speedValue_);
+    ImGui::InputDouble("##speed", &speedValue_, 1.0, 10.0, "%g");
     ImGui::TextDisabled("%s", tr(S::SetSpeedHint));
     ImGui::Spacing();
-    const auto done = [&](std::optional<int> v) {
+    const auto done = [&](std::optional<double> v) {
         const std::size_t n = setFrameSpeed(di, speedRows_, v);
         log(LogLine::Kind::Info, trf(S::LogSpeedSet, n));
         speedRows_.clear();
@@ -1095,6 +1306,58 @@ void App::drawCloseDialog() {
     ImGui::EndPopup();
 }
 
+// When two .xsi paths name the same file: absolute, normalised, lower case
+// (Windows ignores case) and without the extension (Carcass appends ".XSI" to
+// a grab that has none).
+static std::string xsiFileKey(const fs::path& p) {
+    std::error_code ec;
+    const fs::path a = p.is_absolute() ? p : fs::absolute(p, ec);
+    std::string k = a.lexically_normal().generic_string();
+    std::transform(k.begin(), k.end(), k.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (k.size() > 4 && k.compare(k.size() - 4, 4, ".xsi") == 0) k.resize(k.size() - 4);
+    return k;
+}
+
+// The same for the text of a grab line: two lines with the same path are the
+// same grab even if no file is found under it.
+static std::string grabTextKey(const std::string& file) {
+    std::string k = fs::path(file).lexically_normal().generic_string();
+    std::transform(k.begin(), k.end(), k.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (k.size() > 4 && k.compare(k.size() - 4, 4, ".xsi") == 0) k.resize(k.size() - 4);
+    return "|" + k;
+}
+
+std::set<std::string> App::grabbedXsiKeys(const Document& d) const {
+    // Resolved the way the build resolves them ($basedir, asset root, folder
+    // of the .car, default extension) - "already in the .car" must mean the
+    // file the build would read.
+    car::BuildOptions bo;
+    bo.baseDir = settings_.baseDir;
+    std::vector<std::string> resolved;
+    car::findMissingFiles(d.script, d.path, bo, &resolved);
+    const fs::path carDir = fs::path(d.path).parent_path();
+    std::set<std::string> keys;
+    for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
+        const std::string& file = d.script.grabs[i].file;
+        keys.insert(grabTextKey(file));
+        if (!resolved[i].empty()) {
+            keys.insert(xsiFileKey(resolved[i]));
+            continue;
+        }
+        // Not on disk (yet): every place the build would look.
+        const fs::path f(file);
+        if (f.is_absolute()) {
+            keys.insert(xsiFileKey(f));
+        } else {
+            keys.insert(xsiFileKey(carDir / f));
+            if (!settings_.baseDir.empty()) keys.insert(xsiFileKey(fs::path(settings_.baseDir) / f));
+        }
+    }
+    return keys;
+}
+
 std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) {
     if (docs_.empty() || files.empty()) return 0;
 
@@ -1130,41 +1393,68 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
     }
     if (good.empty()) return 0;
 
-    const auto appendTo = [&](Document& d) {
-        for (const std::string& f : good) {
+    // Store relative to basedir if possible - otherwise the .car contains
+    // absolute paths and is no longer usable on any other machine.
+    const auto storedName = [&](const std::string& f) {
+        if (!settings_.baseDir.empty()) {
+            std::error_code ec;
+            const auto rel = fs::relative(f, settings_.baseDir, ec);
+            if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) return rel.generic_string();
+        }
+        return f;
+    };
+
+    std::vector<char> used(good.size(), 0);
+    std::size_t skipped = 0;
+    // Returns how many lines went into the script.
+    const auto appendTo = [&](Document& d) -> std::size_t {
+        std::set<std::string> have;
+        if (settings_.onlyNewXsi) have = grabbedXsiKeys(d);
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < good.size(); ++i) {
             car::GrabDirective g;
-            // Store relative to basedir if possible - otherwise the .car
-            // contains absolute paths and is no longer usable on any other
-            // machine.
-            g.file = f;
-            if (!settings_.baseDir.empty()) {
-                std::error_code ec;
-                const auto rel = fs::relative(f, settings_.baseDir, ec);
-                if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0)
-                    g.file = rel.generic_string();
+            g.file = storedName(good[i]);
+            if (settings_.onlyNewXsi) {
+                // Also catches the same file twice in one go (overlapping
+                // folders).
+                const std::string byFile = xsiFileKey(good[i]);
+                const std::string byText = grabTextKey(g.file);
+                if (have.count(byFile) || have.count(byText)) {
+                    ++skipped;
+                    continue;
+                }
+                have.insert(byFile);
+                have.insert(byText);
             }
             d.script.grabs.push_back(std::move(g));
+            used[i] = 1;
+            ++n;
         }
-        d.dirty = true;
+        if (n == 0) return 0;
+        touch(d);
         d.validated = false;
         d.syncSelection();
+        return n;
     };
 
     std::size_t touched = 0;
     if (toAll) {
         for (std::size_t k = 0; k < docs_.size(); ++k) {
             if (!docs_[k].loadError.empty()) continue;
-            appendTo(docs_[k]);
+            if (appendTo(docs_[k]) == 0) continue;
             keepRootLast(k);
             ++touched;
         }
     } else if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
-        appendTo(docs_[static_cast<std::size_t>(active_)]);
-        keepRootLast(static_cast<std::size_t>(active_));
-        touched = 1;
+        if (appendTo(docs_[static_cast<std::size_t>(active_)]) > 0) {
+            keepRootLast(static_cast<std::size_t>(active_));
+            touched = 1;
+        }
     }
 
-    log(LogLine::Kind::Good, trf(S::LogAddedFiles, files.size(), touched));
+    const auto added = static_cast<std::size_t>(std::count(used.begin(), used.end(), 1));
+    if (added > 0 || skipped == 0) log(LogLine::Kind::Good, trf(S::LogAddedFiles, added, touched));
+    if (skipped > 0) log(LogLine::Kind::Info, trf(S::LogSkippedExisting, skipped));
     return touched;
 }
 
@@ -1199,6 +1489,7 @@ bool App::saveDocument(std::size_t index) {
         return false;
     }
     d.dirty = false;
+    toast(LogLine::Kind::Good, trf(S::ToastSaved, d.title.c_str()));
     log(LogLine::Kind::Good,
         trf(S::LogSaved, d.title.c_str(),
             settings_.keepBackup ? (d.title + ".bak").c_str() : "-"));
@@ -1264,7 +1555,7 @@ int App::xsiRateOf(const std::string& relPath) const {
     return it->second.frames < 0 ? 0 : it->second.rate;
 }
 
-int App::effectiveSpeed(const car::GrabDirective& g) const {
+double App::effectiveSpeed(const car::GrabDirective& g) const {
     if (g.frameSpeed) return *g.frameSpeed;
     const int rate = xsiRateOf(g.file);
     if (rate < 0) return 0;
@@ -1290,7 +1581,7 @@ std::vector<int> App::targetFrames(const Document& d) const {
 }
 
 std::size_t App::setFrameSpeed(std::size_t docIndex, const std::vector<std::size_t>& rows,
-                               std::optional<int> speed) {
+                               std::optional<double> speed) {
     if (docIndex >= docs_.size()) return 0;
     Document& d = docs_[docIndex];
     std::size_t n = 0;
@@ -1301,7 +1592,7 @@ std::size_t App::setFrameSpeed(std::size_t docIndex, const std::vector<std::size
         g.frameSpeed = speed;
         ++n;
     }
-    if (n) d.dirty = true;
+    if (n) touch(d);
     return n;
 }
 
@@ -1476,7 +1767,7 @@ bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
         d.selected.insert(d.selected.begin() + static_cast<long>(to), sel);
     }
 
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     return true;
 }
@@ -1525,7 +1816,7 @@ std::size_t App::moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
     d.selected.insert(d.selected.begin() + static_cast<long>(target), blockSel.begin(),
                       blockSel.end());
 
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     closeEditorOf(docIndex);
     keepRootLast(docIndex);
@@ -1549,7 +1840,7 @@ bool App::keepRootLast(std::size_t docIndex) {
             d.selected.erase(d.selected.begin() + static_cast<long>(i));
             d.selected.push_back(sel);
         }
-        d.dirty = true;
+        touch(d);
         closeEditorOf(docIndex);
         return true;
     }
@@ -1589,7 +1880,7 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
         ++n;
     }
     if (n) {
-        d.dirty = true;
+        touch(d);
         d.validated = false;
         // An open edit dialog could point at a deleted row.
         closeEditorOf(docIndex);
@@ -1631,7 +1922,7 @@ std::size_t App::pasteGrabs(std::size_t docIndex, std::size_t before) {
                           items.end());
     d.selected.insert(d.selected.begin() + static_cast<long>(before), items.size(), 0);
 
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     closeEditorOf(docIndex);
     keepRootLast(docIndex);
@@ -1697,14 +1988,15 @@ bool App::loadEnums(const std::string& path) {
     return true;
 }
 
-void App::validateDocument(std::size_t index) {
+void App::validateDocument(std::size_t index, bool light) {
     if (index >= docs_.size()) return;
     Document& d = docs_[index];
     if (!d.loadError.empty()) return;
 
     car::ValidateOptions vo;
     vo.baseDir = settings_.baseDir;
-    vo.readFrameCounts = settings_.readFrameCounts;
+    // The automatic check after an edit stays cheap: no .xsi is parsed.
+    vo.readFrameCounts = settings_.readFrameCounts && !light;
     vo.threads = 0;   // all cores
     if (!enums_.empty()) vo.enums = &enums_;
     if (settings_.useCache && !settings_.baseDir.empty())
@@ -1719,6 +2011,8 @@ void App::validateAll() {
     std::size_t err = 0, warn = 0;
     for (const auto& d : docs_) { err += d.validation.errors; warn += d.validation.warnings; }
     log(err ? LogLine::Kind::Bad : LogLine::Kind::Good, trf(S::LogValidation, err, warn));
+    // Whoever presses "Validate" wants to see the result.
+    if (err || warn) bottomOpen_[static_cast<int>(Mode::Build)] = true;
 }
 
 // --- Building --------------------------------------------------------------
@@ -1738,15 +2032,26 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
     try {
         if (d.outputDir.empty())
             throw std::runtime_error(tr(S::LogNoOutputDir));
-        if (st.referenceGla.empty())
-            throw std::runtime_error(tr(S::LogNoRefGla));
 
-        const MdxaFile ref = readMdxa(readWholeFileBytes(st.referenceGla));
+        // Which skeleton. A model script ($aseanimgrab_gla) and a script with
+        // $aseanimref_gla name their GLA themselves - that one wins over the
+        // setting: a model's GLM must point to exactly the GLA it was made for.
+        const car::ScriptKind kind = car::scriptKind(d.script);
+        bool scriptNamesGla = kind == car::ScriptKind::Model;
+        for (const auto& stt : d.script.statements)
+            if (stt.cmd == car::Cmd::AseAnimRefGla) scriptNamesGla = true;
+        // No reference at all: the skeleton is built from the sources, as
+        // Carcass does (runJob says when that cannot work).
+        std::string refPath = scriptNamesGla || st.newSkeleton ? std::string() : st.referenceGla;
+        if (refPath.empty() && !st.newSkeleton) refPath = car::scriptReferenceGla(d.script, st.baseDir, d.path);
+        if (kind == car::ScriptKind::Model)
+            log(LogLine::Kind::Info, trf(S::LogModelScript, d.title.c_str(), refPath.c_str()));
 
         car::BuildOptions bo;
         bo.baseDir = st.baseDir;
         bo.threads = 0;   // all cores
         bo.carcassCompatible = st.carcassCompat;
+        bo.frameStep = std::max(1, st.frameStep);
         if (st.useCache && !st.baseDir.empty())
             bo.cacheDir = (fs::path(st.baseDir) / "g2c_cache").string();
 
@@ -1755,39 +2060,13 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // The library's exception is in German and carries the full text;
         // instead, a message in the configured language is built here from
         // the structured data, saying WHICH sequence is affected and where the
-        // file was expected.
-        {
-            car::BuildOptions probe = bo;
-            probe.skipMissing = true;
-
-            // The probe run must NOT throw. If all files are missing, build
-            // aborts with "not a single one readable" - then the detailed
-            // message would never be produced, and the user would see exactly
-            // the useless sentence it is meant to replace.
-            std::vector<car::BuildResult::MissingFile> missing;
-            try {
-                missing = car::build(d.script, ref.skeleton, d.path, probe).missing;
-            } catch (const std::exception&) {
-                // Everything is missing: build the list ourselves.
-                for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
-                    const auto& g = d.script.grabs[i];
-                    if (!car::resolveAssetPath(g.file, st.baseDir,
-                                               fs::path(d.path).parent_path().string())
-                             .empty())
-                        continue;
-                    car::BuildResult::MissingFile m;
-                    m.file = g.file;
-                    m.sequence = g.enumName ? *g.enumName : g.derivedName();
-                    m.grabIndex = i;
-                    m.line = g.line;
-                    missing.push_back(std::move(m));
-                }
-            }
-
-            const struct { const std::vector<car::BuildResult::MissingFile>& missing; } chk{missing};
-            if (!chk.missing.empty() && !bo.skipMissing) {
+        // file was expected. Only the paths are resolved - this used to be a
+        // complete extra build, which doubled the time of every build.
+        if (kind == car::ScriptKind::Animation) {
+            const auto missing = car::findMissingFiles(d.script, d.path, bo);
+            if (!missing.empty() && !bo.skipMissing) {
                 char head[160];
-                std::snprintf(head, sizeof(head), tr(S::MissingHead), chk.missing.size(),
+                std::snprintf(head, sizeof(head), tr(S::MissingHead), missing.size(),
                               d.script.grabs.size());
                 log(LogLine::Kind::Bad, d.title + ": " + head);
                 if (!st.baseDir.empty())
@@ -1795,8 +2074,8 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
                         std::string(tr(S::MissingSearched)) + " " + st.baseDir);
                 log(LogLine::Kind::Bad, tr(S::MissingList));
 
-                for (std::size_t i = 0; i < chk.missing.size() && i < 8; ++i) {
-                    const auto& m = chk.missing[i];
+                for (std::size_t i = 0; i < missing.size() && i < 8; ++i) {
+                    const auto& m = missing[i];
                     std::string line = "  " + m.file + "   [" + tr(S::SeqLabel) + " " +
                                        m.sequence + "]";
                     if (m.line) line += " (.car " + std::to_string(m.line) + ")";
@@ -1806,9 +2085,9 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
                             "      " +
                                 (fs::path(st.baseDir) / m.file).lexically_normal().string());
                 }
-                if (chk.missing.size() > 8) {
+                if (missing.size() > 8) {
                     char more[80];
-                    std::snprintf(more, sizeof(more), tr(S::MissingMore), chk.missing.size() - 8);
+                    std::snprintf(more, sizeof(more), tr(S::MissingMore), missing.size() - 8);
                     log(LogLine::Kind::Bad, more);
                 }
                 log(LogLine::Kind::Warn, tr(S::MissingHintBase));
@@ -1823,10 +2102,9 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // "Cannot open ...", again for every grab. The message names the path
         // but not the reason - you then look for missing permissions instead
         // of the overlap.
-        if (!d.outputDir.empty() && !st.referenceGla.empty()) {
+        if (kind == car::ScriptKind::Animation && st.writeGla && !cfgOnly && !refPath.empty()) {
             std::error_code rec;
-            const fs::path refPath(st.referenceGla);
-            const fs::path refDir = refPath.parent_path();
+            const fs::path refDir = fs::path(refPath).parent_path();
             if (!refDir.empty() && fs::exists(refDir, rec) && fs::exists(d.outputDir, rec) &&
                 fs::equivalent(refDir, d.outputDir, rec) && !rec) {
                 log(LogLine::Kind::Bad, trf(S::RefIsTarget, d.title.c_str()));
@@ -1837,166 +2115,88 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // thread. Doing it here would be wrong: d is a copy, and docs_
         // belongs to the UI.
 
-        const car::BuildResult br = car::build(d.script, ref.skeleton, d.path, bo);
-        for (const auto& w : br.warnings) log(LogLine::Kind::Warn, d.title + ": " + w);
+        car::JobOptions jo;
+        jo.build = bo;
+        jo.referenceGla = scriptNamesGla || st.newSkeleton ? std::string() : st.referenceGla;
+        jo.newSkeleton = st.newSkeleton;
+        jo.outputDir = d.outputDir;
+        // "Only animation.cfg": the same build, so the cfg is exactly the one a
+        // full build writes - but the GLA on disk stays as it is.
+        jo.outputs.gla = !cfgOnly && st.writeGla;
+        jo.outputs.animationCfg = cfgOnly || st.writeCfg;
+        jo.outputs.frames = !cfgOnly && st.writeFrames;
+        jo.outputs.glm = !cfgOnly && st.writeMesh;
+        jo.outputs.skin = !cfgOnly && st.writeMesh && st.writeSkin;
+        jo.outputs.info = !cfgOnly && st.writeInfo;
+        jo.log = [&](car::JobLog l, const std::string& t) {
+            if (l == car::JobLog::Warn) log(LogLine::Kind::Warn, d.title + ": " + t);
+        };
+
+        const car::JobResult r = car::runJob(d.script, d.path, jo);
+        if (r.skeletonBuilt) log(LogLine::Kind::Info, trf(S::LogNewSkeleton, d.title.c_str()));
 
         // Report duplicate names on BUILD too, not only on validation.
         //
         // Anyone who builds without validating first would otherwise get an
         // animation.cfg in which one animation is unreachable - and only
-        // notice in the game, where nothing points to it.
-        {
-            std::map<std::string, int> gesehen;
-            for (const auto& sq : br.sequences) {
+        // notice in the game, where nothing points to it. runJob writes
+        // nothing in that case.
+        if (!r.duplicates.empty()) {
+            std::map<std::string, int> count;
+            for (const auto& sq : r.anim.sequences) {
                 std::string n = sq.name;
-                for (auto& c : n)
-                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                ++gesehen[n];
+                for (auto& ch : n)
+                    ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                ++count[n];
             }
-            std::vector<std::string> doppelt;
-            for (const auto& [name, anzahl] : gesehen)
-                if (anzahl > 1) {
-                    log(LogLine::Kind::Bad,
-                        trf(S::DupInCfg, d.title.c_str(), name.c_str(), anzahl));
-                    doppelt.push_back(name);
-                }
-
-            // Do NOT write while names are duplicated.
-            //
-            // A GLA with unreachable animations looks finished and only
-            // shows up in the game - where nothing then points to the cause.
-            // Better to write nothing at all and say so here.
-            if (!doppelt.empty()) {
-                // Pass the names along: the caller enters them as messages so
-                // that clicking one jumps to the rows.
-                {
-                    // Per script path: with "Build all" every script keeps its
-                    // own list, and two tabs with the same title don't mix.
-                    std::lock_guard<std::mutex> lock(dupMutex_);
-                    pendingDuplicates_[d.path] = doppelt;
-                }
-                throw std::runtime_error(trf(S::BuildStoppedDup, doppelt.size()));
+            for (const auto& name : r.duplicates)
+                log(LogLine::Kind::Bad, trf(S::DupInCfg, d.title.c_str(), name.c_str(), count[name]));
+            {
+                // Per script path: with "Build all" every script keeps its
+                // own list, and two tabs with the same title don't mix.
+                std::lock_guard<std::mutex> lock(dupMutex_);
+                pendingDuplicates_[d.path] = r.duplicates;
             }
+            throw std::runtime_error(trf(S::BuildStoppedDup, r.duplicates.size()));
         }
 
-        MdxaWriteOptions wo;
-        wo.threads = 0;   // all cores
-        if (st.carcassCompat) {
-            wo.compress.rounding = Rounding::Legacy;
-            wo.compress.optimizeQuat = false;
-            wo.compress.canonicalizeSign = false;
-        }
         // The GLA name in the header comes from -makeskel, NOT from the
-        // reference.
-        //
-        // It is stored as a string in the file and tells the engine which
-        // skeleton this is. When we took it from the reference, every built
-        // file carried "models/players/_humanoid/_humanoid" - no matter where
-        // it belonged. In the game a custom humanoid then identified itself as
-        // the standard humanoid, and the engine used that one's animation.cfg.
-        Skeleton outSkel = ref.skeleton;
-        if (d.script.convert && !d.script.convert->makeSkel.empty()) {
+        // reference (runJob does that). Say so when they differ.
+        if (kind == car::ScriptKind::Animation && d.script.convert &&
+            !d.script.convert->makeSkel.empty()) {
             std::string ms = d.script.convert->makeSkel;
             std::replace(ms.begin(), ms.end(), '\\', '/');
-            if (ms != outSkel.name)
-                log(LogLine::Kind::Info, trf(S::GlaNameFromMakeSkel, ms.c_str()));
-            outSkel.name = ms;
+            if (!refPath.empty()) try {
+                const MdxaFile ref = readMdxa(readWholeFileBytes(refPath));
+                if (ms != ref.skeleton.name)
+                    log(LogLine::Kind::Info, trf(S::GlaNameFromMakeSkel, ms.c_str()));
+            } catch (const std::exception&) {
+            }
         }
 
-
-        const fs::path outDir(d.outputDir);
-        std::error_code ec;
-        fs::create_directories(outDir, ec);
-
-        std::string stem = "out";
-        if (d.script.convert && !d.script.convert->makeSkel.empty()) {
-            const std::string& ms = d.script.convert->makeSkel;
-            const std::size_t sl = ms.find_last_of("/\\");
-            stem = (sl == std::string::npos) ? ms : ms.substr(sl + 1);
-        }
-
-        // Every output goes through writeOutput: first into a side file, then
-        // replaced in one go, errors go to the log. Previously unchecked
-        // ofstreams wrote directly to the target - if the GLA was locked (game
-        // or ModView open) or the disk full, the log still said "built", and
-        // the old file had already been truncated to zero.
-        // "Only animation.cfg": the same build, so the cfg is exactly the one a
-        // full build writes - but the GLA on disk stays as it is.
-        if (!cfgOnly) {
-            const auto res = writeMdxa(outSkel, br.frames, wo);
-            const fs::path gla = outDir / (stem + ".gla");
-            if (!writeOutput(d.title, gla.string(),
-                             std::string(reinterpret_cast<const char*>(res.data.data()),
-                                         res.data.size())))
-                return;
-            log(LogLine::Kind::Good, d.title + " -> " + gla.string() + " (" +
-                                         std::to_string(br.totalFrames()) + " Frames)");
-        }
-
-        {
-            std::ostringstream head;
-            head << br.totalFrames() << " frames; " << br.sequences.size()
-                 << " sequences; erzeugt von g2c";
-            const std::string cfg = car::writeAnimationCfg(br.sequences, head.str());
-            // No .bak: the animation.cfg is regenerated completely on every
-            // build, a backup of it would be worthless and just clutter the
-            // folder. For .car files, which are edited by hand, that's
-            // different - the backup stays there.
-            if (!writeOutput(d.title, (outDir / "animation.cfg").string(), cfg)) return;
-            if (cfgOnly)
+        bool cfgWritten = false;
+        for (const auto& f : r.written) {
+            if (f.what == "GLA")
+                log(LogLine::Kind::Good, d.title + " -> " + f.path + " (" +
+                                             std::to_string(r.anim.totalFrames()) + " Frames)");
+            else if (f.what == "GLM")
                 log(LogLine::Kind::Good,
-                    trf(S::LogCfgWritten, (outDir / "animation.cfg").string().c_str()));
+                    d.title + " -> " + f.path + " (" + std::to_string(r.mesh.surfaces) +
+                        " Surfaces, " + std::to_string(r.mesh.vertices) + " Verts)");
+            else if (f.what == "animation.cfg") {
+                cfgWritten = true;
+                if (cfgOnly) log(LogLine::Kind::Good, trf(S::LogCfgWritten, f.path.c_str()));
+                else log(LogLine::Kind::Good, trf(S::LogFileWritten, d.title.c_str(), f.path.c_str()));
+            } else {
+                log(LogLine::Kind::Info, trf(S::LogFileWritten, d.title.c_str(), f.path.c_str()));
+            }
         }
-        log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
+        if (cfgWritten) log(LogLine::Kind::Warn, tr(S::CfgBelongsWithGla));
 
         // Remember the output folder so it can be opened.
         {
             std::lock_guard<std::mutex> lock(outputDirMutex_);
-            lastOutputDir_ = outDir.string();
-        }
-
-        if (!cfgOnly && st.writeFrames && !br.frameBlocks.empty()) {
-            std::vector<FrameEntry> fe;
-            for (const auto& b : br.frameBlocks) {
-                FrameEntry e;
-                e.sourcePath = fs::absolute(b.sourcePath).generic_string();
-                e.startFrame = b.startFrame;
-                e.duration = b.duration;
-                e.fps = b.fps;
-                for (int k = 0; k < 3; ++k) e.averageVec[k] = b.averageVec[k];
-                fe.push_back(std::move(e));
-            }
-            writeOutput(d.title, (outDir / (stem + ".frames")).string(), writeFrames(fe));
-        }
-
-        if (!cfgOnly && st.writeMesh && d.script.convert && !d.script.convert->root.empty()) {
-            const std::string carDir = fs::path(d.path).parent_path().string();
-            std::string xsi;
-            for (const char* ext : {".xsi", ".XSI"}) {
-                xsi = car::resolveAssetPath(d.script.convert->root + ext, st.baseDir, carDir);
-                if (!xsi.empty()) break;
-            }
-            if (xsi.empty()) {
-                log(LogLine::Kind::Warn, trf(S::LogMeshSourceMissing, d.title.c_str()));
-            } else {
-                xsi::MeshImportOptions mo;
-                mo.scale = ref.skeleton.scale > 0.0f ? ref.skeleton.scale : 1.0f;
-                mo.animName = ref.skeleton.name;
-                mo.modelName = stem + ".glm";
-                for (const auto& b : ref.skeleton.bones) mo.boneNames.push_back(b.name);
-                const auto mr = xsi::importMeshFile(xsi, mo);
-                const auto mw = writeMdxm(mr.mesh);
-                if (writeOutput(d.title, (outDir / (stem + ".glm")).string(),
-                                std::string(reinterpret_cast<const char*>(mw.data.data()),
-                                            mw.data.size()))) {
-                    log(LogLine::Kind::Good,
-                        d.title + " -> " + stem + ".glm (" + std::to_string(mr.stats.surfaces) +
-                            " Surfaces, " + std::to_string(mr.stats.vertices) + " Verts)");
-                    if (st.writeSkin)
-                        writeOutput(d.title, (outDir / (stem + ".skin")).string(),
-                                    writeSkin(mr.mesh));
-                }
-            }
+            lastOutputDir_ = fs::path(d.outputDir).string();
         }
     } catch (const std::exception& e) {
         log(LogLine::Kind::Bad, d.title + ": " + e.what());
@@ -2080,6 +2280,13 @@ void App::startBuildIndices(std::vector<std::size_t> which, bool cfgOnly) {
     job_.cancel.store(false);
     job_.done.store(0);
     job_.total.store(targets.size());
+    buildStarted_ = nowSeconds();
+    buildCount_ = targets.size();
+    buildFirstOut_ = targets.front().outputDir;
+    {
+        std::lock_guard<std::mutex> lock(logMutex_);
+        badAtBuildStart_ = badLogCount_;
+    }
     job_.running.store(true);
 
     // Copies of the documents AND the settings, so the UI stays usable during
@@ -2111,13 +2318,18 @@ void App::applyStyle() {
     // instead of 6 pixels, and the windows' resize grip covered the buttons
     // along their bottom edge.
     s = ImGuiStyle();
-    s.WindowRounding = 6.0f;
-    s.FrameRounding = 4.0f;
-    s.GrabRounding = 4.0f;
-    s.TabRounding = 4.0f;
-    s.ScrollbarRounding = 4.0f;
-    s.FramePadding = ImVec2(8, 5);
+    s.WindowRounding = 8.0f;
+    s.ChildRounding = 6.0f;
+    s.PopupRounding = 8.0f;
+    s.FrameRounding = 5.0f;
+    s.GrabRounding = 5.0f;
+    s.TabRounding = 5.0f;
+    s.ScrollbarRounding = 6.0f;
+    s.FramePadding = ImVec2(9, 5);
     s.ItemSpacing = ImVec2(8, 6);
+    s.PopupBorderSize = 1.0f;
+    // Disabled controls clearly grey, not just a little dimmer.
+    s.DisabledAlpha = 0.38f;
     s.WindowPadding = ImVec2(12, 10);
     s.CellPadding = ImVec2(8, 4);
     s.ScrollbarSize = 12.0f;
@@ -2198,6 +2410,14 @@ void App::drawMenuBar() {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu(tr(S::MenuEdit))) {
+        if (ImGui::MenuItem(withIcon(ICON_UNDO, tr(S::Undo)), "Ctrl+Z", false, canUndo())) undo();
+        if (ImGui::MenuItem(withIcon(ICON_REDO, tr(S::Redo)), "Ctrl+Y", false, canRedo())) redo();
+        ImGui::Separator();
+        if (ImGui::MenuItem(withIcon(ICON_SEARCH, tr(S::Palette)), "Ctrl+K")) paletteRequest_ = true;
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu(tr(S::MenuBuild))) {
         if (ImGui::MenuItem(tr(S::BuildCurrent), "F5", false, !docs_.empty() && !buildRunning()))
             startBuild(false);
@@ -2258,7 +2478,12 @@ void App::drawToolbar() {
     const bool have = !docs_.empty();
 
     ImGui::BeginDisabled(busy || !have);
+    // The shortcut in the tooltip: whoever hovers learns it on the way.
+    const auto keyTip = [](const char* keys) {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", keys);
+    };
     if (iconButton(ICON_SAVE, kIconInfo, tr(S::BtnSave))) saveDocument(static_cast<std::size_t>(active_));
+    keyTip("Ctrl+S");
     ImGui::SameLine();
     {
         std::size_t dirty = 0;
@@ -2267,16 +2492,35 @@ void App::drawToolbar() {
         if (ImGui::Button(dirty ? (std::string(tr(S::BtnSaveAll)) + " (" + std::to_string(dirty) + ")").c_str()
                                 : tr(S::BtnSaveAll)))
             saveAllDocuments();
+        keyTip("Ctrl+Shift+S");
         ImGui::EndDisabled();
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(!canUndo());
+    if (ImGui::Button(iconsAvailable() ? ICON_UNDO : "<")) undo();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s (Ctrl+Z)", tr(S::Undo));
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canRedo());
+    if (ImGui::Button(iconsAvailable() ? ICON_REDO : ">")) redo();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s (Ctrl+Y)", tr(S::Redo));
+    ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
-    if (iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuild))) startBuild(false);
+    // The main action stands out.
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.46f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.36f, 1.0f));
+    const bool buildClicked = iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuild));
+    ImGui::PopStyleColor(2);
+    keyTip("F5");
+    if (buildClicked) startBuild(false);
     ImGui::SameLine();
     if (iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuildAll))) startBuild(true);
+    keyTip("Shift+F5");
     ImGui::SameLine();
     if (iconButton(ICON_VALIDATE, kIconWarn, tr(S::BtnValidate))) validateAll();
+    keyTip("F7");
     ImGui::SameLine();
     if (iconButton(ICON_SETTINGS, kIconInfo, tr(S::BtnModel)))
         openModelDialog(static_cast<std::size_t>(active_));
@@ -2288,43 +2532,74 @@ void App::drawToolbar() {
 
     ImGui::BeginDisabled(busy);
     if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::BtnOpenFolder))) openFolderDialog();
+    keyTip("Ctrl+Shift+O");
     ImGui::SameLine();
     ImGui::BeginDisabled(!have);
-    if (iconButton(ICON_ADD, kIconInfo, tr(S::BtnAddXsi)) && platform_.openFiles) {
-        const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
-        if (!files.empty()) addXsiFiles(files, false);
-    }
-    ImGui::SameLine();
-    if (iconButton(ICON_FOLDER, kIconInfo, tr(S::BtnAddXsiFolder)) &&
-        (platform_.pickFolders || platform_.pickFolder)) {
-        // Several folders at once: for a model with animations from ten
-        // sources, clicking ten times is the actual work.
-        const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        std::size_t files = 0;
-        for (const auto& d : dirs) files += addXsiFolder(d, false);
-        if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
-    }
-    ImGui::SameLine();
-    if (iconButton(ICON_FOLDER, kIconAccent, tr(S::BtnAddXsiFolderAll)) &&
-        (platform_.pickFolders || platform_.pickFolder)) {
-        const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        std::size_t files = 0;
-        for (const auto& d : dirs) files += addXsiFolder(d, true);
-        if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
-    }
-    ImGui::SameLine();
-    if (iconButton(ICON_ADD, kIconAccent, tr(S::BtnAddXsiAll)) && platform_.openFiles) {
-        const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
-        if (!files.empty()) addXsiFiles(files, true);
+    // One button with a menu instead of four: files or a folder, for this
+    // script or - set apart, because it touches every open one - for all.
+    {
+        const std::string lbl = std::string(tr(S::BtnAddXsi)) + "    ";
+        const bool open = iconButton(ICON_ADD, kIconInfo, lbl.c_str());
+        // A small down arrow in the space at the end of the label.
+        const ImVec2 mx = ImGui::GetItemRectMax(), mn = ImGui::GetItemRectMin();
+        const float ah = (mx.y - mn.y) * 0.18f;
+        const ImVec2 c(mx.x - ImGui::GetStyle().FramePadding.x - ah, (mn.y + mx.y) * 0.5f);
+        ImGui::GetWindowDrawList()->AddTriangleFilled(ImVec2(c.x - ah, c.y - ah * 0.5f), ImVec2(c.x + ah, c.y - ah * 0.5f),
+                                                      ImVec2(c.x, c.y + ah * 0.7f), ImGui::GetColorU32(ImGuiCol_Text));
+        if (open) ImGui::OpenPopup("addxsimenu");
+        if (ImGui::BeginPopup("addxsimenu")) {
+            if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::AddXsiMenuFiles))) && platform_.openFiles) {
+                const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
+                if (!files.empty()) addXsiFiles(files, false);
+            }
+            if (ImGui::MenuItem(withIcon(ICON_FOLDER, tr(S::AddXsiMenuFolder))) &&
+                (platform_.pickFolders || platform_.pickFolder)) {
+                // Several folders at once: for a model with animations from
+                // ten sources, clicking ten times is the actual work.
+                const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
+                std::size_t files = 0;
+                for (const auto& d : dirs) files += addXsiFolder(d, false);
+                if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::AddXsiMenuFilesAll))) && platform_.openFiles) {
+                const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
+                if (!files.empty()) addXsiFiles(files, true);
+            }
+            if (ImGui::MenuItem(withIcon(ICON_FOLDER, tr(S::AddXsiMenuFolderAll))) &&
+                (platform_.pickFolders || platform_.pickFolder)) {
+                const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
+                std::size_t files = 0;
+                for (const auto& d : dirs) files += addXsiFolder(d, true);
+                if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+            }
+            ImGui::EndPopup();
+        }
     }
     ImGui::EndDisabled();
+    // Right next to the buttons it applies to: decided while adding, not
+    // somewhere in the settings.
+    ImGui::SameLine();
+    ImGui::Checkbox(tr(S::OnlyNewXsi), &settings_.onlyNewXsi);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OnlyNewXsiTooltip));
     ImGui::EndDisabled();
 
     if (busy) {
         ImGui::SameLine();
         if (ImGui::Button(withIcon(ICON_CANCEL, tr(S::BtnCancel)))) job_.cancel.store(true);
+    }
+
+    // Settings on the right edge: shown or hidden, highlighted when shown.
+    {
+        const char* lbl = tr(S::Settings);
+        const float w = ImGui::CalcTextSize(withIcon(ICON_SETTINGS, lbl)).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - w));
+        if (showSettings_) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
+        const bool hit = iconButton(ICON_SETTINGS, kIconInfo, lbl);
+        if (showSettings_) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::SettingsToggleTip));
+        if (hit) showSettings_ = !showSettings_;
     }
 }
 
@@ -2384,16 +2659,32 @@ void App::drawSettingsPanel() {
         ImGui::SetTooltip("%s", tr(S::AssignTooltip));
 
     ImGui::SeparatorText(tr(S::SecOutput));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OutputsTooltip));
+    ImGui::Checkbox(tr(S::WriteGla), &settings_.writeGla);
+    ImGui::Checkbox(tr(S::WriteCfg), &settings_.writeCfg);
     ImGui::Checkbox(tr(S::WriteFrames), &settings_.writeFrames);
+    ImGui::Checkbox(tr(S::WriteInfo), &settings_.writeInfo);
     ImGui::Checkbox(tr(S::WriteMesh), &settings_.writeMesh);
     ImGui::BeginDisabled(!settings_.writeMesh);
     ImGui::Checkbox(tr(S::WriteSkin), &settings_.writeSkin);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", tr(S::SkinTooltip));
     ImGui::EndDisabled();
 
     ImGui::SeparatorText(tr(S::SecProcessing));
     ImGui::Checkbox(tr(S::UseCache), &settings_.useCache);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::CacheTooltip));
+    ImGui::Checkbox(tr(S::NewSkeleton), &settings_.newSkeleton);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", tr(S::NewSkeletonTooltip));
+    {
+        ImGui::SetNextItemWidth(90 * (settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f));
+        int fs = settings_.frameStep;
+        if (ImGui::InputInt(tr(S::FrameStep), &fs)) settings_.frameStep = std::clamp(fs, 1, 1000);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tr(S::FrameStepTooltip));
+    }
     ImGui::Checkbox(tr(S::CarcassMode), &settings_.carcassCompat);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::CarcassTooltip));
@@ -2596,16 +2887,42 @@ void drawDropLine(bool below, float k) {
 }  // namespace
 
 // Same rule as when drawing: the name or the file contains the filter text.
+bool App::rowHasIssue(const Document& d, std::size_t i) const {
+    // The last results, even while an edit has made them stale: the
+    // "Issues" filter used to empty the table on every keystroke.
+    if (i >= d.script.grabs.size()) return false;
+    const auto& g = d.script.grabs[i];
+    const std::string name = g.enumName ? *g.enumName : g.derivedName();
+    for (const auto& is : d.validation.issues) {
+        if (is.level == car::Issue::Level::Info) continue;
+        if ((is.line && is.line == g.line) || (!is.sequence.empty() && is.sequence == name)) return true;
+        for (const auto& a : g.additional)
+            if (!is.sequence.empty() && is.sequence == a.name) return true;
+    }
+    return false;
+}
+
 bool App::rowVisible(const Document& d, std::size_t i) const {
-    if (filter_[0] == '\0') return true;
+    if (filter_[0] == '\0' && rowFilter_ == 0) return true;
     if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
     // Split part names too, exactly like the table: rows shown only because
-    // of a part were skipped by Shift-click and drag-select.
-    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos ||
-           std::any_of(g.additional.begin(), g.additional.end(),
-                       [&](const auto& a) { return a.name.find(filter_) != std::string::npos; });
+    // of a part were skipped by Shift-click and drag-select. Case does not
+    // matter: "walk" finds BOTH_WALK1.
+    if (filter_[0] != '\0' && !containsNoCase(name, filter_) && !containsNoCase(g.file, filter_) &&
+        std::none_of(g.additional.begin(), g.additional.end(),
+                     [&](const auto& a) { return containsNoCase(a.name, filter_); }))
+        return false;
+    switch (rowFilter_) {
+        case 1: return rowHasIssue(d, i);
+        case 2: return !enums_.empty() && !enums_.contains(name);
+        case 3:
+            return effectiveSpeed(g) < 0 ||
+                   std::any_of(g.additional.begin(), g.additional.end(), [](const auto& a) { return a.frameSpeed < 0; });
+        case 4: return !g.additional.empty();
+        default: return true;
+    }
 }
 
 void App::drawSequenceTable(Document& d) {
@@ -2648,6 +2965,10 @@ void App::drawSequenceTable(Document& d) {
             ImGui::SameLine();
             if (ImGui::SmallButton(tr(S::ClearFolder))) d.outputDir.clear();
         }
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        drawOutputChips();
     }
 
     ImGui::SetNextItemWidth(220 * settings_.dpiScale);
@@ -2689,6 +3010,41 @@ void App::drawSequenceTable(Document& d) {
         }
     }
 
+    // Quick filters with their counts: the rows that need attention are one
+    // click away.
+    {
+        std::size_t counts[5] = {d.script.grabs.size(), 0, 0, 0, 0};
+        for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
+            const auto& g = d.script.grabs[i];
+            const std::string name = g.enumName ? *g.enumName : g.derivedName();
+            if (rowHasIssue(d, i)) ++counts[1];
+            if (!enums_.empty() && !enums_.contains(name)) ++counts[2];
+            if (effectiveSpeed(g) < 0 ||
+                std::any_of(g.additional.begin(), g.additional.end(), [](const auto& a) { return a.frameSpeed < 0; }))
+                ++counts[3];
+            if (!g.additional.empty()) ++counts[4];
+        }
+        const S labels[5] = {S::ChipAll, S::ChipProblems, S::ChipNoEnum, S::ChipBackwards, S::ChipParts};
+        for (int c = 0; c < 5; ++c) {
+            if (c > 0 && counts[c] == 0 && rowFilter_ != c) continue;   // nothing to filter
+            char lbl[64];
+            std::snprintf(lbl, sizeof(lbl), tr(labels[c]), counts[c]);
+            const bool on = rowFilter_ == c;
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.40f, 0.62f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.47f, 0.72f, 1.0f));
+            }
+            ImGui::PushID(c);
+            const bool hit = ImGui::SmallButton(lbl);
+            ImGui::PopID();
+            if (on) ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ChipTip));
+            if (hit) rowFilter_ = c;
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+    }
+
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                   ImGuiTableFlags_SizingStretchProp;
@@ -2722,20 +3078,14 @@ void App::drawSequenceTable(Document& d) {
     if (ImGui::TableGetHoveredColumn() == 4 && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::TipSpeedColumn));
 
-    const std::string needle = filter_;
-    const bool hasFilter = !needle.empty();
+    const bool hasFilter = filter_[0] != '\0' || rowFilter_ != 0;
     if (d.selected.size() != d.script.grabs.size()) d.syncSelection();
     const std::vector<int> targets = targetFrames(d);
 
     for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
         auto& g = d.script.grabs[i];
         const std::string name = g.enumName ? *g.enumName : g.derivedName();
-        if (!needle.empty() && name.find(needle) == std::string::npos &&
-            g.file.find(needle) == std::string::npos &&
-            std::none_of(g.additional.begin(), g.additional.end(), [&](const auto& a) {
-                return a.name.find(needle) != std::string::npos;
-            }))
-            continue;
+        if (!rowVisible(d, i)) continue;
 
         // Show comment lines above the sequence.
         //
@@ -2783,7 +3133,7 @@ void App::drawSequenceTable(Document& d) {
                     } else {
                         d.script.grabs[i].commentsBefore[ci] = neu;
                     }
-                    d.dirty = true;
+                    touch(d);
                     editCommentGrab_ = -1;
                     editCommentLine_ = -1;
                 }
@@ -2860,7 +3210,7 @@ void App::drawSequenceTable(Document& d) {
                     if (ImGui::MenuItem(tr(S::DeleteSeq))) {
                         d.script.grabs[i].commentsBefore.erase(
                             d.script.grabs[i].commentsBefore.begin() + static_cast<long>(ci));
-                        d.dirty = true;
+                        touch(d);
                     }
                     ImGui::EndPopup();
                 }
@@ -3062,7 +3412,7 @@ void App::drawSequenceTable(Document& d) {
             if (ImGui::MenuItem(tr(S::AddDivider))) {
                 d.script.grabs[i].commentsBefore.push_back(
                     "//////////////////////////////////////////");
-                d.dirty = true;
+                touch(d);
             }
             if (ImGui::MenuItem(tr(S::AddComment))) {
                 // Create an empty line and open it for editing right away -
@@ -3073,7 +3423,7 @@ void App::drawSequenceTable(Document& d) {
                 editCommentLine_ =
                     static_cast<int>(d.script.grabs[i].commentsBefore.size()) - 1;
                 editCommentBuf_[0] = '\0';
-                d.dirty = true;
+                touch(d);
             }
 
             // Framespeed for every row at once - Assimilate only had it per
@@ -3084,8 +3434,9 @@ void App::drawSequenceTable(Document& d) {
                 if (ImGui::MenuItem(lbl)) {
                     speedRows_ = rows;
                     speedDocPath_ = d.path;
-                    const int sp = effectiveSpeed(d.script.grabs[rows.front()]);
-                    speedValue_ = sp > 0 ? sp : car::BuildOptions{}.defaultFrameSpeed;
+                    const double sp = effectiveSpeed(d.script.grabs[rows.front()]);
+                    // Negative = backwards, a real value (0 = unknown).
+                    speedValue_ = sp != 0 ? sp : car::BuildOptions{}.defaultFrameSpeed;
                 }
             }
 
@@ -3136,28 +3487,105 @@ void App::drawSequenceTable(Document& d) {
             else if (fc == -2) iconText(ICON_CANCEL, kIconBad, tr(S::EnumMissing));
             else ImGui::Text("%d", fc);
         }
-        ImGui::TableNextColumn();
-        // Without -loop the build writes 0, exactly as Carcass does (checked
-        // against Raven's animation.cfg) - shown greyed, because it is not in
-        // the script.
-        if (g.loop) ImGui::Text("%d", *g.loop);
-        else ImGui::TextDisabled("0");
-        if (!g.loop && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::TipLoopDefault));
-        ImGui::TableNextColumn();
-        {
-            // The real number, as the build writes it. Greyed when it comes
-            // from the .xsi rather than from -framespeed in the script.
-            const int sp = effectiveSpeed(g);
-            if (g.frameSpeed) ImGui::Text("%d", sp);
-            else if (sp > 0) ImGui::TextDisabled("%d", sp);
-            else ImGui::TextDisabled("...");
-            if (!g.frameSpeed && sp > 0 && ImGui::IsItemHovered()) {
-                // From the file only if the file has a rate; otherwise it is
-                // the build's default, and the tooltip used to claim the file.
-                if (xsiRateOf(g.file) > 0) ImGui::SetTooltip(tr(S::TipSpeedFromXsi), sp);
-                else ImGui::SetTooltip(tr(S::TipSpeedDefault), sp);
+        // Loop and speed: double-click edits right in the cell; Enter takes
+        // it, Escape drops it, an empty field removes the flag (default).
+        const auto cellEditor = [&](int col) {
+            ImGui::SetNextItemWidth(-1);
+            if (focusCellField_) {
+                ImGui::SetKeyboardFocusHere();
+                focusCellField_ = false;
             }
+            const bool enter = ImGui::InputText("##cell", editCellBuf_, sizeof(editCellBuf_),
+                                                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                editCellRow_ = -1;
+                return;
+            }
+            if (!enter && !(ImGui::IsItemDeactivated() && !ImGui::IsItemActive())) return;
+            std::string t = editCellBuf_;
+            t.erase(0, t.find_first_not_of(" \t"));
+            t.erase(t.find_last_not_of(" \t") + 1);
+            std::replace(t.begin(), t.end(), ',', '.');   // "16,5" works too
+            char* end = nullptr;
+            if (col == 0) {
+                if (t.empty()) g.loop.reset();
+                else {
+                    const long v = std::strtol(t.c_str(), &end, 10);
+                    if (end && *end == '\0') g.loop = static_cast<int>(v);
+                }
+            } else {
+                if (t.empty()) g.frameSpeed.reset();
+                else {
+                    const double v = std::strtod(t.c_str(), &end);
+                    if (end && *end == '\0' && v != 0.0) g.frameSpeed = v;
+                }
+            }
+            touch(d);
+            editCellRow_ = -1;
+        };
+        const auto startCellEdit = [&](int col, const std::string& text) {
+            if (!(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) return;
+            editCellRow_ = static_cast<int>(i);
+            editCellCol_ = col;
+            focusCellField_ = true;
+            std::snprintf(editCellBuf_, sizeof(editCellBuf_), "%s", text.c_str());
+        };
+        ImGui::TableNextColumn();
+        ImGui::PushID("loopcell");
+        if (editCellRow_ == static_cast<int>(i) && editCellCol_ == 0) {
+            cellEditor(0);
+        } else {
+            // Without -loop the build writes 0, exactly as Carcass does
+            // (checked against Raven's animation.cfg) - shown greyed, because
+            // it is not in the script.
+            const std::string t = g.loop ? std::to_string(*g.loop) : std::string("0");
+            if (!g.loop) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            textSelectable(t, ImGuiSelectableFlags_AllowDoubleClick);
+            if (!g.loop) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                if (g.loop) ImGui::SetTooltip("%s", tr(S::CellEditTip));
+                else ImGui::SetTooltip("%s\n%s", tr(S::TipLoopDefault), tr(S::CellEditTip));
+            }
+            startCellEdit(0, g.loop ? t : std::string());
         }
+        ImGui::PopID();
+        ImGui::TableNextColumn();
+        ImGui::PushID("speedcell");
+        if (editCellRow_ == static_cast<int>(i) && editCellCol_ == 1) {
+            cellEditor(1);
+        } else {
+            // The real number, as the build writes it. Greyed when it comes
+            // from the .xsi rather than from -framespeed in the script;
+            // violet when it runs backwards.
+            const double sp = effectiveSpeed(g);
+            char t[32];
+            if (sp != 0) std::snprintf(t, sizeof(t), "%g", sp);
+            else std::snprintf(t, sizeof(t), "...");
+            const bool pushed = !g.frameSpeed || sp < 0;
+            if (pushed)
+                ImGui::PushStyleColor(ImGuiCol_Text, sp < 0 ? ImVec4(0.78f, 0.66f, 1.0f, 1.0f)
+                                                            : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            textSelectable(t, ImGuiSelectableFlags_AllowDoubleClick);
+            if (pushed) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                if (sp < 0) {
+                    ImGui::SetTooltip("%s\n%s", tr(S::BackwardsTip), tr(S::CellEditTip));
+                } else if (!g.frameSpeed && sp > 0) {
+                    // From the file only if the file has a rate; otherwise it
+                    // is the build's default. Both are whole numbers.
+                    char tip[256];
+                    std::snprintf(tip, sizeof(tip), xsiRateOf(g.file) > 0 ? tr(S::TipSpeedFromXsi) : tr(S::TipSpeedDefault),
+                                  static_cast<int>(sp));
+                    ImGui::SetTooltip("%s\n%s", tip, tr(S::CellEditTip));
+                } else {
+                    ImGui::SetTooltip("%s", tr(S::CellEditTip));
+                }
+            }
+            char cur[32] = "";
+            if (g.frameSpeed) std::snprintf(cur, sizeof(cur), "%g", *g.frameSpeed);
+            startCellEdit(1, cur);
+        }
+        ImGui::PopID();
         ImGui::TableNextColumn();
         if (g.additional.empty()) {
             ImGui::TextDisabled("-");
@@ -3172,10 +3600,10 @@ void App::drawSequenceTable(Document& d) {
                     char det[96];
                     const int t = targets[i] >= 0 ? targets[i] + a.targetOffset : -1;
                     if (t >= 0)
-                        std::snprintf(det, sizeof(det), " (T:%d C:%d L:%d S:%d)", t, a.frameCount,
+                        std::snprintf(det, sizeof(det), " (T:%d C:%d L:%d S:%g)", t, a.frameCount,
                                       a.loopFrame, a.frameSpeed);
                     else
-                        std::snprintf(det, sizeof(det), " (+%d C:%d L:%d S:%d)", a.targetOffset,
+                        std::snprintf(det, sizeof(det), " (+%d C:%d L:%d S:%g)", a.targetOffset,
                                       a.frameCount, a.loopFrame, a.frameSpeed);
                     parts += det;
                 }
@@ -3192,7 +3620,10 @@ void App::drawSequenceTable(Document& d) {
             }
         }
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(g.file.c_str());
+        // The file name is what tells the rows apart; the folder is the same
+        // for hundreds of them and only pushed the name out of the column.
+        ImGui::TextUnformatted(fs::path(g.file).filename().string().c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g.file.c_str());
         ImGui::TableNextColumn();
         if (enums_.empty()) {
             ImGui::TextDisabled("-");
@@ -3233,7 +3664,7 @@ void App::drawSequenceTable(Document& d) {
                     // the file, but garbage after the numbers.
                     if (!neu.empty() && neu.compare(0, 2, "//") != 0) neu = "// " + neu;
                     d.script.grabs[i].trailingComment = neu;
-                    d.dirty = true;
+                    touch(d);
                     editTrailGrab_ = -1;
                 }
             } else {
@@ -3340,12 +3771,12 @@ void App::drawSequenceTable(Document& d) {
                 d.script.grabs.back().commentsBefore.push_back(c);
                 d.script.trailingComments.erase(
                     d.script.trailingComments.begin() + static_cast<long>(ti));
-                d.dirty = true;
+                touch(d);
             }
             if (ImGui::MenuItem(tr(S::DeleteSeq))) {
                 d.script.trailingComments.erase(
                     d.script.trailingComments.begin() + static_cast<long>(ti));
-                d.dirty = true;
+                touch(d);
             }
             ImGui::EndPopup();
         }
@@ -3391,7 +3822,7 @@ void App::drawSequenceTable(Document& d) {
             if (pos != kAnhaengen && gleicheListe && m.vonZeile < pos) --pos;
             if (pos == kAnhaengen || pos > ziel.size()) pos = ziel.size();
             ziel.insert(ziel.begin() + static_cast<long>(pos), text);
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
     }
@@ -3445,12 +3876,12 @@ void App::drawSequenceTable(Document& d) {
 
 void App::drawTabs() {
     if (docs_.empty()) {
-        ImGui::TextDisabled("%s", tr(S::NoScriptOpen));
-        ImGui::Spacing();
-        ImGui::TextDisabled("%s", tr(S::HintOpenFolder1));
-        ImGui::TextDisabled("%s", tr(S::HintOpenFolder2));
+        drawWelcome();
         return;
     }
+    // With the settings hidden, their state in one line: what is missing is
+    // red and one click away.
+    if (!showSettings_) drawPathStatus();
 
     if (!ImGui::BeginTabBar("cars", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_TabListPopupButton |
                                         ImGuiTabBarFlags_FittingPolicyScroll))
@@ -3519,6 +3950,494 @@ void App::drawTabs() {
     }
 }
 
+// The page without any script: three steps, the recent files, and the hint
+// that dropping works. It replaces two lines of grey text.
+void App::drawWelcome() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float w = std::min(avail.x - 20.0f * k, 640.0f * k);
+    // Centered both ways with the block's size from the previous frame.
+    const ImVec2 size = welcomeW_ > 0.0f ? ImVec2(welcomeW_, welcomeH_) : ImVec2(w, 360.0f * k);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.0f, (avail.x - size.x) * 0.5f),
+                               ImGui::GetCursorPosY() + std::max(0.0f, (avail.y - size.y) * 0.5f)));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.45f);
+    ImGui::TextUnformatted(tr(S::WelcomeTitle));
+    ImGui::PopFont();
+    ImGui::TextDisabled("%s", tr(S::ModeBuildHint));
+    ImGui::Spacing();
+
+    const bool haveRoot = !settings_.baseDir.empty();
+    stepHeader(1, tr(S::WelcomeRoot), haveRoot);
+    if (haveRoot) {
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", settings_.baseDir.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, tr(S::ChooseFolder)))) {
+            const std::string p = askFolder("assetroot", tr(S::AssetRoot));
+            if (!p.empty()) settings_.baseDir = p;
+        }
+    } else {
+        hintText(tr(S::WelcomeRootHint));
+        if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::ChooseFolder))) {
+            const std::string p = askFolder("assetroot", tr(S::AssetRoot));
+            if (!p.empty()) settings_.baseDir = p;
+        }
+    }
+
+    stepHeader(2, tr(S::WelcomeOpen), false);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.42f, 0.70f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.27f, 0.49f, 0.80f, 1.0f));
+    const bool openOne = iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenScript));
+    ImGui::PopStyleColor(2);
+    if (openOne) openScriptDialog();
+    ImGui::SameLine();
+    if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::OpenFolder))) openFolderDialog();
+    ImGui::SameLine();
+    if (iconButton(ICON_ADD, kIconInfo, tr(S::NewCar))) newCarDialog();
+    hintText(tr(S::WelcomeOpenHint));
+
+    stepHeader(3, tr(S::WelcomeBuild), false);
+    hintText(tr(S::WelcomeBuildHint));
+
+    if (!recent_.empty()) {
+        ImGui::Spacing();
+        ImGui::SeparatorText(tr(S::Recent));
+        std::string pick;
+        int shown = 0;
+        for (const auto& r : recent_) {
+            if (shown++ >= 8) break;
+            std::error_code ec;
+            const bool there = fs::exists(r, ec);
+            ImGui::BeginDisabled(!there);
+            ImGui::PushID(r.c_str());
+            if (ImGui::Selectable(fs::path(r).filename().string().c_str())) pick = r;
+            ImGui::PopID();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", fs::path(r).parent_path().string().c_str());
+        }
+        if (!pick.empty()) openPath(pick);
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::EndGroup();
+    welcomeW_ = ImGui::GetItemRectSize().x;
+    welcomeH_ = ImGui::GetItemRectSize().y;
+}
+
+// Paths in one line, each a chip: green with a check when set, red when it
+// is missing. A click shows the settings.
+void App::drawPathStatus() {
+    const auto chip = [&](const char* label, const std::string& value, bool ok, bool optional) {
+        const std::string text =
+            std::string(label) + ": " + (value.empty() ? std::string(optional ? tr(S::PathRefAuto) : tr(S::NotSet)) : value);
+        const bool hit = iconButton(ok ? ICON_CHECK : ICON_WARNING, ok ? kIconGood : (optional ? kIconMuted : kIconBad),
+                                    text.c_str(), true);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PathChipTip));
+        if (hit) showSettings_ = true;
+        ImGui::SameLine();
+    };
+    chip(tr(S::PathRootChip), settings_.baseDir.empty() ? std::string() : fs::path(settings_.baseDir).filename().string(),
+         !settings_.baseDir.empty(), false);
+    chip(tr(S::PathRefChip),
+         settings_.referenceGla.empty() ? std::string() : fs::path(settings_.referenceGla).filename().string(),
+         !settings_.referenceGla.empty(), true);
+    std::string enums;
+    if (!enums_.empty()) enums = "anims.h (" + std::to_string(enums_.size()) + ")";
+    chip("Enums", enums, !enums_.empty(), true);
+    ImGui::NewLine();
+}
+
+// What a build writes, as toggles next to the output folder - the same
+// switches as in the settings, where they are needed.
+void App::drawOutputChips() {
+    // Not enough room left in the line (settings shown, narrow window): the
+    // chips get a line of their own instead of being cut off.
+    {
+        const ImGuiStyle& st = ImGui::GetStyle();
+        float need = ImGui::CalcTextSize(tr(S::WritesLabel)).x;
+        for (const char* l : {"GLA", "animation.cfg", ".frames", "_info.txt", "GLM", ".skin"})
+            need += ImGui::CalcTextSize(l).x + st.FramePadding.x * 2.0f + st.ItemSpacing.x;
+        if (ImGui::GetContentRegionAvail().x < need) ImGui::NewLine();
+    }
+    ImGui::TextDisabled("%s", tr(S::WritesLabel));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OutputChipTip));
+    const auto chip = [&](const char* label, bool& on, bool enabled) {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!enabled);
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.40f, 0.62f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.47f, 0.72f, 1.0f));
+        }
+        const bool hit = ImGui::SmallButton(label);
+        if (on) ImGui::PopStyleColor(2);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OutputChipTip));
+        if (hit) on = !on;
+    };
+    chip("GLA", settings_.writeGla, true);
+    chip("animation.cfg", settings_.writeCfg, true);
+    chip(".frames", settings_.writeFrames, true);
+    chip("_info.txt", settings_.writeInfo, true);
+    chip("GLM", settings_.writeMesh, true);
+    chip(".skin", settings_.writeSkin, settings_.writeMesh);
+}
+
+void App::toast(LogLine::Kind kind, std::string text, std::string actionLabel, std::function<void()> action) {
+    Toast t;
+    t.kind = kind;
+    t.text = std::move(text);
+    t.actionLabel = std::move(actionLabel);
+    t.action = std::move(action);
+    t.born = nowSeconds();
+    t.life = kind == LogLine::Kind::Bad ? 10.0 : 5.0;
+    toasts_.push_back(std::move(t));
+    // At most four at a time: the oldest goes.
+    while (toasts_.size() > 4) toasts_.erase(toasts_.begin());
+}
+
+void App::drawToasts() {
+    const double now = nowSeconds();
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    float y = vp->WorkPos.y + vp->WorkSize.y - ImGui::GetFrameHeightWithSpacing() * 1.6f;
+    const float x = vp->WorkPos.x + vp->WorkSize.x - 16.0f * k;
+    for (std::size_t i = toasts_.size(); i-- > 0;) {
+        Toast& t = toasts_[i];
+        const double age = now - t.born;
+        const float alpha = age > t.life - 0.6 ? static_cast<float>(std::max(0.0, (t.life - age) / 0.6)) : 1.0f;
+        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+        ImGui::SetNextWindowBgAlpha(0.96f * alpha);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, std::max(0.05f, alpha));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * k);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * k, 10.0f * k));
+        char id[32];
+        std::snprintf(id, sizeof(id), "##toast%zu", i);
+        bool close = false;
+        bool hovered = false;
+        if (ImGui::Begin(id, nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove)) {
+            const IconColor col = t.kind == LogLine::Kind::Bad    ? kIconBad
+                                  : t.kind == LogLine::Kind::Warn ? kIconWarn
+                                  : t.kind == LogLine::Kind::Good ? kIconGood
+                                                                  : kIconInfo;
+            const char* icon = t.kind == LogLine::Kind::Bad    ? ICON_ERROR
+                               : t.kind == LogLine::Kind::Warn ? ICON_WARNING
+                               : t.kind == LogLine::Kind::Good ? ICON_CHECK
+                                                               : ICON_INFO;
+            iconText(icon, col, t.text.c_str());
+            if (!t.actionLabel.empty()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton(t.actionLabel.c_str())) {
+                    if (t.action) t.action();
+                    close = true;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(iconsAvailable() ? ICON_CANCEL : "x")) close = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ToastDismiss));
+            hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+            y -= ImGui::GetWindowHeight() + 8.0f * k;
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+        // Hovering keeps it; otherwise it goes after its time.
+        if (hovered) t.born = now - std::min(age, 1.0);
+        if (close || (!hovered && age > t.life)) toasts_.erase(toasts_.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+}
+
+// The bottom panel: issues and log. Folded it is one line - the newest
+// message and the issue count - and it opens by itself on an error.
+void App::drawBottomPanel(float height) {
+    bool& open = bottomOpen_[static_cast<int>(mode_)];
+    ImGui::BeginChild("bottom", ImVec2(0, height));
+    if (ImGui::ArrowButton("##bottomtoggle", open ? ImGuiDir_Down : ImGuiDir_Right)) open = !open;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::BottomToggleTip));
+    ImGui::SameLine();
+    if (!open) {
+        if (mode_ == Mode::Build && active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+            const Document& d = docs_[static_cast<std::size_t>(active_)];
+            if (d.validated && (d.validation.errors || d.validation.warnings)) {
+                char b[96];
+                std::snprintf(b, sizeof(b), tr(S::BottomIssues), static_cast<int>(d.validation.errors),
+                              static_cast<int>(d.validation.warnings));
+                if (iconButton(d.validation.errors ? ICON_ERROR : ICON_WARNING, d.validation.errors ? kIconBad : kIconWarn, b,
+                               true))
+                    open = true;
+                ImGui::SameLine();
+            }
+        }
+        LogLine last{LogLine::Kind::Info, std::string()};
+        {
+            std::lock_guard<std::mutex> lock(logMutex_);
+            if (!log_.empty()) last = log_.back();
+        }
+        ImGui::AlignTextToFramePadding();
+        const ImVec4 c = last.kind == LogLine::Kind::Bad    ? ImVec4(1.0f, 0.5f, 0.5f, 1)
+                         : last.kind == LogLine::Kind::Warn ? ImVec4(1.0f, 0.8f, 0.35f, 1)
+                         : last.kind == LogLine::Kind::Good ? ImVec4(0.45f, 0.85f, 0.55f, 1)
+                                                            : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        ImGui::TextColored(c, "%s", last.text.c_str());
+        if (ImGui::IsItemClicked()) open = true;
+        ImGui::EndChild();
+        return;
+    }
+    if (ImGui::BeginTabBar("bottomtabs")) {
+        // The issue list belongs to the scripts; in the other two modes
+        // it would only show the build mode's state.
+        if (mode_ == Mode::Build && ImGui::BeginTabItem(tr(S::TabIssues))) {
+            drawIssues();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem(tr(S::TabLog))) {
+            drawLog();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::EndChild();
+}
+
+void App::onBuildFinished() {
+    const double secs = nowSeconds() - buildStarted_;
+    std::size_t bad = 0;
+    {
+        std::lock_guard<std::mutex> lock(logMutex_);
+        bad = badLogCount_ - badAtBuildStart_;
+    }
+    if (job_.cancel.load()) {
+        toast(LogLine::Kind::Warn, tr(S::ToastCancelled));
+    } else if (bad > 0) {
+        toast(LogLine::Kind::Bad, trf(S::ToastBuildErrors, bad), tr(S::ToastShowLog),
+              [this] { bottomOpen_[static_cast<int>(Mode::Build)] = true; });
+    } else {
+        char m[160];
+        std::snprintf(m, sizeof(m), tr(S::ToastBuilt), buildCount_, secs);
+        const std::string dir = buildFirstOut_;
+        toast(LogLine::Kind::Good, m, platform_.revealInExplorer && !dir.empty() ? tr(S::ToastOpenFolder) : "",
+              [this, dir] {
+                  if (platform_.revealInExplorer) platform_.revealInExplorer(dir);
+              });
+    }
+}
+
+// --- Undo ----------------------------------------------------------------------
+//
+// Every change bumps the script's revision (touch). After each frame the
+// state before the change goes onto the undo stack; typing in a field within
+// a second counts as one step, not one per letter.
+void App::trackUndo() {
+    const double now = nowSeconds();
+    for (auto& d : docs_) {
+        auto& u = undo_[d.path];
+        if (!u.baseSet) {
+            u.base = d.script;
+            u.baseRev = d.rev;
+            u.baseSet = true;
+            continue;
+        }
+        if (d.rev == u.baseRev) continue;
+        const bool typing = ImGui::IsAnyItemActive() && now - u.lastPush < 1.0 && !u.undo.empty();
+        if (car::writeScript(u.base) != car::writeScript(d.script)) {
+            if (!typing) {
+                u.undo.push_back(std::move(u.base));
+                if (u.undo.size() > 100) u.undo.erase(u.undo.begin());
+                u.lastPush = now;
+            }
+            // Any real change ends what could be redone - also one merged
+            // into the previous step while typing.
+            u.redo.clear();
+        }
+        u.base = d.script;
+        u.baseRev = d.rev;
+    }
+}
+
+bool App::canUndo() const {
+    if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return false;
+    const auto it = undo_.find(docs_[static_cast<std::size_t>(active_)].path);
+    return it != undo_.end() && !it->second.undo.empty();
+}
+
+bool App::canRedo() const {
+    if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return false;
+    const auto it = undo_.find(docs_[static_cast<std::size_t>(active_)].path);
+    return it != undo_.end() && !it->second.redo.empty();
+}
+
+bool App::undo() {
+    if (!canUndo()) return false;
+    Document& d = docs_[static_cast<std::size_t>(active_)];
+    auto& u = undo_[d.path];
+    u.redo.push_back(d.script);
+    d.script = std::move(u.undo.back());
+    u.undo.pop_back();
+    touch(d);
+    d.syncSelection();
+    u.base = d.script;
+    u.baseRev = d.rev;
+    u.lastPush = 0.0;
+    editCellRow_ = -1;
+    // The sequence dialog holds a row number - after the swap it would edit
+    // another sequence.
+    closeEditorOf(static_cast<std::size_t>(active_));
+    log(LogLine::Kind::Info, trf(S::LogUndone, u.undo.size()));
+    return true;
+}
+
+bool App::redo() {
+    if (!canRedo()) return false;
+    Document& d = docs_[static_cast<std::size_t>(active_)];
+    auto& u = undo_[d.path];
+    u.undo.push_back(d.script);
+    d.script = std::move(u.redo.back());
+    u.redo.pop_back();
+    touch(d);
+    d.syncSelection();
+    u.base = d.script;
+    u.baseRev = d.rev;
+    u.lastPush = 0.0;
+    editCellRow_ = -1;
+    closeEditorOf(static_cast<std::size_t>(active_));
+    log(LogLine::Kind::Info, tr(S::LogRedone));
+    return true;
+}
+
+float App::buildProgress() const {
+    if (!job_.running.load()) return -1.0f;
+    const std::size_t total = job_.total.load();
+    return total ? static_cast<float>(job_.done.load()) / static_cast<float>(total) : 0.0f;
+}
+
+// --- Command palette (Ctrl+K) ----------------------------------------------------
+//
+// Type a few letters, Enter: every action, every sequence of the open script
+// and every tab, without knowing where its button lives.
+void App::drawPalette() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    if (paletteRequest_) {
+        paletteRequest_ = false;
+        paletteBuf_[0] = '\0';
+        paletteSel_ = 0;
+        paletteFocus_ = true;
+        ImGui::OpenPopup("###palette");
+    }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 70.0f * k), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(640.0f * k, vp->WorkSize.x - 40.0f * k), 0.0f));
+    if (!ImGui::BeginPopup("###palette")) return;
+
+    struct Entry {
+        std::string           label;
+        std::string           keys;
+        std::function<void()> run;
+    };
+    std::vector<Entry> all;
+    const bool have = !docs_.empty();
+    const bool busy = buildRunning();
+    const auto add = [&](std::string label, std::string keys, std::function<void()> run, bool enabled = true) {
+        if (enabled) all.push_back({std::move(label), std::move(keys), std::move(run)});
+    };
+    add(tr(S::BtnBuild), "F5", [this] { startBuild(false); }, have && !busy);
+    add(tr(S::BtnBuildAll), "Shift+F5", [this] { startBuild(true); }, have && !busy);
+    add(tr(S::BtnValidate), "F7", [this] { validateAll(); }, have);
+    add(tr(S::BtnSave), "Ctrl+S", [this] { saveDocument(static_cast<std::size_t>(active_)); }, have);
+    add(tr(S::SaveAll), "Ctrl+Shift+S", [this] { saveAllDocuments(); }, have);
+    add(tr(S::Undo), "Ctrl+Z", [this] { undo(); }, canUndo());
+    add(tr(S::Redo), "Ctrl+Y", [this] { redo(); }, canRedo());
+    add(tr(S::OpenScript), "Ctrl+O", [this] { openScriptDialog(); });
+    add(tr(S::OpenFolder), "Ctrl+Shift+O", [this] { openFolderDialog(); });
+    add(tr(S::NewCar), "Ctrl+N", [this] { newCarDialog(); });
+    add(std::string("XSI: ") + tr(S::AddXsiMenuFiles), "", [this] {
+        const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
+        if (!files.empty()) addXsiFiles(files, false);
+    }, have);
+    add(std::string("XSI: ") + tr(S::AddXsiMenuFolder), "", [this] {
+        for (const auto& dir : askFolders("xsifolder", tr(S::DlgTitleXsiFolder))) addXsiFolder(dir, false);
+    }, have);
+    add(tr(S::Settings), "", [this] { showSettings_ = !showSettings_; mode_ = Mode::Build; });
+    add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModeBuild), "", [this] { mode_ = Mode::Build; });
+    add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModeExtract), "", [this] { mode_ = Mode::Extract; });
+    add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModePreview), "", [this] { mode_ = Mode::Preview; });
+    add(tr(S::OpenGla), "", [this] { openGlaDialog(); });
+    add(tr(S::PvLoadGlm), "", [this] {
+        const auto f = askFiles("previewglm", tr(S::DlgTitleGlm), "GLM (*.glm)\0*.glm\0Alle\0*.*\0", false);
+        if (!f.empty() && loadPreviewGlm(f.front())) mode_ = Mode::Preview;
+    });
+    add(settings_.darkMode ? tr(S::Light) : tr(S::Dark), "", [this] {
+        settings_.darkMode = !settings_.darkMode;
+        applyStyle();
+    });
+    for (std::size_t t = 0; t < docs_.size(); ++t)
+        add(std::string(tr(S::PaletteTab)) + ": " + docs_[t].title, "", [this, t] {
+            mode_ = Mode::Build;
+            activate(static_cast<int>(t));
+        });
+    // Sequences only once something is typed: 2000 rows are no menu.
+    if (paletteBuf_[0] && active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+        const auto& d = docs_[static_cast<std::size_t>(active_)];
+        for (std::size_t r = 0; r < d.script.grabs.size(); ++r) {
+            const auto& g = d.script.grabs[r];
+            const std::string name = g.enumName ? *g.enumName : g.derivedName();
+            add(std::string(tr(S::PaletteSeq)) + ": " + name, "", [this, r] {
+                mode_ = Mode::Build;
+                filter_[0] = '\0';
+                rowFilter_ = 0;
+                jumpToRow_ = static_cast<int>(r);
+            });
+        }
+    }
+
+    // Every word typed must appear (in any case).
+    std::vector<std::string> words;
+    {
+        std::istringstream in(paletteBuf_);
+        for (std::string w; in >> w;) words.push_back(w);
+    }
+    std::vector<const Entry*> hits;
+    for (const auto& e : all) {
+        bool ok = true;
+        for (const auto& w : words) ok = ok && containsNoCase(e.label, w.c_str());
+        if (ok) hits.push_back(&e);
+    }
+    if (paletteSel_ >= static_cast<int>(hits.size())) paletteSel_ = std::max(0, static_cast<int>(hits.size()) - 1);
+
+    ImGui::SetNextItemWidth(-1);
+    if (paletteFocus_) {
+        ImGui::SetKeyboardFocusHere();
+        paletteFocus_ = false;
+    }
+    if (ImGui::InputTextWithHint("##q", tr(S::PaletteHint), paletteBuf_, sizeof(paletteBuf_))) paletteSel_ = 0;
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) paletteSel_ = std::min(paletteSel_ + 1, static_cast<int>(hits.size()) - 1);
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) paletteSel_ = std::max(paletteSel_ - 1, 0);
+    const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
+
+    std::function<void()> chosen;
+    const int shown = std::min(static_cast<int>(hits.size()), 12);
+    if (hits.empty()) ImGui::TextDisabled("%s", tr(S::PaletteNone));
+    ImGui::BeginChild("##palresults", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(std::max(shown, 1)) + 4.0f * k));
+    for (int h = 0; h < static_cast<int>(hits.size()) && h < 200; ++h) {
+        ImGui::PushID(h);
+        if (ImGui::Selectable(hits[static_cast<std::size_t>(h)]->label.c_str(), h == paletteSel_)) chosen = hits[static_cast<std::size_t>(h)]->run;
+        if (h == paletteSel_ && (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow)))
+            ImGui::SetScrollHereY();
+        if (!hits[static_cast<std::size_t>(h)]->keys.empty()) {
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(hits[static_cast<std::size_t>(h)]->keys.c_str()).x);
+            ImGui::TextDisabled("%s", hits[static_cast<std::size_t>(h)]->keys.c_str());
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    if (enter && !hits.empty()) chosen = hits[static_cast<std::size_t>(paletteSel_)]->run;
+    if (chosen) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    // Run after closing: an action may open a dialog of its own.
+    if (chosen) chosen();
+}
+
 // Skeleton preview.
 //
 // Drawing is done with ImGui's draw list, not with DirectX. A skeleton needs
@@ -3528,56 +4447,196 @@ void App::drawPreviewPanel() {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     auto& ex = extract_;
 
-    if (!ex.loaded) {
-        ImGui::TextDisabled("%s", tr(S::PreviewNoGla));
-        return;
-    }
-
-    // Sequence selection.
-    // Without a sequence there is nothing to play. The access to seqs[0] used
-    // to run anyway - with an empty list, out of bounds.
-    if (ex.seqs.empty()) {
-        ImGui::TextDisabled("%s", tr(S::PreviewNoGla));
+    // Without a GLA (or without sequences) the page says what to do and
+    // offers the button, instead of pointing to another mode.
+    if (!ex.loaded || ex.seqs.empty()) {
+        drawGlaEmptyState(true);
         return;
     }
     if (previewSeq_ < 0 || previewSeq_ >= static_cast<int>(ex.seqs.size())) previewSeq_ = 0;
+
+    const auto pick = [&](int i) {
+        previewSeq_ = i;
+        playback_.frame = 0;
+        playback_.accumulator = 0.0f;
+    };
+
+    // Rows that pass the filter - the list and the up/down keys use the same.
+    std::vector<int> visible;
+    visible.reserve(ex.seqs.size());
+    for (std::size_t i = 0; i < ex.seqs.size(); ++i)
+        if (containsNoCase(ex.seqs[i].name, extractFilter_)) visible.push_back(static_cast<int>(i));
+
+    // Keyboard, as in a video player - but not while typing in the filter.
+    bool scrollToCurrent = false;
+    if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        const int count = ex.seqs[static_cast<std::size_t>(previewSeq_)].count;
+        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) playback_.playing = !playback_.playing;
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+            playback_.playing = false;
+            playback_.frame = playback_.frame > 0 ? playback_.frame - 1 : std::max(0, count - 1);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+            playback_.playing = false;
+            playback_.frame = playback_.frame + 1 < count ? playback_.frame + 1 : 0;
+        }
+        const bool up = ImGui::IsKeyPressed(ImGuiKey_UpArrow);
+        const bool down = ImGui::IsKeyPressed(ImGuiKey_DownArrow);
+        if ((up || down) && !visible.empty()) {
+            auto it = std::find(visible.begin(), visible.end(), previewSeq_);
+            int pos = it == visible.end() ? 0 : static_cast<int>(it - visible.begin());
+            pos = std::clamp(pos + (down ? 1 : -1), 0, static_cast<int>(visible.size()) - 1);
+            pick(visible[static_cast<std::size_t>(pos)]);
+            scrollToCurrent = true;
+        }
+    }
+
+    // --- Left: searchable list of all sequences. A click plays one. ---------
+    ImGui::BeginChild("pvlist", ImVec2(300.0f * k, 0), ImGuiChildFlags_Borders);
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##pvfilter", tr(S::FilterHint), extractFilter_, sizeof(extractFilter_));
+    ImGui::TextDisabled(tr(S::SeqCount), visible.size());
+    if (ImGui::BeginTable("pvtbl", 2, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("##n", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("##f", ImGuiTableColumnFlags_WidthFixed, 40.0f * k);
+    ImGuiListClipper clip;
+    clip.Begin(static_cast<int>(visible.size()));
+    if (scrollToCurrent) {
+        const auto it = std::find(visible.begin(), visible.end(), previewSeq_);
+        if (it != visible.end()) clip.IncludeItemByIndex(static_cast<int>(it - visible.begin()));
+    }
+    while (clip.Step()) {
+        for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
+            const int i = visible[static_cast<std::size_t>(r)];
+            const ExtractSeq& q = ex.seqs[static_cast<std::size_t>(i)];
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Selectable(q.name.c_str(), i == previewSeq_, ImGuiSelectableFlags_SpanAllColumns)) {
+                pick(i);
+                playback_.playing = true;
+            }
+            if (scrollToCurrent && i == previewSeq_) ImGui::SetScrollHereY(0.5f);
+            // Frame count, muted, in its own column.
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%d", q.count);
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndTable();
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+
+    // --- Right: title, canvas, transport bar ------------------------------------
+    ImGui::BeginChild("pvview", ImVec2(0, 0));
     const ExtractSeq& seq = ex.seqs[static_cast<std::size_t>(previewSeq_)];
 
-    ImGui::SetNextItemWidth(320 * k);
-    if (ImGui::BeginCombo(tr(S::PreviewSeq), seq.name.c_str())) {
-        // With a thousand sequences, show only those matching the filter.
-        const std::string needle = extractFilter_;
-        for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
-            if (!needle.empty() && ex.seqs[i].name.find(needle) == std::string::npos) continue;
-            if (ImGui::Selectable(ex.seqs[i].name.c_str(),
-                                  static_cast<int>(i) == previewSeq_)) {
-                previewSeq_ = static_cast<int>(i);
-                playback_.frame = 0;
-                playback_.accumulator = 0.0f;
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.25f);
+    ImGui::TextUnformatted(seq.name.c_str());
+    ImGui::PopFont();
+    {
+        char loop[32];
+        if (seq.loopFrame < 0) std::snprintf(loop, sizeof(loop), "%s", tr(S::PvLoopNone));
+        else std::snprintf(loop, sizeof(loop), "%d", seq.loopFrame);
+        ImGui::TextDisabled(tr(S::PvInfo), seq.count, seq.fps, loop);
+    }
+
+    // Model: load a GLM, show it, the skeleton or both.
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::PvLoadGlm), true)) {
+        const auto f = askFiles("previewglm", tr(S::DlgTitleGlm), "GLM (*.glm)\0*.glm\0Alle\0*.*\0", false);
+        if (!f.empty()) loadPreviewGlm(f.front());
+    }
+    ImGui::SameLine();
+    if (previewGlmLoaded_) {
+        std::size_t tris = 0;
+        if (!previewGlm_.mesh.lods.empty())
+            for (const auto& s : previewGlm_.mesh.lods[0].surfaces) tris += s.triangles.size();
+        ImGui::TextDisabled(tr(S::PvGlmInfo), fs::path(previewGlmPath_).filename().string().c_str(), tris);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", previewGlmPath_.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton(iconsAvailable() ? ICON_CANCEL : "x")) {
+            previewGlmLoaded_ = false;
+            previewGlm_ = MdxmFile{};
+            previewGlmPath_.clear();
+            releaseTextureCache();
+            pvTex_.dirty = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvRemoveGlm));
+        ImGui::SameLine();
+        ImGui::Checkbox(tr(S::PvShowMesh), &pvShowMesh_);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!pvShowMesh_);
+        ImGui::Checkbox(tr(S::PvWireframe), &pvWireframe_);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::Checkbox(tr(S::PvShowSkeleton), &pvShowSkeleton_);
+        // A model made for another skeleton: say so instead of showing a
+        // tangle without explanation.
+        std::string a = previewGlm_.mesh.animName, b = ex.gla.skeleton.name;
+        std::transform(a.begin(), a.end(), a.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(b.begin(), b.end(), b.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (!a.empty() && !b.empty() && a != b)
+            iconText(ICON_WARNING, kIconWarn,
+                     trf(S::PvGlmOther, previewGlm_.mesh.animName.c_str(), ex.gla.skeleton.name.c_str()).c_str());
+
+        try {
+            refreshPreviewTextures();
+        } catch (const std::exception& e) {
+            // A broken archive or image: no textures, but the program stays.
+            log(LogLine::Kind::Bad, e.what());
+        }
+        if (pvShowMesh_) {
+            // Where the images come from, and which skin.
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", tr(S::PvTextures));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(260.0f * k);
+            const std::string cur = pvTexSource_ == "-" ? std::string(tr(S::PvTexOff))
+                                    : pvTex_.activeSource.empty()
+                                        ? std::string(tr(S::PvTexOff))
+                                        : fs::path(pvTex_.activeSource).filename().string() +
+                                              (pvTexSource_.empty() ? " (auto)" : "");
+            if (ImGui::BeginCombo("##pvtexsrc", cur.c_str())) {
+                if (ImGui::Selectable(tr(S::PvTexOff), pvTexSource_ == "-")) {
+                    pvTexSource_ = "-";
+                    pvTex_.dirty = true;
+                }
+                for (const auto& g : pvTex_.gameDirs) {
+                    if (ImGui::Selectable(fs::path(g).filename().string().c_str(), pvTexSource_ == g)) {
+                        pvTexSource_ = g;
+                        pvTex_.dirty = true;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g.c_str());
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvTexSourceTip));
+            if (!pvTex_.skins.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", tr(S::PvSkin));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(220.0f * k);
+                const std::string skinName = fs::path(pvTex_.skin).filename().string();
+                if (ImGui::BeginCombo("##pvskin", skinName.c_str())) {
+                    for (const auto& s : pvTex_.skins) {
+                        const std::string n = fs::path(s).filename().string();
+                        if (ImGui::Selectable(n.c_str(), s == pvTex_.skin)) {
+                            pvSkin_ = n;
+                            pvTex_.dirty = true;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            if (pvTex_.missing > 0) {
+                ImGui::SameLine();
+                ImGui::TextDisabled(tr(S::PvTexMissing), pvTex_.missing);
             }
         }
-        ImGui::EndCombo();
+    } else {
+        ImGui::TextDisabled("%s", tr(S::PvGlmHint));
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(180 * k);
-    ImGui::InputTextWithHint("##pvfilter", tr(S::FilterHint), extractFilter_,
-                             sizeof(extractFilter_));
-
-    // Controls.
-    if (ImGui::Button(playback_.playing ? withIcon(ICON_CANCEL, tr(S::PreviewPause))
-                                        : withIcon(ICON_BUILD, tr(S::PreviewPlay))))
-        playback_.playing = !playback_.playing;
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-260 * k);
-    int f = playback_.frame;
-    if (ImGui::SliderInt("##pvframe", &f, 0, std::max(0, seq.count - 1))) {
-        playback_.frame = f;
-        playback_.playing = false;
-    }
-    ImGui::SameLine();
-    ImGui::Text(tr(S::PreviewFrame), playback_.frame + 1, seq.count);
-    ImGui::SameLine();
-    if (ImGui::SmallButton(tr(S::PreviewReset))) previewCam_ = PreviewCamera{};
 
     // Advance time. The rate comes from the animation.cfg, not from the UI
     // frame rate: an animation at 20 frames per second should run at 20 even
@@ -3593,19 +4652,20 @@ void App::drawPreviewPanel() {
     // World poses of the current frame.
     const int glaFrame = seq.start + playback_.frame;
     const auto world = boneWorldMatrices(ex.gla, glaFrame);
-    if (world.empty()) return;
 
-    // Canvas.
+    // Canvas: everything except the transport bar below it.
+    const float barH = ImGui::GetFrameHeightWithSpacing() * 2.0f + 6.0f * k;
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const ImVec2 size(avail.x, std::max(120.0f * k, avail.y));
+    const ImVec2 size(avail.x, std::max(120.0f * k, avail.y - barH));
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##pvcanvas", size,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 
-    // On the first frame and after a reset, fit everything into view.
-    if (previewCam_.distance <= 0.0f || previewCam_.distance == PreviewCamera{}.distance)
-        frameAll(previewCam_, computeBounds(world));
-
+    if (!world.empty()) {
+        // On the first frame and after a reset, fit everything into view.
+        if (previewCam_.distance <= 0.0f || previewCam_.distance == PreviewCamera{}.distance)
+            frameAll(previewCam_, computeBounds(world));
+    }
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 d = ImGui::GetIO().MouseDelta;
         previewCam_.yawDeg -= d.x * 0.4f;
@@ -3619,31 +4679,148 @@ void App::drawPreviewPanel() {
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const bool dark = settings_.darkMode;
     dl->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y),
-                      IM_COL32(24, 26, 30, 255));
-
-    const auto lines = buildBoneLines(ex.gla, world, previewCam_, size.x, size.y);
-    for (const auto& l : lines) {
-        // Depth as brightness: what's farther away gets darker. Without this,
-        // for a skeleton seen from the front you can't tell which arm is in
-        // front.
-        const float t = std::clamp(l.depth / (previewCam_.distance * 1.6f), 0.0f, 1.0f);
-        const int v = static_cast<int>(230.0f - 130.0f * t);
-        dl->AddLine(ImVec2(origin.x + l.x0, origin.y + l.y0),
-                    ImVec2(origin.x + l.x1, origin.y + l.y1),
-                    IM_COL32(v, v, static_cast<int>(static_cast<float>(v) * 0.85f), 255),
-                    1.6f * k);
+                      dark ? IM_COL32(24, 26, 30, 255) : IM_COL32(236, 238, 242, 255), 6.0f * k);
+    const bool meshShown = previewGlmLoaded_ && pvShowMesh_ && !world.empty();
+    if (meshShown) {
+        const auto tris = buildMeshTriangles(previewGlm_.mesh, ex.gla, world, previewCam_, size.x, size.y,
+                                             &pvTex_.hidden);
+        dl->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+        // Textured triangles go through their image; consecutive ones with
+        // the same image share one draw call.
+        const bool wrap = platform_.wrapSampler != nullptr;
+        if (wrap) dl->AddCallback(reinterpret_cast<ImDrawCallback>(platform_.wrapSampler), nullptr);
+        std::uint64_t bound = 0;
+        for (const auto& t : tris) {
+            const std::uint64_t tex = t.surface >= 0 && static_cast<std::size_t>(t.surface) < pvTex_.perSurface.size()
+                                          ? pvTex_.perSurface[static_cast<std::size_t>(t.surface)]
+                                          : 0;
+            if (tex) {
+                if (tex != bound) {
+                    if (bound) dl->PopTexture();
+                    dl->PushTexture(ImTextureRef(static_cast<ImTextureID>(tex)));
+                    bound = tex;
+                }
+                const int lv = static_cast<int>(255.0f * (0.45f + 0.55f * t.shade));
+                const ImU32 tint = IM_COL32(lv, lv, lv, 255);
+                dl->PrimReserve(3, 3);
+                for (int c = 0; c < 3; ++c)
+                    dl->PrimVtx(ImVec2(origin.x + t.x[c], origin.y + t.y[c]), ImVec2(t.u[c], t.v[c]), tint);
+                if (pvWireframe_) {
+                    // Lines sample ImGui's own atlas: draw them without the
+                    // model texture bound, then bind it again.
+                    dl->PopTexture();
+                    dl->AddTriangle(ImVec2(origin.x + t.x[0], origin.y + t.y[0]), ImVec2(origin.x + t.x[1], origin.y + t.y[1]),
+                                    ImVec2(origin.x + t.x[2], origin.y + t.y[2]), IM_COL32(20, 22, 28, 160), 1.0f);
+                    dl->PushTexture(ImTextureRef(static_cast<ImTextureID>(tex)));
+                }
+                continue;
+            }
+            // Untextured: back to ImGui's own texture (its white pixel).
+            if (bound) {
+                dl->PopTexture();
+                bound = 0;
+            }
+            // Soft light from the camera; never fully black.
+            const float l = 0.30f + 0.70f * t.shade;
+            const ImU32 col = dark ? IM_COL32(static_cast<int>(150 * l), static_cast<int>(158 * l),
+                                              static_cast<int>(172 * l), 255)
+                                   : IM_COL32(static_cast<int>(120 + 110 * l), static_cast<int>(124 + 110 * l),
+                                              static_cast<int>(132 + 112 * l), 255);
+            const ImVec2 a(origin.x + t.x[0], origin.y + t.y[0]), b(origin.x + t.x[1], origin.y + t.y[1]),
+                c(origin.x + t.x[2], origin.y + t.y[2]);
+            dl->AddTriangleFilled(a, b, c, col);
+            if (pvWireframe_) dl->AddTriangle(a, b, c, IM_COL32(20, 22, 28, 160), 1.0f);
+        }
+        if (bound) dl->PopTexture();
+        if (wrap)
+            if (const ImDrawCallback reset = ImGui::GetPlatformIO().DrawCallback_ResetRenderState)
+                dl->AddCallback(reset, nullptr);
+        dl->PopClipRect();
     }
-    for (const auto& l : lines)
-        dl->AddCircleFilled(ImVec2(origin.x + l.x1, origin.y + l.y1), 2.0f * k,
-                            IM_COL32(120, 190, 255, 255));
+    if (!world.empty() && (pvShowSkeleton_ || !meshShown)) {
+        const auto lines = buildBoneLines(ex.gla, world, previewCam_, size.x, size.y);
+        for (const auto& l : lines) {
+            // Depth as brightness: what's farther away gets fainter. Without
+            // this, for a skeleton seen from the front you can't tell which
+            // arm is in front.
+            const float t = std::clamp(l.depth / (previewCam_.distance * 1.6f), 0.0f, 1.0f);
+            const int v = dark ? static_cast<int>(230.0f - 130.0f * t) : static_cast<int>(40.0f + 130.0f * t);
+            dl->AddLine(ImVec2(origin.x + l.x0, origin.y + l.y0), ImVec2(origin.x + l.x1, origin.y + l.y1),
+                        IM_COL32(v, v, static_cast<int>(static_cast<float>(v) * 0.85f), 255), 1.6f * k);
+        }
+        for (const auto& l : lines)
+            dl->AddCircleFilled(ImVec2(origin.x + l.x1, origin.y + l.y1), 2.0f * k, IM_COL32(90, 160, 240, 255));
+    }
+    {
+        char info[128];
+        std::snprintf(info, sizeof(info), tr(S::PreviewBones), world.size());
+        const ImU32 muted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        dl->AddText(ImVec2(origin.x + 10 * k, origin.y + 8 * k), muted, info);
+        dl->AddText(ImVec2(origin.x + 10 * k, origin.y + 8 * k + ImGui::GetTextLineHeight()), muted,
+                    tr(S::PreviewHint));
+    }
 
-    // Header line in the corner.
-    char info[128];
-    std::snprintf(info, sizeof(info), tr(S::PreviewBones), world.size());
-    dl->AddText(ImVec2(origin.x + 8 * k, origin.y + 6 * k), IM_COL32(160, 160, 165, 255), info);
-    dl->AddText(ImVec2(origin.x + 8 * k, origin.y + 22 * k), IM_COL32(120, 120, 125, 255),
-                tr(S::PreviewHint));
+    // Transport bar: previous / play / next, timeline, frame, reset.
+    ImGui::Spacing();
+    if (ImGui::Button(iconsAvailable() ? ICON_PREV : "<")) {
+        playback_.playing = false;
+        playback_.frame = playback_.frame > 0 ? playback_.frame - 1 : std::max(0, seq.count - 1);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvPrevFrame));
+    ImGui::SameLine();
+    if (ImGui::Button(playback_.playing ? withIcon(ICON_PAUSE, tr(S::PreviewPause))
+                                        : withIcon(ICON_BUILD, tr(S::PreviewPlay))))
+        playback_.playing = !playback_.playing;
+    ImGui::SameLine();
+    if (ImGui::Button(iconsAvailable() ? ICON_NEXT : ">")) {
+        playback_.playing = false;
+        playback_.frame = playback_.frame + 1 < seq.count ? playback_.frame + 1 : 0;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvNextFrame));
+    ImGui::SameLine();
+    char fr[48];
+    std::snprintf(fr, sizeof(fr), tr(S::PreviewFrame), playback_.frame + 1, seq.count);
+    const float resetW = ImGui::CalcTextSize(tr(S::PreviewReset)).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SetNextItemWidth(std::max(80.0f * k, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(fr).x -
+                                                    resetW - ImGui::GetStyle().ItemSpacing.x * 3.0f));
+    {
+        // Timeline: a thin track, filled up to the current frame, a knob, and
+        // a tick per frame when there is room. Click or drag to scrub.
+        const float tw = std::max(80.0f * k, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(fr).x -
+                                                 resetW - ImGui::GetStyle().ItemSpacing.x * 3.0f);
+        const float th = ImGui::GetFrameHeight();
+        const ImVec2 tp = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##pvtimeline", ImVec2(tw, th));
+        const int last = std::max(0, seq.count - 1);
+        if (ImGui::IsItemActive()) {
+            const float t = std::clamp((ImGui::GetIO().MousePos.x - tp.x) / tw, 0.0f, 1.0f);
+            playback_.frame = static_cast<int>(std::lround(t * static_cast<float>(last)));
+            playback_.playing = false;
+        }
+        const float cy = tp.y + th * 0.5f;
+        const float pos = last > 0 ? static_cast<float>(playback_.frame) / static_cast<float>(last) : 0.0f;
+        const float knobX = tp.x + pos * tw;
+        ImDrawList* tl = ImGui::GetWindowDrawList();
+        tl->AddRectFilled(ImVec2(tp.x, cy - 3.0f * k), ImVec2(tp.x + tw, cy + 3.0f * k),
+                          ImGui::GetColorU32(ImGuiCol_FrameBg), 3.0f * k);
+        tl->AddRectFilled(ImVec2(tp.x, cy - 3.0f * k), ImVec2(knobX, cy + 3.0f * k), IM_COL32(66, 135, 245, 255),
+                          3.0f * k);
+        if (last > 0 && tw / static_cast<float>(last) >= 6.0f * k)
+            for (int i = 0; i <= last; ++i) {
+                const float x = tp.x + tw * static_cast<float>(i) / static_cast<float>(last);
+                tl->AddLine(ImVec2(x, cy + 6.0f * k), ImVec2(x, cy + 9.0f * k), ImGui::GetColorU32(ImGuiCol_TextDisabled));
+            }
+        tl->AddCircleFilled(ImVec2(knobX, cy), (ImGui::IsItemHovered() || ImGui::IsItemActive() ? 8.0f : 7.0f) * k,
+                            IM_COL32(235, 240, 250, 255));
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(fr);
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::PreviewReset))) previewCam_ = PreviewCamera{};
+    ImGui::TextDisabled("%s", tr(S::PvKeys));
+    ImGui::EndChild();
 }
 
 // Error list of the active script.
@@ -3662,12 +4839,13 @@ void App::drawModeBar() {
         Mode        m;
         const char* icon;
         S           label;
+        S           sub;
         S           hint;
         IconColor   col;
     } modes[] = {
-        {Mode::Build, ICON_BUILD, S::ModeBuild, S::ModeBuildHint, kIconGood},
-        {Mode::Extract, ICON_OPEN_FILE, S::ModeExtract, S::ModeExtractHint, kIconAccent},
-        {Mode::Preview, ICON_DOCUMENT, S::ModePreview, S::ModePreviewHint, kIconInfo},
+        {Mode::Build, ICON_BUILD, S::ModeBuild, S::ModeBuildSub, S::ModeBuildHint, kIconGood},
+        {Mode::Extract, ICON_OPEN_FILE, S::ModeExtract, S::ModeExtractSub, S::ModeExtractHint, kIconAccent},
+        {Mode::Preview, ICON_DOCUMENT, S::ModePreview, S::ModePreviewSub, S::ModePreviewHint, kIconInfo},
     };
 
     // Determine the width from the TEXT, don't guess.
@@ -3676,8 +4854,12 @@ void App::drawModeBar() {
     // "XSI -> GLA" was cut off in English, while the same number would have
     // been too wide for the shorter Chinese labels.
     float textW = 0.0f;
-    for (const auto& m : modes)
+    for (const auto& m : modes) {
         textW = std::max(textW, ImGui::CalcTextSize(withIcon(m.icon, tr(m.label))).x);
+        textW = std::max(textW, ImGui::CalcTextSize(tr(m.sub)).x * 0.86f);
+    }
+    // Two lines: the direction and, below it, what the mode is for.
+    const float btnH = ImGui::GetTextLineHeight() * 2.0f + 18.0f * k;
 
     const ImGuiStyle& st = ImGui::GetStyle();
     const float barW = textW + st.FramePadding.x * 2.0f + st.WindowPadding.x * 2.0f + 8.0f * k;
@@ -3698,7 +4880,7 @@ void App::drawModeBar() {
         // is running.
         const ImVec2 bpos = ImGui::GetCursorScreenPos();
         ImGui::PushID(static_cast<int>(m.m));
-        const bool hit = ImGui::Button("##mode", ImVec2(-1, 44 * k));
+        const bool hit = ImGui::Button("##mode", ImVec2(-1, btnH));
         ImGui::PopID();
         if (hit) mode_ = m.m;
 
@@ -3709,7 +4891,8 @@ void App::drawModeBar() {
             const ImVec2 iS = hasIcon ? ImGui::CalcTextSize(m.icon) : ImVec2(0, 0);
             const float gap = hasIcon ? ImGui::GetStyle().ItemInnerSpacing.x : 0.0f;
             float x = bpos.x + ImGui::GetStyle().FramePadding.x + 4.0f * k;
-            const float y = bpos.y + (44 * k - tS.y) * 0.5f;
+            const float x0 = x;
+            const float y = bpos.y + 7.0f * k;
             if (hasIcon) {
                 const ImU32 ic =
                     active ? IM_COL32_WHITE
@@ -3720,6 +4903,11 @@ void App::drawModeBar() {
                 x += iS.x + gap;
             }
             dl->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_Text), tr(m.label));
+            // The subtitle, smaller and muted.
+            const float subSize = ImGui::GetFontSize() * 0.86f;
+            dl->AddText(ImGui::GetFont(), subSize, ImVec2(x0, y + tS.y + 3.0f * k),
+                        active ? IM_COL32(220, 230, 245, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                        tr(m.sub));
         }
         if (active) ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(m.hint));
@@ -3728,107 +4916,236 @@ void App::drawModeBar() {
     ImGui::EndChild();
 }
 
-// UI for the reverse direction.
+// Numbered step heading for the guided panels: a round badge with the number
+// - green with a check mark once the step is done - and the title one size
+// larger. It answers "what do I click next?" without a manual.
+void App::stepHeader(int n, const char* title, bool done) {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    ImGui::Spacing();
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.15f);
+    const float h = ImGui::GetTextLineHeight();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float r = h * 0.5f + 1.0f * k;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p.x + r, p.y + h * 0.5f);
+    dl->AddCircleFilled(c, r, done ? IM_COL32(56, 142, 84, 255) : IM_COL32(58, 88, 140, 255));
+    char num[8];
+    std::snprintf(num, sizeof(num), "%d", n);
+    const char* mark = done && iconsAvailable() ? ICON_CHECK : num;
+    const ImVec2 ms = ImGui::CalcTextSize(mark);
+    dl->AddText(ImVec2(c.x - ms.x * 0.5f, c.y - ms.y * 0.5f), IM_COL32_WHITE, mark);
+    ImGui::Dummy(ImVec2(2.0f * r + 4.0f * k, h));
+    ImGui::SameLine();
+    ImGui::TextUnformatted(title);
+    ImGui::PopFont();
+    ImGui::Spacing();
+}
+
+void App::hintText(const char* text) {
+    if (iconsAvailable()) {
+        ImGui::TextDisabled("%s", ICON_INFO);
+        ImGui::SameLine();
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+}
+
+void App::openGlaDialog() {
+    const auto f = askFiles("extractgla", tr(S::DlgTitleGla), "GLA (*.gla)\0*.gla\0Alle\0*.*\0", false);
+    if (!f.empty()) loadGlaForExtract(f.front());
+}
+
+// The page for "no GLA open yet", centered: what this mode does, one big
+// button, and the hint that dropping a file works too.
+// Text wrapped at word boundaries, every line centered between x0 and
+// x0 + w (ImGui's own wrapping only aligns left).
+static void textCenteredWrapped(const char* text, float x0, float w) {
+    std::vector<std::string> lines;
+    std::string line, word;
+    const auto width = [](const std::string& t) { return ImGui::CalcTextSize(t.c_str()).x; };
+    const auto flushWord = [&] {
+        if (word.empty()) return;
+        const std::string cand = line.empty() ? word : line + " " + word;
+        if (!line.empty() && width(cand) > w) {
+            lines.push_back(line);
+            line = word;
+        } else {
+            line = cand;
+        }
+        word.clear();
+    };
+    for (const char* c = text; *c; ++c) {
+        if (*c == ' ') flushWord();
+        else if (*c == '\n') {
+            flushWord();
+            lines.push_back(line);
+            line.clear();
+        } else {
+            word += *c;
+        }
+    }
+    flushWord();
+    if (!line.empty()) lines.push_back(line);
+    for (const auto& l : lines) {
+        ImGui::SetCursorPosX(x0 + std::max(0.0f, (w - width(l)) * 0.5f));
+        ImGui::TextUnformatted(l.c_str());
+    }
+}
+
+// The page for "no GLA open yet", centered: what this mode does, one big
+// button, and the hint that dropping a file works too.
+void App::drawGlaEmptyState(bool forPreview) {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float w = std::min(avail.x - 20.0f * k, 560.0f * k);
+    const float x0 = ImGui::GetCursorPosX() + std::max(0.0f, (avail.x - w) * 0.5f);
+    // Vertically centered with the block's height from the previous frame
+    // (the first frame uses an estimate).
+    const float startY = ImGui::GetCursorPosY();
+    const float blockH = emptyStateHeight_ > 0.0f ? emptyStateHeight_ : 180.0f * k;
+    ImGui::SetCursorPosY(startY + std::max(0.0f, (avail.y - blockH) * 0.5f));
+    const float blockTop = ImGui::GetCursorPosY();
+
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.35f);
+    textCenteredWrapped(tr(S::NoGlaOpen), x0, w);
+    ImGui::PopFont();
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    textCenteredWrapped(forPreview ? tr(S::PvEmptyHint) : tr(S::NoGlaHint), x0, w);
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+    ImGui::Spacing();
+    const float bw = 240.0f * k;
+    ImGui::SetCursorPosX(x0 + std::max(0.0f, (w - bw) * 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.42f, 0.70f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.27f, 0.49f, 0.80f, 1.0f));
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenGla), false, bw)) openGlaDialog();
+    ImGui::PopStyleColor(2);
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    textCenteredWrapped(tr(S::DropGlaHint), x0, w);
+    ImGui::PopStyleColor();
+    if (!extract_.error.empty()) {
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.45f, 0.45f, 1));
+        textCenteredWrapped(extract_.error.c_str(), x0, w);
+        ImGui::PopStyleColor();
+    }
+    emptyStateHeight_ = ImGui::GetCursorPosY() - blockTop;
+}
+
+// GLA -> XSI as four numbered steps on the left (open, choose, target,
+// export), the list of sequences on the right. Every button that cannot be
+// used yet says below it which step is missing.
 void App::drawExtractPanel() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    std::size_t nsel = 0;
+    for (const char c : extract_.selected)
+        if (c) ++nsel;
+
+    ImGui::BeginChild("exsteps", ImVec2(400.0f * k, 0), ImGuiChildFlags_Borders);
+    drawExtractSteps(nsel);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("exlist", ImVec2(0, 0));
+    if (!extract_.loaded) drawGlaEmptyState(false);
+    else drawExtractList();
+    ImGui::EndChild();
+}
+
+void App::drawExtractSteps(std::size_t nsel) {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     auto& ex = extract_;
 
-    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenGla))) {
-        const auto f = askFiles("extractgla", tr(S::DlgTitleGla),
-                                "GLA (*.gla)\0*.gla\0Alle\0*.*\0", false);
-        if (!f.empty()) loadGlaForExtract(f.front());
-    }
-    // The two companion files are searched for automatically on open. The
-    // buttons remain for the case that they live somewhere else.
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!ex.loaded);
-    if (ImGui::Button(withIcon(ICON_DOCUMENT, tr(S::OpenCfg)))) {
-        const auto f = askFiles("extractcfg", tr(S::OpenCfg),
-                                "animation.cfg\0*.cfg\0Alle\0*.*\0", false);
-        if (!f.empty()) loadAnimationCfg(f.front());
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(withIcon(ICON_DOCUMENT, tr(S::OpenFrames)))) {
-        const auto f = askFiles("extractframes", tr(S::OpenFrames),
-                                ".frames\0*.frames\0Alle\0*.*\0", false);
-        if (!f.empty()) loadFramesFile(f.front());
-    }
-    ImGui::EndDisabled();
+    // --- 1. GLA and its companion files -------------------------------------
+    stepHeader(1, tr(S::StepGla), ex.loaded);
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, ex.loaded ? tr(S::ExOtherGla) : tr(S::OpenGla))) openGlaDialog();
+    if (ex.loaded) {
+        ImGui::TextUnformatted(fs::path(ex.glaPath).filename().string().c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled(tr(S::GlaInfo), ex.gla.numFrames, ex.gla.skeleton.bones.size());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", fs::path(ex.glaPath).parent_path().string().c_str());
+        ImGui::PopTextWrapPos();
 
+        // The two companion files: found or not, and a button to pick one
+        // that lives elsewhere.
+        const auto companion = [&](const std::string& path, const char* missing, const IconColor& missingCol,
+                                   const char* button, const char* purpose, const char* filter, bool cfg) {
+            if (path.empty()) iconText(ICON_WARNING, missingCol, missing);
+            else iconText(ICON_CHECK, kIconGood, fs::path(path).filename().string().c_str());
+            ImGui::SameLine();
+            const float bw = ImGui::CalcTextSize(withIcon(ICON_FOLDER_OPEN, button)).x +
+                             ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - bw));
+            if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, button))) {
+                const auto f = askFiles(purpose, button, filter, false);
+                if (!f.empty()) {
+                    if (cfg) loadAnimationCfg(f.front());
+                    else loadFramesFile(f.front());
+                }
+            }
+        };
+        companion(ex.cfgPath, "animation.cfg", kIconWarn, tr(S::OpenCfg), "extractcfg",
+                  "animation.cfg\0*.cfg\0Alle\0*.*\0", true);
+        if (ex.cfgPath.empty()) hintText(tr(S::NoCfgWarning));
+        companion(ex.framesPath, ".frames", kIconMuted, tr(S::OpenFrames), "extractframes",
+                  ".frames\0*.frames\0Alle\0*.*\0", false);
+        if (ex.framesPath.empty()) hintText(tr(S::FramesMissing));
+        else ImGui::TextDisabled(tr(S::FramesLoaded), ex.withMotion);
+
+        ImGui::TextDisabled("%s:", tr(S::OriginLabel));
+        ImGui::SameLine();
+        if (ex.origin) {
+            // Tiny negative values would show as "-0".
+            const auto clean = [](float v) { return std::fabs(v) < 0.005f ? 0.0f : v; };
+            ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::OriginDetected), clean((*ex.origin)[0]),
+                               clean((*ex.origin)[1]), clean((*ex.origin)[2]));
+        }
+        else
+            ImGui::TextDisabled("%s", tr(S::OriginNone));
+    } else if (!ex.error.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%s", ex.error.c_str());
+        ImGui::PopTextWrapPos();
+    }
+
+    // --- 2. Selection -----------------------------------------------------------
+    ImGui::Spacing();
+    stepHeader(2, tr(S::StepSelect), nsel > 0);
+    ImGui::BeginDisabled(!ex.loaded);
+    ImGui::Text(tr(S::ExSelCount), nsel, ex.seqs.size());
     ImGui::SameLine();
-    ImGui::BeginDisabled(!ex.loaded || ex.seqs.size() < 2);
+    if (ImGui::SmallButton(tr(S::SelectAll))) {
+        // All VISIBLE rows: filter and "missing only" decide what is meant.
+        for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
+            const auto& q = ex.seqs[i];
+            if (!containsNoCase(q.name, extractFilter_)) continue;
+            if (ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name)) continue;
+            ex.selected[i] = 1;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(tr(S::SelectNone))) std::fill(ex.selected.begin(), ex.selected.end(), char{0});
+    hintText(tr(S::ExSelectHint));
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s", tr(S::ExCompareHead));
+    ImGui::BeginDisabled(ex.seqs.size() < 2);
     if (iconButton(ICON_CHECK, kIconAccent, tr(S::Compare))) {
-        const auto f = askFiles("comparecfg", tr(S::Compare),
-                                "animation.cfg\0*.cfg\0Alle\0*.*\0", false);
+        const auto f = askFiles("comparecfg", tr(S::Compare), "animation.cfg\0*.cfg\0Alle\0*.*\0", false);
         if (!f.empty()) loadCompareCfg(f.front());
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CompareTip));
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr(S::CompareTip));
     ImGui::EndDisabled();
-
-    if (!ex.loaded) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("%s", tr(S::NoGlaOpen));
-        ImGui::TextDisabled("%s", tr(S::NoGlaHint));
-        if (!ex.error.empty())
-            ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%s", ex.error.c_str());
-        return;
-    }
-
-    ImGui::TextDisabled("%s", ex.glaPath.c_str());
-    ImGui::Text(tr(S::GlaInfo), ex.gla.numFrames, ex.gla.skeleton.bones.size());
-    // Make visible what was found - otherwise you're left wondering whether
-    // the companion files took effect.
-    ImGui::SameLine();
-    if (ex.cfgPath.empty())
-        iconText(ICON_WARNING, kIconWarn, tr(S::NoCfgWarning));
-    else
-        iconText(ICON_CHECK, kIconGood, fs::path(ex.cfgPath).filename().string().c_str());
-
-    ImGui::SameLine();
-    if (ex.framesPath.empty())
-        ImGui::TextDisabled("%s", tr(S::NoFramesHint));
-    else
-        iconText(ICON_CHECK, kIconGood, fs::path(ex.framesPath).filename().string().c_str());
-
-    ImGui::TextUnformatted(tr(S::OriginLabel));
-    ImGui::SameLine();
-    if (ex.origin)
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::OriginDetected), (*ex.origin)[0],
-                           (*ex.origin)[1], (*ex.origin)[2]);
-    else
-        ImGui::TextDisabled("%s", tr(S::OriginNone));
-
-    ImGui::SameLine();
-    ImGui::TextUnformatted("|");
-    ImGui::SameLine();
-    if (ex.framesPath.empty())
-        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", tr(S::FramesMissing));
-    else
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::FramesLoaded), ex.withMotion);
-
-    // Target folder.
-    ImGui::TextUnformatted(tr(S::ExportTarget));
-    ImGui::SameLine();
-    if (ex.outDir.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1), "%s", tr(S::NotSet));
-    else
-        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", ex.outDir.c_str());
-    ImGui::SameLine();
-    if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, tr(S::ChooseFolder)))) {
-        const std::string p = askFolder("extractout", tr(S::ExportTarget));
-        if (!p.empty()) ex.outDir = p;
-    }
-
-    // Comparison baseline.
     if (!ex.compareNames.empty()) {
         std::size_t fehlt = 0;
         for (const auto& q : ex.seqs)
             if (!existsInCompare(q.name)) ++fehlt;
-
         ImGui::TextDisabled("%s:", fs::path(ex.comparePath).filename().string().c_str());
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), tr(S::CompareCount), fehlt);
-        ImGui::SameLine();
         ImGui::Checkbox(tr(S::OnlyMissing), &ex.onlyMissing);
         ImGui::SameLine();
         if (ImGui::SmallButton(tr(S::SelectMissing))) {
@@ -3838,53 +5155,45 @@ void App::drawExtractPanel() {
             log(LogLine::Kind::Info, m);
         }
     }
+    ImGui::EndDisabled();
 
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(220 * k);
-    ImGui::InputTextWithHint("##exfilter", tr(S::FilterHint), extractFilter_,
-                             sizeof(extractFilter_));
-    ImGui::SameLine();
-    ImGui::TextDisabled(tr(S::SeqCount), ex.seqs.size());
-
-    std::size_t nsel = 0;
-    for (const char c : ex.selected)
-        if (c) ++nsel;
-
-    ImGui::SameLine();
-    ImGui::BeginDisabled(ex.outDir.empty() || nsel == 0);
-    char lbl[128];
-    std::snprintf(lbl, sizeof(lbl), tr(S::ExportSelected), nsel);
-    if (ImGui::Button(withIcon(ICON_SAVE, lbl))) {
-        std::vector<std::size_t> rows;
-        for (std::size_t i = 0; i < ex.selected.size(); ++i)
-            if (ex.selected[i]) rows.push_back(i);
-        exportWithConfirm(rows, false);
+    // --- 3. Target folder ---------------------------------------------------------
+    ImGui::Spacing();
+    stepHeader(3, tr(S::StepTarget), !ex.outDir.empty());
+    ImGui::BeginDisabled(!ex.loaded);
+    if (ex.outDir.empty()) {
+        iconText(ICON_WARNING, kIconWarn, tr(S::NotSet));
+    } else {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", ex.outDir.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    if (ImGui::Button(withIcon(ICON_FOLDER_OPEN, tr(S::ChooseFolder)))) {
+        const std::string p = askFolder("extractout", tr(S::ExportTarget));
+        if (!p.empty()) ex.outDir = p;
     }
     ImGui::EndDisabled();
 
-    // Bind pose selection.
-    //
-    // Deliberately placed here next to the export buttons and not in the
-    // settings: it only affects the export, and whoever needs it looks for it
-    // here.
-    // dotXSI version.
-    ImGui::SameLine();
-    ImGui::TextDisabled("dotXSI");
+    // --- 4. Export ----------------------------------------------------------------
+    ImGui::Spacing();
+    stepHeader(4, tr(S::StepExport), false);
+    ImGui::BeginDisabled(!ex.loaded);
+    // Format options, next to the buttons they affect.
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s dotXSI", tr(S::ExFormat));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(70 * k);
     {
         const char* vn[] = {"3.0", "3.5"};
         int cur = ex.xsiVersion == xsiexp::ExportOptions::Version::V30 ? 0 : 1;
         if (ImGui::Combo("##xsiver", &cur, vn, 2))
-            ex.xsiVersion = cur == 0 ? xsiexp::ExportOptions::Version::V30
-                                     : xsiexp::ExportOptions::Version::V35;
+            ex.xsiVersion = cur == 0 ? xsiexp::ExportOptions::Version::V30 : xsiexp::ExportOptions::Version::V35;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::XsiVersionTip));
-
     ImGui::SameLine();
     ImGui::TextDisabled("%s", tr(S::BasePoseLabel));
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(110 * k);
+    ImGui::SetNextItemWidth(-1);
     {
         const char* namen[] = {tr(S::BasePoseWorld), tr(S::BasePoseLocal), tr(S::BasePoseNone)};
         int cur = ex.basePose == xsiexp::ExportOptions::BasePose::World   ? 0
@@ -3896,67 +5205,101 @@ void App::drawExtractPanel() {
                                      : xsiexp::ExportOptions::BasePose::None;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::BasePoseTip));
+    ImGui::Spacing();
 
-    ImGui::SameLine();
-    ImGui::BeginDisabled(ex.outDir.empty() || ex.cfgPath.empty());
-    if (iconButton(ICON_DOCUMENT, kIconGood, tr(S::ExportAllWithCar))) {
-        exportWithConfirm({}, true);
+    // The main action stands out; the two "everything" variants below it.
+    ImGui::BeginDisabled(ex.outDir.empty() || nsel == 0);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.46f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.36f, 1.0f));
+    char lbl[128];
+    std::snprintf(lbl, sizeof(lbl), tr(S::ExportSelected), nsel);
+    if (iconButton(ICON_SAVE, kIconGood, lbl, false, -1.0f)) {
+        std::vector<std::size_t> rows;
+        for (std::size_t i = 0; i < ex.selected.size(); ++i)
+            if (ex.selected[i]) rows.push_back(i);
+        exportWithConfirm(rows, false);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ExportAllWithCarTip));
+    ImGui::PopStyleColor(2);
     ImGui::EndDisabled();
 
-    ImGui::SameLine();
+    ImGui::BeginDisabled(ex.outDir.empty() || ex.cfgPath.empty());
+    if (iconButton(ICON_DOCUMENT, kIconGood, tr(S::ExportAllWithCar), false, -1.0f)) exportWithConfirm({}, true);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr(S::ExportAllWithCarTip));
+    ImGui::EndDisabled();
+
     ImGui::BeginDisabled(ex.outDir.empty());
-    if (iconButton(ICON_SAVE_ALL, kIconInfo, tr(S::ExportAll))) {
+    if (iconButton(ICON_SAVE_ALL, kIconInfo, tr(S::ExportAll), false, -1.0f)) {
         std::vector<std::size_t> rows(ex.seqs.size());
         for (std::size_t i = 0; i < rows.size(); ++i) rows[i] = i;
         exportWithConfirm(rows, false);
     }
     ImGui::EndDisabled();
+    ImGui::EndDisabled();
 
-    const ImGuiTableFlags fl = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                               ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
-                               ImGuiTableFlags_Reorderable;
-        const int excols = ex.compareNames.empty() ? 5 : 6;
-    if (!ImGui::BeginTable("extract", excols, fl, ImVec2(0, ImGui::GetContentRegionAvail().y)))
-        return;
+    // What is still missing, in order.
+    ImGui::Spacing();
+    if (!ex.loaded) hintText(tr(S::ExNeedGla));
+    else if (ex.outDir.empty()) hintText(tr(S::ExNeedTarget));
+    else if (nsel == 0) hintText(tr(S::ExNeedSelection));
+    if (ex.loaded && ex.cfgPath.empty()) hintText(tr(S::ExNeedCfg));
+}
+
+// The sequences of the open GLA: filter, table, selection with Ctrl/Shift,
+// double-click to watch one in the preview.
+void App::drawExtractList() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    auto& ex = extract_;
+
+    ImGui::SetNextItemWidth(260 * k);
+    ImGui::InputTextWithHint("##exfilter", tr(S::FilterHint), extractFilter_, sizeof(extractFilter_));
+    ImGui::SameLine();
+    ImGui::TextDisabled(tr(S::SeqCount), ex.seqs.size());
+
+    const ImGuiTableFlags fl = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+                               ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable;
+    const int excols = ex.compareNames.empty() ? 5 : 6;
+    if (!ImGui::BeginTable("extract", excols, fl, ImVec2(0, ImGui::GetContentRegionAvail().y))) return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn(tr(S::ColSequence), ImGuiTableColumnFlags_WidthStretch, 2.0f);
-    ImGui::TableSetupColumn(tr(S::ColStart), ImGuiTableColumnFlags_WidthFixed, 70);
-    ImGui::TableSetupColumn(tr(S::ColCount), ImGuiTableColumnFlags_WidthFixed, 70);
-    ImGui::TableSetupColumn(tr(S::ColLoopFrame), ImGuiTableColumnFlags_WidthFixed, 60);
-    ImGui::TableSetupColumn(tr(S::ColFps), ImGuiTableColumnFlags_WidthFixed, 60);
+    ImGui::TableSetupColumn(tr(S::ColStart), ImGuiTableColumnFlags_WidthFixed, 70 * k);
+    ImGui::TableSetupColumn(tr(S::ColCount), ImGuiTableColumnFlags_WidthFixed, 70 * k);
+    ImGui::TableSetupColumn(tr(S::ColLoopFrame), ImGuiTableColumnFlags_WidthFixed, 60 * k);
+    ImGui::TableSetupColumn(tr(S::ColFps), ImGuiTableColumnFlags_WidthFixed, 60 * k);
     if (!ex.compareNames.empty())
-        ImGui::TableSetupColumn(tr(S::CompareCol), ImGuiTableColumnFlags_WidthFixed, 90);
+        ImGui::TableSetupColumn(tr(S::CompareCol), ImGuiTableColumnFlags_WidthFixed, 110 * k);
     ImGui::TableHeadersRow();
 
-    const std::string needle = extractFilter_;
+    const auto visible = [&](const ExtractSeq& q) {
+        if (!containsNoCase(q.name, extractFilter_)) return false;
+        return !(ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name));
+    };
     for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
         const ExtractSeq& s = ex.seqs[i];
-        if (!needle.empty() && s.name.find(needle) == std::string::npos) continue;
+        if (!visible(s)) continue;
         const bool inOther = ex.compareNames.empty() || existsInCompare(s.name);
-        if (ex.onlyMissing && !ex.compareNames.empty() && inOther) continue;
 
         ImGui::TableNextRow();
         ImGui::PushID(static_cast<int>(i));
         ImGui::TableNextColumn();
         const bool sel = ex.selected[i] != 0;
-        if (ImGui::Selectable(s.name.c_str(), sel, ImGuiSelectableFlags_SpanAllColumns)) {
+        if (ImGui::Selectable(s.name.c_str(), sel,
+                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
             const bool ctrl = ImGui::IsKeyDown(ImGuiMod_Ctrl);
             const bool shift = ImGui::IsKeyDown(ImGuiMod_Shift);
-            if (shift && extractAnchor_ >= 0) {
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                // Double-click: watch it.
+                previewSeq_ = static_cast<int>(i);
+                playback_.frame = 0;
+                playback_.playing = true;
+                mode_ = Mode::Preview;
+            } else if (shift && extractAnchor_ >= 0) {
                 std::size_t a = static_cast<std::size_t>(extractAnchor_), b = i;
                 if (a > b) std::swap(a, b);
                 if (!ctrl) std::fill(ex.selected.begin(), ex.selected.end(), char{0});
                 // Only what's currently visible: filter and "missing only"
                 // hide rows that would otherwise be silently exported too.
-                for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j) {
-                    const auto& q = ex.seqs[j];
-                    if (!needle.empty() && q.name.find(needle) == std::string::npos) continue;
-                    if (ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name))
-                        continue;
-                    ex.selected[j] = 1;
-                }
+                for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j)
+                    if (visible(ex.seqs[j])) ex.selected[j] = 1;
             } else if (ctrl) {
                 ex.selected[i] = static_cast<char>(!sel);
                 extractAnchor_ = static_cast<int>(i);
@@ -3966,6 +5309,15 @@ void App::drawExtractPanel() {
                 extractAnchor_ = static_cast<int>(i);
             }
         }
+        if (ImGui::BeginPopupContextItem("exrow")) {
+            if (ImGui::MenuItem(tr(S::ExShowInPreview))) {
+                previewSeq_ = static_cast<int>(i);
+                playback_.frame = 0;
+                playback_.playing = true;
+                mode_ = Mode::Preview;
+            }
+            ImGui::EndPopup();
+        }
         ImGui::TableNextColumn();
         ImGui::Text("%d", s.start);
         ImGui::TableNextColumn();
@@ -3974,7 +5326,7 @@ void App::drawExtractPanel() {
         if (s.loopFrame < 0) ImGui::TextDisabled("-");
         else ImGui::Text("%d", s.loopFrame);
         ImGui::TableNextColumn();
-        ImGui::Text("%d", s.fps);
+        ImGui::Text("%g", s.fps);
         if (!ex.compareNames.empty()) {
             ImGui::TableNextColumn();
             // Icon before the word: the eye takes in the column without
@@ -4288,7 +5640,7 @@ bool App::applyModelEdit(std::size_t docIndex, const ModelEdit& e) {
 
     const bool changed = car::writeScript(d.script) != before;
     if (changed) {
-        d.dirty = true;
+        touch(d);
         d.validated = false;
         log(LogLine::Kind::Info, trf(S::LogModelChanged, d.title.c_str()));
     }
@@ -4424,6 +5776,13 @@ bool App::saveDocumentAs(std::size_t index, const std::string& path) {
     // The tab now belongs to the new file. Its output folder goes with it -
     // a copy is usually made to build somewhere else, and that folder is
     // chosen anew; keeping the old one would overwrite the original's GLA.
+    // The undo history goes along with the tab - it used to stay behind under
+    // the old name and attach itself to that file when it was opened again.
+    if (auto node = undo_.extract(d.path)) {
+        node.key() = path;
+        undo_.erase(path);
+        undo_.insert(std::move(node));
+    }
     d.path = path;
     d.title = fs::path(path).filename().string();
     d.dirty = false;
@@ -4562,7 +5921,7 @@ void App::drawSequenceDialog(Document& d) {
                     if (!ec && !r.empty() && r.string().rfind("..", 0) != 0) rel = r.generic_string();
                 }
                 g.file = rel;
-                d.dirty = true;
+                touch(d);
                 d.validated = false;
             }
         }
@@ -4585,7 +5944,7 @@ void App::drawSequenceDialog(Document& d) {
         ImGui::SameLine();
         if (ImGui::Button((std::string(tr(S::DlgClear)) + "##m").c_str())) {
             g.enumName.reset();
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
         ImGui::SameLine();
@@ -4594,7 +5953,7 @@ void App::drawSequenceDialog(Document& d) {
         std::string picked = name;
         if (drawEnumChooser("enum_master", picked, &d)) {
             g.enumName = picked;
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
 
@@ -4607,16 +5966,18 @@ void App::drawSequenceDialog(Document& d) {
         // to show -1 - a value that was then not built.
         int loop = g.loop.value_or(0);
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
-        if (ImGui::InputInt(tr(S::DlgLoopFrame), &loop)) { g.loop = loop; d.dirty = true; }
+        if (ImGui::InputInt(tr(S::DlgLoopFrame), &loop)) { g.loop = loop; touch(d); }
 
         // The real speed, as it is built - not 0 for "from the file".
         const int fileRate = xsiRateOf(g.file);
-        int speed = effectiveSpeed(g);
-        if (speed <= 0) speed = car::BuildOptions{}.defaultFrameSpeed;
+        double speed = effectiveSpeed(g);
+        // 0 = unknown; a negative speed is real (backwards) and used to be
+        // replaced by the default here - and saved that way on any edit.
+        if (speed == 0) speed = car::BuildOptions{}.defaultFrameSpeed;
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
-        if (ImGui::InputInt(tr(S::DlgFrameSpeed), &speed)) {
+        if (ImGui::InputDouble(tr(S::DlgFrameSpeed), &speed, 1.0, 10.0, "%g")) {
             g.frameSpeed = speed;
-            d.dirty = true;
+            touch(d);
         }
         ImGui::SameLine();
         if (g.frameSpeed) {
@@ -4625,7 +5986,7 @@ void App::drawSequenceDialog(Document& d) {
             std::snprintf(lbl, sizeof(lbl), tr(S::SpeedResetToXsi), back);
             if (ImGui::SmallButton(lbl)) {
                 g.frameSpeed.reset();
-                d.dirty = true;
+                touch(d);
             }
         } else {
             ImGui::TextDisabled("%s", fileRate > 0 ? tr(S::SpeedFromXsi) : tr(S::SpeedDefault));
@@ -4662,7 +6023,7 @@ void App::drawSequenceDialog(Document& d) {
                 enumFilter_[0] = '\0';
                 ImGui::OpenPopup("enum_add");
             }
-            if (drawEnumChooser("enum_add", ad.name, &d)) { d.dirty = true; d.validated = false; }
+            if (drawEnumChooser("enum_add", ad.name, &d)) { touch(d); d.validated = false; }
             if (!enums_.empty() && !enums_.contains(ad.name)) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "!");
@@ -4671,12 +6032,14 @@ void App::drawSequenceDialog(Document& d) {
             const auto intCol = [&](const char* id, int& v) {
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1);
-                if (ImGui::InputInt(id, &v, 0, 0)) { d.dirty = true; d.validated = false; }
+                if (ImGui::InputInt(id, &v, 0, 0)) { touch(d); d.validated = false; }
             };
             intCol("##s", ad.targetOffset);
             intCol("##c", ad.frameCount);
             intCol("##l", ad.loopFrame);
-            intCol("##p", ad.frameSpeed);
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputDouble("##p", &ad.frameSpeed, 0, 0, "%g")) { touch(d); d.validated = false; }
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton(iconsAvailable() ? ICON_DELETE : "X")) remove = static_cast<int>(a);
@@ -4686,7 +6049,7 @@ void App::drawSequenceDialog(Document& d) {
 
         if (remove >= 0) {
             g.additional.erase(g.additional.begin() + remove);
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
     }
@@ -4723,12 +6086,12 @@ void App::drawSequenceDialog(Document& d) {
             // serve no purpose in the cfg.
             while (!g.commentsBefore.empty() && g.commentsBefore.back().empty())
                 g.commentsBefore.pop_back();
-            d.dirty = true;
+            touch(d);
         }
     }
     if (ImGui::Button(tr(S::AddDivider))) {
         g.commentsBefore.push_back("//////////////////////////////////////////");
-        d.dirty = true;
+        touch(d);
     }
     ImGui::Separator();
 
@@ -4738,9 +6101,9 @@ void App::drawSequenceDialog(Document& d) {
         a.frameCount = 1;
         a.loopFrame = -1;
         // The master's real speed (it used to be a fixed 20).
-        a.frameSpeed = effectiveSpeed(g) > 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
+        a.frameSpeed = effectiveSpeed(g) != 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
         g.additional.push_back(std::move(a));
-        d.dirty = true;
+        touch(d);
         d.validated = false;
     }
     ImGui::SameLine();
@@ -4783,7 +6146,7 @@ void App::iconText(const char* icon, const IconColor& col, const char* text) {
     if (text && *text) ImGui::TextUnformatted(text);
 }
 
-bool App::iconButton(const char* icon, const IconColor& col, const char* text, bool small) {
+bool App::iconButton(const char* icon, const IconColor& col, const char* text, bool small, float width) {
     const bool haveIcon = iconsAvailable() && icon && *icon;
     const ImGuiStyle& st = ImGui::GetStyle();
 
@@ -4791,7 +6154,10 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
     const ImVec2 tSize = ImGui::CalcTextSize(text);
     const ImVec2 iSize = haveIcon ? ImGui::CalcTextSize(icon) : ImVec2(0, 0);
     const float gap = haveIcon ? st.ItemInnerSpacing.x : 0.0f;
-    const float w = iSize.x + gap + tSize.x + st.FramePadding.x * 2.0f;
+    const float content = iSize.x + gap + tSize.x;
+    float w = content + st.FramePadding.x * 2.0f;
+    if (width < 0.0f) w = std::max(w, ImGui::GetContentRegionAvail().x);
+    else if (width > 0.0f) w = std::max(w, width);
     const float h = tSize.y + (small ? 0.0f : st.FramePadding.y * 2.0f);
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -4801,12 +6167,12 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float y = pos.y + (h - tSize.y) * 0.5f;
-    float x = pos.x + st.FramePadding.x;
+    // A wide button centers its content; a fitted one has the padding.
+    float x = width != 0.0f ? pos.x + (w - content) * 0.5f : pos.x + st.FramePadding.x;
     if (haveIcon) {
-        dl->AddText(ImVec2(x, y), IM_COL32(static_cast<int>(col.r * 255),
-                                           static_cast<int>(col.g * 255),
-                                           static_cast<int>(col.b * 255), 255),
-                    icon);
+        // GetColorU32 applies the style alpha - a disabled button's icon fades
+        // with its text instead of staying bright.
+        dl->AddText(ImVec2(x, y), ImGui::GetColorU32(ImVec4(col.r, col.g, col.b, col.a)), icon);
         x += iSize.x + gap;
     }
     dl->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_Text), text);
@@ -4927,6 +6293,9 @@ void App::handleShortcuts() {
         requestClose({static_cast<std::size_t>(active_)});
     if (!ctrl && pressed(ImGuiKey_F5) && have && !buildRunning()) startBuild(shift);
     if (!ctrl && !shift && pressed(ImGuiKey_F7) && have) validateAll();
+    if (ctrl && !shift && pressed(ImGuiKey_Z)) undo();
+    if (ctrl && (pressed(ImGuiKey_Y) || (shift && pressed(ImGuiKey_Z)))) redo();
+    if (ctrl && pressed(ImGuiKey_K)) paletteRequest_ = true;
 }
 
 void App::draw() {
@@ -4968,8 +6337,22 @@ void App::draw() {
         const float statusH = ImGui::GetFrameHeightWithSpacing();
         const float avail = ImGui::GetContentRegionAvail().y;
 
-        float bottomH = avail * 0.28f;
-        bottomH = std::clamp(bottomH, 150.0f * k, 340.0f * k);
+        // An error line opens the panel by itself - nobody has to look for it.
+        {
+            std::size_t bad = 0;
+            {
+                std::lock_guard<std::mutex> lock(logMutex_);
+                bad = badLogCount_;
+            }
+            if (bad != badLogSeen_) {
+                badLogSeen_ = bad;
+                bottomOpen_[static_cast<int>(mode_)] = true;
+            }
+        }
+        const bool bottomOpen = bottomOpen_[static_cast<int>(mode_)];
+        float bottomH = std::clamp(avail * 0.28f, 150.0f * k, 340.0f * k);
+        // Folded: exactly one row (the child has no padding of its own).
+        if (!bottomOpen) bottomH = ImGui::GetFrameHeight() + 2.0f * k;
         const float mainH = std::max(120.0f * k, avail - bottomH - statusH);
 
         ImGui::BeginChild("upper", ImVec2(0, mainH));
@@ -4995,19 +6378,7 @@ void App::draw() {
         }
         ImGui::EndChild();
 
-        ImGui::BeginChild("bottom", ImVec2(0, bottomH));
-        if (ImGui::BeginTabBar("bottomtabs")) {
-            if (ImGui::BeginTabItem(tr(S::TabIssues))) {
-                drawIssues();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem(tr(S::TabLog))) {
-                drawLog();
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-        ImGui::EndChild();
+        drawBottomPanel(bottomH);
 
         drawStatusBar();
 
@@ -5082,8 +6453,34 @@ void App::draw() {
         drawOverwriteDialog();
         drawSpeedDialog();
         drawModelDialog();
+        drawPalette();
     }
     ImGui::End();
+
+    // A build that just ended gets its toast.
+    const bool building = buildRunning();
+    if (wasBuilding_ && !building) onBuildFinished();
+    wasBuilding_ = building;
+
+    // Validate the active script shortly after the last edit, in the
+    // background of the user's attention: missing files and unknown names
+    // show up while working, not only after pressing "Validate".
+    if (mode_ == Mode::Build && active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+        Document& d = docs_[static_cast<std::size_t>(active_)];
+        const double now = nowSeconds();
+        if (d.rev != lastRevSeen_) {
+            lastRevSeen_ = d.rev;
+            lastEditSeen_ = now;
+        }
+        // Only when it checks what F7 checks: with "read frame counts" the
+        // quick pass would replace F7's frame-range errors by a clean result.
+        if (!d.validated && !settings_.readFrameCounts && d.loadError.empty() && now - lastEditSeen_ > 0.8 &&
+            !ImGui::IsAnyItemActive())
+            validateDocument(static_cast<std::size_t>(active_), true);
+    }
+
+    trackUndo();
+    drawToasts();
 }
 
 }  // namespace g2::gui

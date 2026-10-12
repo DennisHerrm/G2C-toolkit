@@ -48,7 +48,7 @@ void writeFileChecked(const std::string& path, const void* data, std::size_t siz
 
     {
         std::ofstream f(tmp, std::ios::binary);
-        if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht zum Schreiben oeffnen");
+        if (!f) throw std::runtime_error("Kann \"" + path + "\" nicht zum Schreiben öffnen");
 
         if (size) {
             f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
@@ -66,7 +66,7 @@ void writeFileChecked(const std::string& path, const void* data, std::size_t siz
         if (!f) {
             std::error_code ec;
             fs::remove(tmp, ec);
-            throw std::runtime_error("Fehler beim Abschliessen von \"" + path + "\"");
+            throw std::runtime_error("Fehler beim Abschließen von \"" + path + "\"");
         }
     }
 
@@ -124,7 +124,7 @@ inline std::uint16_t readU16LE(const std::uint8_t* p) {
 
 std::string CompressStats::summary() const {
     std::ostringstream os;
-    if (clean() && nonUnitQuat == 0) return "keine Auffaelligkeiten";
+    if (clean() && nonUnitQuat == 0) return "keine Auffälligkeiten";
     if (quatClamped) os << quatClamped << " Quaternionkomponenten geklemmt; ";
     if (xlatClamped) os << xlatClamped << " Translationen geklemmt (max |t| = " << maxXlatSeen << "); ";
     if (nonUnitQuat) os << nonUnitQuat << " Bone-Matrizen mit Skalierung oder Spiegelung (nur die Drehung gespeichert); ";
