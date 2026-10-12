@@ -69,6 +69,9 @@ constexpr const char* ICON_FILTER      = "\xEE\x9C\x9C";   // U+E71C  filter
 constexpr const char* ICON_WARNING     = "\xEE\x9E\xBA";   // U+E7BA  warning
 constexpr const char* ICON_ERROR       = "\xEE\xA8\xB9";   // U+EA39  error
 constexpr const char* ICON_INFO        = "\xEE\xA5\x86";   // U+E946  info
+constexpr const char* ICON_PAUSE       = "\xEE\x9D\xA9";   // U+E769  pause
+constexpr const char* ICON_PREV        = "\xEE\xA2\x92";   // U+E892  previous
+constexpr const char* ICON_NEXT        = "\xEE\xA2\x93";   // U+E893  next
 
 // Icons can be switched off in case the font is missing.
 bool iconsAvailable();

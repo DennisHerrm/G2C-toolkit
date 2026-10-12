@@ -5,6 +5,7 @@
 
 #include "g2/carbuild.h"
 #include "g2/carjob.h"
+#include "g2/format.h"
 #include "g2/mdxa.h"
 #include "g2/xsi_export.h"
 #include "g2/parallel.h"
@@ -27,6 +28,21 @@
 
 namespace g2::gui {
 namespace fs = std::filesystem;
+
+// Filter match ignoring case: "run" finds BOTH_RUN1.
+static bool containsNoCase(const std::string& hay, const char* needle) {
+    if (!needle || !*needle) return true;
+    const std::size_t n = std::strlen(needle);
+    if (n > hay.size()) return false;
+    for (std::size_t i = 0; i + n <= hay.size(); ++i) {
+        std::size_t j = 0;
+        while (j < n && std::tolower(static_cast<unsigned char>(hay[i + j])) ==
+                            std::tolower(static_cast<unsigned char>(needle[j])))
+            ++j;
+        if (j == n) return true;
+    }
+    return false;
+}
 
 BuildJob::~BuildJob() { join(); }
 
@@ -288,6 +304,13 @@ void App::saveSettings() const {
     f << "newskel=" << (settings_.newSkeleton ? 1 : 0) << "\n";
     f << "framestep=" << settings_.frameStep << "\n";
     f << "onlynewxsi=" << (settings_.onlyNewXsi ? 1 : 0) << "\n";
+    f << "mode=" << static_cast<int>(mode_) << "\n";
+    if (!previewGlmPath_.empty()) f << "pvglm=" << previewGlmPath_ << "\n";
+    f << "pvmesh=" << (pvShowMesh_ ? 1 : 0) << "\n";
+    f << "pvskel=" << (pvShowSkeleton_ ? 1 : 0) << "\n";
+    f << "pvwire=" << (pvWireframe_ ? 1 : 0) << "\n";
+    if (!pvTexSource_.empty()) f << "pvtexsrc=" << pvTexSource_ << "\n";
+    if (!pvSkin_.empty()) f << "pvskin=" << pvSkin_ << "\n";
     f << "backup=" << (settings_.keepBackup ? 1 : 0) << "\n";
     f << "readframes=" << (settings_.readFrameCounts ? 1 : 0) << "\n";
     f << "dark=" << (settings_.darkMode ? 1 : 0) << "\n";
@@ -367,6 +390,18 @@ void App::loadSettings() {
         else if (key == "newskel") settings_.newSkeleton = asBool();
         else if (key == "framestep") settings_.frameStep = std::clamp(std::atoi(val.c_str()), 1, 1000);
         else if (key == "onlynewxsi") settings_.onlyNewXsi = asBool();
+        // Reopen in the mode the program was closed in.
+        else if (key == "mode") mode_ = static_cast<Mode>(std::clamp(std::atoi(val.c_str()), 0, 2));
+        else if (key == "pvglm") {
+            // The model shown last time; quietly dropped if it is gone.
+            std::error_code ec;
+            if (fs::is_regular_file(val, ec)) loadPreviewGlm(val);
+        }
+        else if (key == "pvmesh") pvShowMesh_ = asBool();
+        else if (key == "pvskel") pvShowSkeleton_ = asBool();
+        else if (key == "pvwire") pvWireframe_ = asBool();
+        else if (key == "pvtexsrc") pvTexSource_ = val;
+        else if (key == "pvskin") pvSkin_ = val;
         else if (key == "backup") settings_.keepBackup = asBool();
         else if (key == "xsiver")
             extract_.xsiVersion = std::atoi(val.c_str()) == 35
@@ -519,6 +554,131 @@ void App::refreshTabTitles() {
 }
 
 // --- Second mode: GLA back to dotXSI ---------------------------------------
+
+bool App::loadPreviewGlm(const std::string& path) {
+    try {
+        const auto bytes = readWholeFileBytes(path);
+        if (!isMdxm(bytes)) throw std::runtime_error("keine GLM (2LGM)");
+        MdxmFile glm = readMdxm(bytes);
+        std::size_t tris = 0;
+        if (!glm.mesh.lods.empty())
+            for (const auto& s : glm.mesh.lods[0].surfaces) tris += s.triangles.size();
+        previewGlm_ = std::move(glm);
+        previewGlmLoaded_ = true;
+        previewGlmPath_ = path;
+        pvTex_.dirty = true;
+        log(LogLine::Kind::Good, trf(S::LogGlmLoaded, fs::path(path).filename().string().c_str(), tris));
+        return true;
+    } catch (const std::exception& e) {
+        log(LogLine::Kind::Bad, trf(S::LogGlmFailed, (path + ": " + e.what()).c_str()));
+        return false;
+    }
+}
+
+void App::releaseTextureCache() {
+    if (platform_.destroyTexture)
+        for (const auto& [img, id] : pvTex_.cache)
+            if (id) platform_.destroyTexture(id);
+    pvTex_.cache.clear();
+    pvTex_.perSurface.clear();
+}
+
+void App::releaseGpuResources() {
+    releaseTextureCache();
+    pvTex_.dirty = true;
+}
+
+// Finds the texture of every surface of the preview model, as the game does:
+// skin -> shader -> image, from loose files and the game's .pk3 archives.
+void App::refreshPreviewTextures() {
+    auto& t = pvTex_;
+    if (!t.dirty) return;
+    t.dirty = false;
+    t.perSurface.clear();
+    t.hidden.clear();
+    t.skins.clear();
+    t.skin.clear();
+    t.missing = 0;
+    if (!previewGlmLoaded_ || previewGlm_.mesh.lods.empty()) return;
+
+    if (!t.gameDirsScanned) {
+        t.gameDirs = findGameDataFolders();
+        t.gameDirsScanned = true;
+    }
+    std::string source = pvTexSource_;
+    if (source.empty() && !t.gameDirs.empty()) {
+        // Default: a Movie Duels install if there is one, else the first.
+        source = t.gameDirs.front();
+        for (const auto& g : t.gameDirs)
+            if (containsNoCase(fs::path(g).filename().string(), "movie")) {
+                source = g;
+                break;
+            }
+    }
+
+    t.activeSource = source == "-" ? std::string() : source;
+    const std::string glmBase = baseOfAssetPath(previewGlmPath_);
+    const std::string key = glmBase + "|" + settings_.baseDir + "|" + source;
+    if (key != t.fsKey) {
+        releaseTextureCache();
+        t.fs = AssetFs{};
+        if (!glmBase.empty()) t.fs.addFolder(glmBase);
+        if (!settings_.baseDir.empty() && settings_.baseDir != glmBase) t.fs.addFolder(settings_.baseDir);
+        if (!source.empty() && source != "-")
+            for (const auto& f : gameDataSearchFolders(source)) t.fs.addFolder(f);
+        t.shaders = loadShaderIndex(t.fs);
+        t.fsKey = key;
+    }
+
+    // Skins in the model's folder; the chosen one, else model_default.skin.
+    std::string gameDir;
+    if (!glmBase.empty()) {
+        std::error_code ec;
+        const auto rel = fs::relative(fs::path(previewGlmPath_).parent_path(), glmBase, ec);
+        if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) gameDir = rel.generic_string();
+    }
+    if (!gameDir.empty()) t.skins = t.fs.list(gameDir, ".skin");
+    const auto fileOf = [](const std::string& p) { return gamePathKey(fs::path(p).filename().string()); };
+    const std::string stem = gamePathKey(fs::path(previewGlmPath_).stem().string());
+    for (const std::string& want : {gamePathKey(pvSkin_), std::string("model_default.skin"), stem + "_default.skin"}) {
+        if (!t.skin.empty() || want.empty()) continue;
+        for (const auto& s : t.skins)
+            if (fileOf(s) == want) t.skin = s;
+    }
+    std::map<std::string, std::string> skin;
+    if (!t.skin.empty())
+        if (const auto d = t.fs.read(t.skin)) skin = parseSkin(std::string(d->begin(), d->end()));
+
+    const auto& surfs = previewGlm_.mesh.lods[0].surfaces;
+    t.perSurface.assign(surfs.size(), 0);
+    t.hidden.assign(surfs.size(), 0);
+    for (std::size_t i = 0; i < surfs.size(); ++i) {
+        std::string shader = surfs[i].shader;
+        if (const auto it = skin.find(gamePathKey(surfs[i].name)); it != skin.end()) shader = it->second;
+        if (gamePathKey(shader) == "*off") {
+            t.hidden[i] = 1;
+            continue;
+        }
+        if (surfs[i].flags & (fmt::kSurfFlagIsBolt | fmt::kSurfFlagOff)) continue;
+        if (!platform_.createTexture) continue;
+        const std::string img = resolveImage(t.fs, t.shaders, shader);
+        if (img.empty()) {
+            ++t.missing;
+            continue;
+        }
+        if (const auto it = t.cache.find(img); it != t.cache.end()) {
+            t.perSurface[i] = it->second;
+            if (!it->second) ++t.missing;
+            continue;
+        }
+        std::uint64_t id = 0;
+        if (const auto bytes = t.fs.read(img))
+            if (const auto im = decodeImage(*bytes)) id = platform_.createTexture(im->width, im->height, im->rgba.data());
+        t.cache[img] = id;
+        t.perSurface[i] = id;
+        if (!id) ++t.missing;
+    }
+}
 
 bool App::loadGlaForExtract(const std::string& path) {
     try {
@@ -943,6 +1103,18 @@ bool App::openPath(const std::string& path) {
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (ext == ".car") return openCar(path);
     if (ext == ".h") return loadEnums(path);
+    if (ext == ".glm") {
+        // A model is something to look at: always the preview.
+        if (!loadPreviewGlm(path)) return false;
+        mode_ = Mode::Preview;
+        return true;
+    }
+    if (ext == ".gla" && mode_ != Mode::Build) {
+        // In the extract and preview modes a GLA is something to look into,
+        // not the reference skeleton of a build.
+        loadGlaForExtract(path);
+        return extract_.loaded;
+    }
     if (ext == ".gla") {
         settings_.referenceGla = path;
         log(LogLine::Kind::Good, trf(S::LogRefGlaSet, path.c_str()));
@@ -3552,56 +3724,191 @@ void App::drawPreviewPanel() {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     auto& ex = extract_;
 
-    if (!ex.loaded) {
-        ImGui::TextDisabled("%s", tr(S::PreviewNoGla));
-        return;
-    }
-
-    // Sequence selection.
-    // Without a sequence there is nothing to play. The access to seqs[0] used
-    // to run anyway - with an empty list, out of bounds.
-    if (ex.seqs.empty()) {
-        ImGui::TextDisabled("%s", tr(S::PreviewNoGla));
+    // Without a GLA (or without sequences) the page says what to do and
+    // offers the button, instead of pointing to another mode.
+    if (!ex.loaded || ex.seqs.empty()) {
+        drawGlaEmptyState(true);
         return;
     }
     if (previewSeq_ < 0 || previewSeq_ >= static_cast<int>(ex.seqs.size())) previewSeq_ = 0;
+
+    const auto pick = [&](int i) {
+        previewSeq_ = i;
+        playback_.frame = 0;
+        playback_.accumulator = 0.0f;
+    };
+
+    // Rows that pass the filter - the list and the up/down keys use the same.
+    std::vector<int> visible;
+    visible.reserve(ex.seqs.size());
+    for (std::size_t i = 0; i < ex.seqs.size(); ++i)
+        if (containsNoCase(ex.seqs[i].name, extractFilter_)) visible.push_back(static_cast<int>(i));
+
+    // Keyboard, as in a video player - but not while typing in the filter.
+    bool scrollToCurrent = false;
+    if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        const int count = ex.seqs[static_cast<std::size_t>(previewSeq_)].count;
+        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) playback_.playing = !playback_.playing;
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+            playback_.playing = false;
+            playback_.frame = playback_.frame > 0 ? playback_.frame - 1 : std::max(0, count - 1);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+            playback_.playing = false;
+            playback_.frame = playback_.frame + 1 < count ? playback_.frame + 1 : 0;
+        }
+        const bool up = ImGui::IsKeyPressed(ImGuiKey_UpArrow);
+        const bool down = ImGui::IsKeyPressed(ImGuiKey_DownArrow);
+        if ((up || down) && !visible.empty()) {
+            auto it = std::find(visible.begin(), visible.end(), previewSeq_);
+            int pos = it == visible.end() ? 0 : static_cast<int>(it - visible.begin());
+            pos = std::clamp(pos + (down ? 1 : -1), 0, static_cast<int>(visible.size()) - 1);
+            pick(visible[static_cast<std::size_t>(pos)]);
+            scrollToCurrent = true;
+        }
+    }
+
+    // --- Left: searchable list of all sequences. A click plays one. ---------
+    ImGui::BeginChild("pvlist", ImVec2(300.0f * k, 0), ImGuiChildFlags_Borders);
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##pvfilter", tr(S::FilterHint), extractFilter_, sizeof(extractFilter_));
+    ImGui::TextDisabled(tr(S::SeqCount), visible.size());
+    if (ImGui::BeginTable("pvtbl", 2, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("##n", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("##f", ImGuiTableColumnFlags_WidthFixed, 40.0f * k);
+    ImGuiListClipper clip;
+    clip.Begin(static_cast<int>(visible.size()));
+    if (scrollToCurrent) {
+        const auto it = std::find(visible.begin(), visible.end(), previewSeq_);
+        if (it != visible.end()) clip.IncludeItemByIndex(static_cast<int>(it - visible.begin()));
+    }
+    while (clip.Step()) {
+        for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
+            const int i = visible[static_cast<std::size_t>(r)];
+            const ExtractSeq& q = ex.seqs[static_cast<std::size_t>(i)];
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Selectable(q.name.c_str(), i == previewSeq_, ImGuiSelectableFlags_SpanAllColumns)) {
+                pick(i);
+                playback_.playing = true;
+            }
+            if (scrollToCurrent && i == previewSeq_) ImGui::SetScrollHereY(0.5f);
+            // Frame count, muted, in its own column.
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%d", q.count);
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndTable();
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+
+    // --- Right: title, canvas, transport bar ------------------------------------
+    ImGui::BeginChild("pvview", ImVec2(0, 0));
     const ExtractSeq& seq = ex.seqs[static_cast<std::size_t>(previewSeq_)];
 
-    ImGui::SetNextItemWidth(320 * k);
-    if (ImGui::BeginCombo(tr(S::PreviewSeq), seq.name.c_str())) {
-        // With a thousand sequences, show only those matching the filter.
-        const std::string needle = extractFilter_;
-        for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
-            if (!needle.empty() && ex.seqs[i].name.find(needle) == std::string::npos) continue;
-            if (ImGui::Selectable(ex.seqs[i].name.c_str(),
-                                  static_cast<int>(i) == previewSeq_)) {
-                previewSeq_ = static_cast<int>(i);
-                playback_.frame = 0;
-                playback_.accumulator = 0.0f;
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.25f);
+    ImGui::TextUnformatted(seq.name.c_str());
+    ImGui::PopFont();
+    {
+        char loop[32];
+        if (seq.loopFrame < 0) std::snprintf(loop, sizeof(loop), "%s", tr(S::PvLoopNone));
+        else std::snprintf(loop, sizeof(loop), "%d", seq.loopFrame);
+        ImGui::TextDisabled(tr(S::PvInfo), seq.count, seq.fps, loop);
+    }
+
+    // Model: load a GLM, show it, the skeleton or both.
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::PvLoadGlm), true)) {
+        const auto f = askFiles("previewglm", tr(S::DlgTitleGlm), "GLM (*.glm)\0*.glm\0Alle\0*.*\0", false);
+        if (!f.empty()) loadPreviewGlm(f.front());
+    }
+    ImGui::SameLine();
+    if (previewGlmLoaded_) {
+        std::size_t tris = 0;
+        if (!previewGlm_.mesh.lods.empty())
+            for (const auto& s : previewGlm_.mesh.lods[0].surfaces) tris += s.triangles.size();
+        ImGui::TextDisabled(tr(S::PvGlmInfo), fs::path(previewGlmPath_).filename().string().c_str(), tris);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", previewGlmPath_.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton(iconsAvailable() ? ICON_CANCEL : "x")) {
+            previewGlmLoaded_ = false;
+            previewGlm_ = MdxmFile{};
+            previewGlmPath_.clear();
+            releaseTextureCache();
+            pvTex_.dirty = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvRemoveGlm));
+        ImGui::SameLine();
+        ImGui::Checkbox(tr(S::PvShowMesh), &pvShowMesh_);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!pvShowMesh_);
+        ImGui::Checkbox(tr(S::PvWireframe), &pvWireframe_);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::Checkbox(tr(S::PvShowSkeleton), &pvShowSkeleton_);
+        // A model made for another skeleton: say so instead of showing a
+        // tangle without explanation.
+        std::string a = previewGlm_.mesh.animName, b = ex.gla.skeleton.name;
+        std::transform(a.begin(), a.end(), a.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(b.begin(), b.end(), b.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (!a.empty() && !b.empty() && a != b)
+            iconText(ICON_WARNING, kIconWarn,
+                     trf(S::PvGlmOther, previewGlm_.mesh.animName.c_str(), ex.gla.skeleton.name.c_str()).c_str());
+
+        refreshPreviewTextures();
+        if (pvShowMesh_) {
+            // Where the images come from, and which skin.
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", tr(S::PvTextures));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(260.0f * k);
+            const std::string cur = pvTexSource_ == "-" ? std::string(tr(S::PvTexOff))
+                                    : pvTex_.activeSource.empty()
+                                        ? std::string(tr(S::PvTexOff))
+                                        : fs::path(pvTex_.activeSource).filename().string() +
+                                              (pvTexSource_.empty() ? " (auto)" : "");
+            if (ImGui::BeginCombo("##pvtexsrc", cur.c_str())) {
+                if (ImGui::Selectable(tr(S::PvTexOff), pvTexSource_ == "-")) {
+                    pvTexSource_ = "-";
+                    pvTex_.dirty = true;
+                }
+                for (const auto& g : pvTex_.gameDirs) {
+                    if (ImGui::Selectable(fs::path(g).filename().string().c_str(), pvTexSource_ == g)) {
+                        pvTexSource_ = g;
+                        pvTex_.dirty = true;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g.c_str());
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvTexSourceTip));
+            if (!pvTex_.skins.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", tr(S::PvSkin));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(220.0f * k);
+                const std::string skinName = fs::path(pvTex_.skin).filename().string();
+                if (ImGui::BeginCombo("##pvskin", skinName.c_str())) {
+                    for (const auto& s : pvTex_.skins) {
+                        const std::string n = fs::path(s).filename().string();
+                        if (ImGui::Selectable(n.c_str(), s == pvTex_.skin)) {
+                            pvSkin_ = n;
+                            pvTex_.dirty = true;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            if (pvTex_.missing > 0) {
+                ImGui::SameLine();
+                ImGui::TextDisabled(tr(S::PvTexMissing), pvTex_.missing);
             }
         }
-        ImGui::EndCombo();
+    } else {
+        ImGui::TextDisabled("%s", tr(S::PvGlmHint));
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(180 * k);
-    ImGui::InputTextWithHint("##pvfilter", tr(S::FilterHint), extractFilter_,
-                             sizeof(extractFilter_));
-
-    // Controls.
-    if (ImGui::Button(playback_.playing ? withIcon(ICON_CANCEL, tr(S::PreviewPause))
-                                        : withIcon(ICON_BUILD, tr(S::PreviewPlay))))
-        playback_.playing = !playback_.playing;
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-260 * k);
-    int f = playback_.frame;
-    if (ImGui::SliderInt("##pvframe", &f, 0, std::max(0, seq.count - 1))) {
-        playback_.frame = f;
-        playback_.playing = false;
-    }
-    ImGui::SameLine();
-    ImGui::Text(tr(S::PreviewFrame), playback_.frame + 1, seq.count);
-    ImGui::SameLine();
-    if (ImGui::SmallButton(tr(S::PreviewReset))) previewCam_ = PreviewCamera{};
 
     // Advance time. The rate comes from the animation.cfg, not from the UI
     // frame rate: an animation at 20 frames per second should run at 20 even
@@ -3617,19 +3924,20 @@ void App::drawPreviewPanel() {
     // World poses of the current frame.
     const int glaFrame = seq.start + playback_.frame;
     const auto world = boneWorldMatrices(ex.gla, glaFrame);
-    if (world.empty()) return;
 
-    // Canvas.
+    // Canvas: everything except the transport bar below it.
+    const float barH = ImGui::GetFrameHeightWithSpacing() * 2.0f + 6.0f * k;
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const ImVec2 size(avail.x, std::max(120.0f * k, avail.y));
+    const ImVec2 size(avail.x, std::max(120.0f * k, avail.y - barH));
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##pvcanvas", size,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 
-    // On the first frame and after a reset, fit everything into view.
-    if (previewCam_.distance <= 0.0f || previewCam_.distance == PreviewCamera{}.distance)
-        frameAll(previewCam_, computeBounds(world));
-
+    if (!world.empty()) {
+        // On the first frame and after a reset, fit everything into view.
+        if (previewCam_.distance <= 0.0f || previewCam_.distance == PreviewCamera{}.distance)
+            frameAll(previewCam_, computeBounds(world));
+    }
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 d = ImGui::GetIO().MouseDelta;
         previewCam_.yawDeg -= d.x * 0.4f;
@@ -3643,31 +3951,141 @@ void App::drawPreviewPanel() {
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const bool dark = settings_.darkMode;
     dl->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y),
-                      IM_COL32(24, 26, 30, 255));
-
-    const auto lines = buildBoneLines(ex.gla, world, previewCam_, size.x, size.y);
-    for (const auto& l : lines) {
-        // Depth as brightness: what's farther away gets darker. Without this,
-        // for a skeleton seen from the front you can't tell which arm is in
-        // front.
-        const float t = std::clamp(l.depth / (previewCam_.distance * 1.6f), 0.0f, 1.0f);
-        const int v = static_cast<int>(230.0f - 130.0f * t);
-        dl->AddLine(ImVec2(origin.x + l.x0, origin.y + l.y0),
-                    ImVec2(origin.x + l.x1, origin.y + l.y1),
-                    IM_COL32(v, v, static_cast<int>(static_cast<float>(v) * 0.85f), 255),
-                    1.6f * k);
+                      dark ? IM_COL32(24, 26, 30, 255) : IM_COL32(236, 238, 242, 255), 6.0f * k);
+    const bool meshShown = previewGlmLoaded_ && pvShowMesh_ && !world.empty();
+    if (meshShown) {
+        const auto tris = buildMeshTriangles(previewGlm_.mesh, ex.gla, world, previewCam_, size.x, size.y,
+                                             &pvTex_.hidden);
+        dl->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+        // Textured triangles go through their image; consecutive ones with
+        // the same image share one draw call.
+        const bool wrap = platform_.wrapSampler != nullptr;
+        if (wrap) dl->AddCallback(reinterpret_cast<ImDrawCallback>(platform_.wrapSampler), nullptr);
+        std::uint64_t bound = 0;
+        for (const auto& t : tris) {
+            const std::uint64_t tex = t.surface >= 0 && static_cast<std::size_t>(t.surface) < pvTex_.perSurface.size()
+                                          ? pvTex_.perSurface[static_cast<std::size_t>(t.surface)]
+                                          : 0;
+            if (tex) {
+                if (tex != bound) {
+                    if (bound) dl->PopTexture();
+                    dl->PushTexture(ImTextureRef(static_cast<ImTextureID>(tex)));
+                    bound = tex;
+                }
+                const int lv = static_cast<int>(255.0f * (0.45f + 0.55f * t.shade));
+                const ImU32 tint = IM_COL32(lv, lv, lv, 255);
+                dl->PrimReserve(3, 3);
+                for (int c = 0; c < 3; ++c)
+                    dl->PrimVtx(ImVec2(origin.x + t.x[c], origin.y + t.y[c]), ImVec2(t.u[c], t.v[c]), tint);
+                if (pvWireframe_)
+                    dl->AddTriangle(ImVec2(origin.x + t.x[0], origin.y + t.y[0]), ImVec2(origin.x + t.x[1], origin.y + t.y[1]),
+                                    ImVec2(origin.x + t.x[2], origin.y + t.y[2]), IM_COL32(20, 22, 28, 160), 1.0f);
+                continue;
+            }
+            // Untextured: back to ImGui's own texture (its white pixel).
+            if (bound) {
+                dl->PopTexture();
+                bound = 0;
+            }
+            // Soft light from the camera; never fully black.
+            const float l = 0.30f + 0.70f * t.shade;
+            const ImU32 col = dark ? IM_COL32(static_cast<int>(150 * l), static_cast<int>(158 * l),
+                                              static_cast<int>(172 * l), 255)
+                                   : IM_COL32(static_cast<int>(120 + 110 * l), static_cast<int>(124 + 110 * l),
+                                              static_cast<int>(132 + 112 * l), 255);
+            const ImVec2 a(origin.x + t.x[0], origin.y + t.y[0]), b(origin.x + t.x[1], origin.y + t.y[1]),
+                c(origin.x + t.x[2], origin.y + t.y[2]);
+            dl->AddTriangleFilled(a, b, c, col);
+            if (pvWireframe_) dl->AddTriangle(a, b, c, IM_COL32(20, 22, 28, 160), 1.0f);
+        }
+        if (bound) dl->PopTexture();
+        if (wrap) dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+        dl->PopClipRect();
     }
-    for (const auto& l : lines)
-        dl->AddCircleFilled(ImVec2(origin.x + l.x1, origin.y + l.y1), 2.0f * k,
-                            IM_COL32(120, 190, 255, 255));
+    if (!world.empty() && (pvShowSkeleton_ || !meshShown)) {
+        const auto lines = buildBoneLines(ex.gla, world, previewCam_, size.x, size.y);
+        for (const auto& l : lines) {
+            // Depth as brightness: what's farther away gets fainter. Without
+            // this, for a skeleton seen from the front you can't tell which
+            // arm is in front.
+            const float t = std::clamp(l.depth / (previewCam_.distance * 1.6f), 0.0f, 1.0f);
+            const int v = dark ? static_cast<int>(230.0f - 130.0f * t) : static_cast<int>(40.0f + 130.0f * t);
+            dl->AddLine(ImVec2(origin.x + l.x0, origin.y + l.y0), ImVec2(origin.x + l.x1, origin.y + l.y1),
+                        IM_COL32(v, v, static_cast<int>(static_cast<float>(v) * 0.85f), 255), 1.6f * k);
+        }
+        for (const auto& l : lines)
+            dl->AddCircleFilled(ImVec2(origin.x + l.x1, origin.y + l.y1), 2.0f * k, IM_COL32(90, 160, 240, 255));
+    }
+    {
+        char info[128];
+        std::snprintf(info, sizeof(info), tr(S::PreviewBones), world.size());
+        const ImU32 muted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        dl->AddText(ImVec2(origin.x + 10 * k, origin.y + 8 * k), muted, info);
+        dl->AddText(ImVec2(origin.x + 10 * k, origin.y + 8 * k + ImGui::GetTextLineHeight()), muted,
+                    tr(S::PreviewHint));
+    }
 
-    // Header line in the corner.
-    char info[128];
-    std::snprintf(info, sizeof(info), tr(S::PreviewBones), world.size());
-    dl->AddText(ImVec2(origin.x + 8 * k, origin.y + 6 * k), IM_COL32(160, 160, 165, 255), info);
-    dl->AddText(ImVec2(origin.x + 8 * k, origin.y + 22 * k), IM_COL32(120, 120, 125, 255),
-                tr(S::PreviewHint));
+    // Transport bar: previous / play / next, timeline, frame, reset.
+    ImGui::Spacing();
+    if (ImGui::Button(iconsAvailable() ? ICON_PREV : "<")) {
+        playback_.playing = false;
+        playback_.frame = playback_.frame > 0 ? playback_.frame - 1 : std::max(0, seq.count - 1);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvPrevFrame));
+    ImGui::SameLine();
+    if (ImGui::Button(playback_.playing ? withIcon(ICON_PAUSE, tr(S::PreviewPause))
+                                        : withIcon(ICON_BUILD, tr(S::PreviewPlay))))
+        playback_.playing = !playback_.playing;
+    ImGui::SameLine();
+    if (ImGui::Button(iconsAvailable() ? ICON_NEXT : ">")) {
+        playback_.playing = false;
+        playback_.frame = playback_.frame + 1 < seq.count ? playback_.frame + 1 : 0;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PvNextFrame));
+    ImGui::SameLine();
+    char fr[48];
+    std::snprintf(fr, sizeof(fr), tr(S::PreviewFrame), playback_.frame + 1, seq.count);
+    const float resetW = ImGui::CalcTextSize(tr(S::PreviewReset)).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SetNextItemWidth(std::max(80.0f * k, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(fr).x -
+                                                    resetW - ImGui::GetStyle().ItemSpacing.x * 3.0f));
+    {
+        // Timeline: a thin track, filled up to the current frame, a knob, and
+        // a tick per frame when there is room. Click or drag to scrub.
+        const float tw = std::max(80.0f * k, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(fr).x -
+                                                 resetW - ImGui::GetStyle().ItemSpacing.x * 3.0f);
+        const float th = ImGui::GetFrameHeight();
+        const ImVec2 tp = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##pvtimeline", ImVec2(tw, th));
+        const int last = std::max(0, seq.count - 1);
+        if (ImGui::IsItemActive()) {
+            const float t = std::clamp((ImGui::GetIO().MousePos.x - tp.x) / tw, 0.0f, 1.0f);
+            playback_.frame = static_cast<int>(std::lround(t * static_cast<float>(last)));
+            playback_.playing = false;
+        }
+        const float cy = tp.y + th * 0.5f;
+        const float pos = last > 0 ? static_cast<float>(playback_.frame) / static_cast<float>(last) : 0.0f;
+        const float knobX = tp.x + pos * tw;
+        ImDrawList* tl = ImGui::GetWindowDrawList();
+        tl->AddRectFilled(ImVec2(tp.x, cy - 3.0f * k), ImVec2(tp.x + tw, cy + 3.0f * k),
+                          ImGui::GetColorU32(ImGuiCol_FrameBg), 3.0f * k);
+        tl->AddRectFilled(ImVec2(tp.x, cy - 3.0f * k), ImVec2(knobX, cy + 3.0f * k), IM_COL32(66, 135, 245, 255),
+                          3.0f * k);
+        if (last > 0 && tw / static_cast<float>(last) >= 6.0f * k)
+            for (int i = 0; i <= last; ++i) {
+                const float x = tp.x + tw * static_cast<float>(i) / static_cast<float>(last);
+                tl->AddLine(ImVec2(x, cy + 6.0f * k), ImVec2(x, cy + 9.0f * k), ImGui::GetColorU32(ImGuiCol_TextDisabled));
+            }
+        tl->AddCircleFilled(ImVec2(knobX, cy), (ImGui::IsItemHovered() || ImGui::IsItemActive() ? 8.0f : 7.0f) * k,
+                            IM_COL32(235, 240, 250, 255));
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(fr);
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::PreviewReset))) previewCam_ = PreviewCamera{};
+    ImGui::TextDisabled("%s", tr(S::PvKeys));
+    ImGui::EndChild();
 }
 
 // Error list of the active script.
@@ -3686,12 +4104,13 @@ void App::drawModeBar() {
         Mode        m;
         const char* icon;
         S           label;
+        S           sub;
         S           hint;
         IconColor   col;
     } modes[] = {
-        {Mode::Build, ICON_BUILD, S::ModeBuild, S::ModeBuildHint, kIconGood},
-        {Mode::Extract, ICON_OPEN_FILE, S::ModeExtract, S::ModeExtractHint, kIconAccent},
-        {Mode::Preview, ICON_DOCUMENT, S::ModePreview, S::ModePreviewHint, kIconInfo},
+        {Mode::Build, ICON_BUILD, S::ModeBuild, S::ModeBuildSub, S::ModeBuildHint, kIconGood},
+        {Mode::Extract, ICON_OPEN_FILE, S::ModeExtract, S::ModeExtractSub, S::ModeExtractHint, kIconAccent},
+        {Mode::Preview, ICON_DOCUMENT, S::ModePreview, S::ModePreviewSub, S::ModePreviewHint, kIconInfo},
     };
 
     // Determine the width from the TEXT, don't guess.
@@ -3700,8 +4119,12 @@ void App::drawModeBar() {
     // "XSI -> GLA" was cut off in English, while the same number would have
     // been too wide for the shorter Chinese labels.
     float textW = 0.0f;
-    for (const auto& m : modes)
+    for (const auto& m : modes) {
         textW = std::max(textW, ImGui::CalcTextSize(withIcon(m.icon, tr(m.label))).x);
+        textW = std::max(textW, ImGui::CalcTextSize(tr(m.sub)).x * 0.86f);
+    }
+    // Two lines: the direction and, below it, what the mode is for.
+    const float btnH = ImGui::GetTextLineHeight() * 2.0f + 18.0f * k;
 
     const ImGuiStyle& st = ImGui::GetStyle();
     const float barW = textW + st.FramePadding.x * 2.0f + st.WindowPadding.x * 2.0f + 8.0f * k;
@@ -3722,7 +4145,7 @@ void App::drawModeBar() {
         // is running.
         const ImVec2 bpos = ImGui::GetCursorScreenPos();
         ImGui::PushID(static_cast<int>(m.m));
-        const bool hit = ImGui::Button("##mode", ImVec2(-1, 44 * k));
+        const bool hit = ImGui::Button("##mode", ImVec2(-1, btnH));
         ImGui::PopID();
         if (hit) mode_ = m.m;
 
@@ -3733,7 +4156,8 @@ void App::drawModeBar() {
             const ImVec2 iS = hasIcon ? ImGui::CalcTextSize(m.icon) : ImVec2(0, 0);
             const float gap = hasIcon ? ImGui::GetStyle().ItemInnerSpacing.x : 0.0f;
             float x = bpos.x + ImGui::GetStyle().FramePadding.x + 4.0f * k;
-            const float y = bpos.y + (44 * k - tS.y) * 0.5f;
+            const float x0 = x;
+            const float y = bpos.y + 7.0f * k;
             if (hasIcon) {
                 const ImU32 ic =
                     active ? IM_COL32_WHITE
@@ -3744,6 +4168,11 @@ void App::drawModeBar() {
                 x += iS.x + gap;
             }
             dl->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_Text), tr(m.label));
+            // The subtitle, smaller and muted.
+            const float subSize = ImGui::GetFontSize() * 0.86f;
+            dl->AddText(ImGui::GetFont(), subSize, ImVec2(x0, y + tS.y + 3.0f * k),
+                        active ? IM_COL32(220, 230, 245, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                        tr(m.sub));
         }
         if (active) ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(m.hint));
@@ -3752,107 +4181,190 @@ void App::drawModeBar() {
     ImGui::EndChild();
 }
 
-// UI for the reverse direction.
+// Numbered step heading for the guided panels: a round badge with the number
+// - green with a check mark once the step is done - and the title one size
+// larger. It answers "what do I click next?" without a manual.
+void App::stepHeader(int n, const char* title, bool done) {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    ImGui::Spacing();
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.15f);
+    const float h = ImGui::GetTextLineHeight();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float r = h * 0.5f + 1.0f * k;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p.x + r, p.y + h * 0.5f);
+    dl->AddCircleFilled(c, r, done ? IM_COL32(56, 142, 84, 255) : IM_COL32(58, 88, 140, 255));
+    char num[8];
+    std::snprintf(num, sizeof(num), "%d", n);
+    const char* mark = done && iconsAvailable() ? ICON_CHECK : num;
+    const ImVec2 ms = ImGui::CalcTextSize(mark);
+    dl->AddText(ImVec2(c.x - ms.x * 0.5f, c.y - ms.y * 0.5f), IM_COL32_WHITE, mark);
+    ImGui::Dummy(ImVec2(2.0f * r + 4.0f * k, h));
+    ImGui::SameLine();
+    ImGui::TextUnformatted(title);
+    ImGui::PopFont();
+    ImGui::Spacing();
+}
+
+void App::hintText(const char* text) {
+    if (iconsAvailable()) {
+        ImGui::TextDisabled("%s", ICON_INFO);
+        ImGui::SameLine();
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+}
+
+void App::openGlaDialog() {
+    const auto f = askFiles("extractgla", tr(S::DlgTitleGla), "GLA (*.gla)\0*.gla\0Alle\0*.*\0", false);
+    if (!f.empty()) loadGlaForExtract(f.front());
+}
+
+// The page for "no GLA open yet", centered: what this mode does, one big
+// button, and the hint that dropping a file works too.
+void App::drawGlaEmptyState(bool forPreview) {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float w = std::min(avail.x - 20.0f * k, 520.0f * k);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.0f, (avail.x - w) * 0.5f),
+                               ImGui::GetCursorPosY() + std::max(0.0f, avail.y * 0.25f)));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.35f);
+    ImGui::TextUnformatted(tr(S::NoGlaOpen));
+    ImGui::PopFont();
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", forPreview ? tr(S::PvEmptyHint) : tr(S::NoGlaHint));
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.42f, 0.70f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.27f, 0.49f, 0.80f, 1.0f));
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenGla), false, 220.0f * k)) openGlaDialog();
+    ImGui::PopStyleColor(2);
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s", tr(S::DropGlaHint));
+    if (!extract_.error.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%s", extract_.error.c_str());
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::EndGroup();
+}
+
+// GLA -> XSI as four numbered steps on the left (open, choose, target,
+// export), the list of sequences on the right. Every button that cannot be
+// used yet says below it which step is missing.
 void App::drawExtractPanel() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    std::size_t nsel = 0;
+    for (const char c : extract_.selected)
+        if (c) ++nsel;
+
+    ImGui::BeginChild("exsteps", ImVec2(400.0f * k, 0), ImGuiChildFlags_Borders);
+    drawExtractSteps(nsel);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("exlist", ImVec2(0, 0));
+    if (!extract_.loaded) drawGlaEmptyState(false);
+    else drawExtractList();
+    ImGui::EndChild();
+}
+
+void App::drawExtractSteps(std::size_t nsel) {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     auto& ex = extract_;
 
-    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenGla))) {
-        const auto f = askFiles("extractgla", tr(S::DlgTitleGla),
-                                "GLA (*.gla)\0*.gla\0Alle\0*.*\0", false);
-        if (!f.empty()) loadGlaForExtract(f.front());
-    }
-    // The two companion files are searched for automatically on open. The
-    // buttons remain for the case that they live somewhere else.
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!ex.loaded);
-    if (ImGui::Button(withIcon(ICON_DOCUMENT, tr(S::OpenCfg)))) {
-        const auto f = askFiles("extractcfg", tr(S::OpenCfg),
-                                "animation.cfg\0*.cfg\0Alle\0*.*\0", false);
-        if (!f.empty()) loadAnimationCfg(f.front());
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(withIcon(ICON_DOCUMENT, tr(S::OpenFrames)))) {
-        const auto f = askFiles("extractframes", tr(S::OpenFrames),
-                                ".frames\0*.frames\0Alle\0*.*\0", false);
-        if (!f.empty()) loadFramesFile(f.front());
-    }
-    ImGui::EndDisabled();
+    // --- 1. GLA and its companion files -------------------------------------
+    stepHeader(1, tr(S::StepGla), ex.loaded);
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, ex.loaded ? tr(S::ExOtherGla) : tr(S::OpenGla))) openGlaDialog();
+    if (ex.loaded) {
+        ImGui::TextUnformatted(fs::path(ex.glaPath).filename().string().c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled(tr(S::GlaInfo), ex.gla.numFrames, ex.gla.skeleton.bones.size());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", fs::path(ex.glaPath).parent_path().string().c_str());
+        ImGui::PopTextWrapPos();
 
+        // The two companion files: found or not, and a button to pick one
+        // that lives elsewhere.
+        const auto companion = [&](const std::string& path, const char* missing, const IconColor& missingCol,
+                                   const char* button, const char* purpose, const char* filter, bool cfg) {
+            if (path.empty()) iconText(ICON_WARNING, missingCol, missing);
+            else iconText(ICON_CHECK, kIconGood, fs::path(path).filename().string().c_str());
+            ImGui::SameLine();
+            const float bw = ImGui::CalcTextSize(withIcon(ICON_FOLDER_OPEN, button)).x +
+                             ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - bw));
+            if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, button))) {
+                const auto f = askFiles(purpose, button, filter, false);
+                if (!f.empty()) {
+                    if (cfg) loadAnimationCfg(f.front());
+                    else loadFramesFile(f.front());
+                }
+            }
+        };
+        companion(ex.cfgPath, "animation.cfg", kIconWarn, tr(S::OpenCfg), "extractcfg",
+                  "animation.cfg\0*.cfg\0Alle\0*.*\0", true);
+        if (ex.cfgPath.empty()) hintText(tr(S::NoCfgWarning));
+        companion(ex.framesPath, ".frames", kIconMuted, tr(S::OpenFrames), "extractframes",
+                  ".frames\0*.frames\0Alle\0*.*\0", false);
+        if (ex.framesPath.empty()) hintText(tr(S::FramesMissing));
+        else ImGui::TextDisabled(tr(S::FramesLoaded), ex.withMotion);
+
+        ImGui::TextDisabled("%s:", tr(S::OriginLabel));
+        ImGui::SameLine();
+        if (ex.origin) {
+            // Tiny negative values would show as "-0".
+            const auto clean = [](float v) { return std::fabs(v) < 0.005f ? 0.0f : v; };
+            ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::OriginDetected), clean((*ex.origin)[0]),
+                               clean((*ex.origin)[1]), clean((*ex.origin)[2]));
+        }
+        else
+            ImGui::TextDisabled("%s", tr(S::OriginNone));
+    } else if (!ex.error.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%s", ex.error.c_str());
+        ImGui::PopTextWrapPos();
+    }
+
+    // --- 2. Selection -----------------------------------------------------------
+    ImGui::Spacing();
+    stepHeader(2, tr(S::StepSelect), nsel > 0);
+    ImGui::BeginDisabled(!ex.loaded);
+    ImGui::Text(tr(S::ExSelCount), nsel, ex.seqs.size());
     ImGui::SameLine();
-    ImGui::BeginDisabled(!ex.loaded || ex.seqs.size() < 2);
+    if (ImGui::SmallButton(tr(S::SelectAll))) {
+        // All VISIBLE rows: filter and "missing only" decide what is meant.
+        for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
+            const auto& q = ex.seqs[i];
+            if (!containsNoCase(q.name, extractFilter_)) continue;
+            if (ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name)) continue;
+            ex.selected[i] = 1;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(tr(S::SelectNone))) std::fill(ex.selected.begin(), ex.selected.end(), char{0});
+    hintText(tr(S::ExSelectHint));
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s", tr(S::ExCompareHead));
+    ImGui::BeginDisabled(ex.seqs.size() < 2);
     if (iconButton(ICON_CHECK, kIconAccent, tr(S::Compare))) {
-        const auto f = askFiles("comparecfg", tr(S::Compare),
-                                "animation.cfg\0*.cfg\0Alle\0*.*\0", false);
+        const auto f = askFiles("comparecfg", tr(S::Compare), "animation.cfg\0*.cfg\0Alle\0*.*\0", false);
         if (!f.empty()) loadCompareCfg(f.front());
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CompareTip));
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr(S::CompareTip));
     ImGui::EndDisabled();
-
-    if (!ex.loaded) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("%s", tr(S::NoGlaOpen));
-        ImGui::TextDisabled("%s", tr(S::NoGlaHint));
-        if (!ex.error.empty())
-            ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%s", ex.error.c_str());
-        return;
-    }
-
-    ImGui::TextDisabled("%s", ex.glaPath.c_str());
-    ImGui::Text(tr(S::GlaInfo), ex.gla.numFrames, ex.gla.skeleton.bones.size());
-    // Make visible what was found - otherwise you're left wondering whether
-    // the companion files took effect.
-    ImGui::SameLine();
-    if (ex.cfgPath.empty())
-        iconText(ICON_WARNING, kIconWarn, tr(S::NoCfgWarning));
-    else
-        iconText(ICON_CHECK, kIconGood, fs::path(ex.cfgPath).filename().string().c_str());
-
-    ImGui::SameLine();
-    if (ex.framesPath.empty())
-        ImGui::TextDisabled("%s", tr(S::NoFramesHint));
-    else
-        iconText(ICON_CHECK, kIconGood, fs::path(ex.framesPath).filename().string().c_str());
-
-    ImGui::TextUnformatted(tr(S::OriginLabel));
-    ImGui::SameLine();
-    if (ex.origin)
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::OriginDetected), (*ex.origin)[0],
-                           (*ex.origin)[1], (*ex.origin)[2]);
-    else
-        ImGui::TextDisabled("%s", tr(S::OriginNone));
-
-    ImGui::SameLine();
-    ImGui::TextUnformatted("|");
-    ImGui::SameLine();
-    if (ex.framesPath.empty())
-        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", tr(S::FramesMissing));
-    else
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), tr(S::FramesLoaded), ex.withMotion);
-
-    // Target folder.
-    ImGui::TextUnformatted(tr(S::ExportTarget));
-    ImGui::SameLine();
-    if (ex.outDir.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1), "%s", tr(S::NotSet));
-    else
-        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", ex.outDir.c_str());
-    ImGui::SameLine();
-    if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, tr(S::ChooseFolder)))) {
-        const std::string p = askFolder("extractout", tr(S::ExportTarget));
-        if (!p.empty()) ex.outDir = p;
-    }
-
-    // Comparison baseline.
     if (!ex.compareNames.empty()) {
         std::size_t fehlt = 0;
         for (const auto& q : ex.seqs)
             if (!existsInCompare(q.name)) ++fehlt;
-
         ImGui::TextDisabled("%s:", fs::path(ex.comparePath).filename().string().c_str());
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), tr(S::CompareCount), fehlt);
-        ImGui::SameLine();
         ImGui::Checkbox(tr(S::OnlyMissing), &ex.onlyMissing);
         ImGui::SameLine();
         if (ImGui::SmallButton(tr(S::SelectMissing))) {
@@ -3862,53 +4374,45 @@ void App::drawExtractPanel() {
             log(LogLine::Kind::Info, m);
         }
     }
+    ImGui::EndDisabled();
 
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(220 * k);
-    ImGui::InputTextWithHint("##exfilter", tr(S::FilterHint), extractFilter_,
-                             sizeof(extractFilter_));
-    ImGui::SameLine();
-    ImGui::TextDisabled(tr(S::SeqCount), ex.seqs.size());
-
-    std::size_t nsel = 0;
-    for (const char c : ex.selected)
-        if (c) ++nsel;
-
-    ImGui::SameLine();
-    ImGui::BeginDisabled(ex.outDir.empty() || nsel == 0);
-    char lbl[128];
-    std::snprintf(lbl, sizeof(lbl), tr(S::ExportSelected), nsel);
-    if (ImGui::Button(withIcon(ICON_SAVE, lbl))) {
-        std::vector<std::size_t> rows;
-        for (std::size_t i = 0; i < ex.selected.size(); ++i)
-            if (ex.selected[i]) rows.push_back(i);
-        exportWithConfirm(rows, false);
+    // --- 3. Target folder ---------------------------------------------------------
+    ImGui::Spacing();
+    stepHeader(3, tr(S::StepTarget), !ex.outDir.empty());
+    ImGui::BeginDisabled(!ex.loaded);
+    if (ex.outDir.empty()) {
+        iconText(ICON_WARNING, kIconWarn, tr(S::NotSet));
+    } else {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", ex.outDir.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    if (ImGui::Button(withIcon(ICON_FOLDER_OPEN, tr(S::ChooseFolder)))) {
+        const std::string p = askFolder("extractout", tr(S::ExportTarget));
+        if (!p.empty()) ex.outDir = p;
     }
     ImGui::EndDisabled();
 
-    // Bind pose selection.
-    //
-    // Deliberately placed here next to the export buttons and not in the
-    // settings: it only affects the export, and whoever needs it looks for it
-    // here.
-    // dotXSI version.
-    ImGui::SameLine();
-    ImGui::TextDisabled("dotXSI");
+    // --- 4. Export ----------------------------------------------------------------
+    ImGui::Spacing();
+    stepHeader(4, tr(S::StepExport), false);
+    ImGui::BeginDisabled(!ex.loaded);
+    // Format options, next to the buttons they affect.
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s dotXSI", tr(S::ExFormat));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(70 * k);
     {
         const char* vn[] = {"3.0", "3.5"};
         int cur = ex.xsiVersion == xsiexp::ExportOptions::Version::V30 ? 0 : 1;
         if (ImGui::Combo("##xsiver", &cur, vn, 2))
-            ex.xsiVersion = cur == 0 ? xsiexp::ExportOptions::Version::V30
-                                     : xsiexp::ExportOptions::Version::V35;
+            ex.xsiVersion = cur == 0 ? xsiexp::ExportOptions::Version::V30 : xsiexp::ExportOptions::Version::V35;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::XsiVersionTip));
-
     ImGui::SameLine();
     ImGui::TextDisabled("%s", tr(S::BasePoseLabel));
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(110 * k);
+    ImGui::SetNextItemWidth(-1);
     {
         const char* namen[] = {tr(S::BasePoseWorld), tr(S::BasePoseLocal), tr(S::BasePoseNone)};
         int cur = ex.basePose == xsiexp::ExportOptions::BasePose::World   ? 0
@@ -3920,67 +4424,101 @@ void App::drawExtractPanel() {
                                      : xsiexp::ExportOptions::BasePose::None;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::BasePoseTip));
+    ImGui::Spacing();
 
-    ImGui::SameLine();
-    ImGui::BeginDisabled(ex.outDir.empty() || ex.cfgPath.empty());
-    if (iconButton(ICON_DOCUMENT, kIconGood, tr(S::ExportAllWithCar))) {
-        exportWithConfirm({}, true);
+    // The main action stands out; the two "everything" variants below it.
+    ImGui::BeginDisabled(ex.outDir.empty() || nsel == 0);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.46f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.36f, 1.0f));
+    char lbl[128];
+    std::snprintf(lbl, sizeof(lbl), tr(S::ExportSelected), nsel);
+    if (iconButton(ICON_SAVE, kIconGood, lbl, false, -1.0f)) {
+        std::vector<std::size_t> rows;
+        for (std::size_t i = 0; i < ex.selected.size(); ++i)
+            if (ex.selected[i]) rows.push_back(i);
+        exportWithConfirm(rows, false);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ExportAllWithCarTip));
+    ImGui::PopStyleColor(2);
     ImGui::EndDisabled();
 
-    ImGui::SameLine();
+    ImGui::BeginDisabled(ex.outDir.empty() || ex.cfgPath.empty());
+    if (iconButton(ICON_DOCUMENT, kIconGood, tr(S::ExportAllWithCar), false, -1.0f)) exportWithConfirm({}, true);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr(S::ExportAllWithCarTip));
+    ImGui::EndDisabled();
+
     ImGui::BeginDisabled(ex.outDir.empty());
-    if (iconButton(ICON_SAVE_ALL, kIconInfo, tr(S::ExportAll))) {
+    if (iconButton(ICON_SAVE_ALL, kIconInfo, tr(S::ExportAll), false, -1.0f)) {
         std::vector<std::size_t> rows(ex.seqs.size());
         for (std::size_t i = 0; i < rows.size(); ++i) rows[i] = i;
         exportWithConfirm(rows, false);
     }
     ImGui::EndDisabled();
+    ImGui::EndDisabled();
 
-    const ImGuiTableFlags fl = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                               ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
-                               ImGuiTableFlags_Reorderable;
-        const int excols = ex.compareNames.empty() ? 5 : 6;
-    if (!ImGui::BeginTable("extract", excols, fl, ImVec2(0, ImGui::GetContentRegionAvail().y)))
-        return;
+    // What is still missing, in order.
+    ImGui::Spacing();
+    if (!ex.loaded) hintText(tr(S::ExNeedGla));
+    else if (ex.outDir.empty()) hintText(tr(S::ExNeedTarget));
+    else if (nsel == 0) hintText(tr(S::ExNeedSelection));
+    if (ex.loaded && ex.cfgPath.empty()) hintText(tr(S::ExNeedCfg));
+}
+
+// The sequences of the open GLA: filter, table, selection with Ctrl/Shift,
+// double-click to watch one in the preview.
+void App::drawExtractList() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    auto& ex = extract_;
+
+    ImGui::SetNextItemWidth(260 * k);
+    ImGui::InputTextWithHint("##exfilter", tr(S::FilterHint), extractFilter_, sizeof(extractFilter_));
+    ImGui::SameLine();
+    ImGui::TextDisabled(tr(S::SeqCount), ex.seqs.size());
+
+    const ImGuiTableFlags fl = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+                               ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable;
+    const int excols = ex.compareNames.empty() ? 5 : 6;
+    if (!ImGui::BeginTable("extract", excols, fl, ImVec2(0, ImGui::GetContentRegionAvail().y))) return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn(tr(S::ColSequence), ImGuiTableColumnFlags_WidthStretch, 2.0f);
-    ImGui::TableSetupColumn(tr(S::ColStart), ImGuiTableColumnFlags_WidthFixed, 70);
-    ImGui::TableSetupColumn(tr(S::ColCount), ImGuiTableColumnFlags_WidthFixed, 70);
-    ImGui::TableSetupColumn(tr(S::ColLoopFrame), ImGuiTableColumnFlags_WidthFixed, 60);
-    ImGui::TableSetupColumn(tr(S::ColFps), ImGuiTableColumnFlags_WidthFixed, 60);
+    ImGui::TableSetupColumn(tr(S::ColStart), ImGuiTableColumnFlags_WidthFixed, 70 * k);
+    ImGui::TableSetupColumn(tr(S::ColCount), ImGuiTableColumnFlags_WidthFixed, 70 * k);
+    ImGui::TableSetupColumn(tr(S::ColLoopFrame), ImGuiTableColumnFlags_WidthFixed, 60 * k);
+    ImGui::TableSetupColumn(tr(S::ColFps), ImGuiTableColumnFlags_WidthFixed, 60 * k);
     if (!ex.compareNames.empty())
-        ImGui::TableSetupColumn(tr(S::CompareCol), ImGuiTableColumnFlags_WidthFixed, 90);
+        ImGui::TableSetupColumn(tr(S::CompareCol), ImGuiTableColumnFlags_WidthFixed, 110 * k);
     ImGui::TableHeadersRow();
 
-    const std::string needle = extractFilter_;
+    const auto visible = [&](const ExtractSeq& q) {
+        if (!containsNoCase(q.name, extractFilter_)) return false;
+        return !(ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name));
+    };
     for (std::size_t i = 0; i < ex.seqs.size(); ++i) {
         const ExtractSeq& s = ex.seqs[i];
-        if (!needle.empty() && s.name.find(needle) == std::string::npos) continue;
+        if (!visible(s)) continue;
         const bool inOther = ex.compareNames.empty() || existsInCompare(s.name);
-        if (ex.onlyMissing && !ex.compareNames.empty() && inOther) continue;
 
         ImGui::TableNextRow();
         ImGui::PushID(static_cast<int>(i));
         ImGui::TableNextColumn();
         const bool sel = ex.selected[i] != 0;
-        if (ImGui::Selectable(s.name.c_str(), sel, ImGuiSelectableFlags_SpanAllColumns)) {
+        if (ImGui::Selectable(s.name.c_str(), sel,
+                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
             const bool ctrl = ImGui::IsKeyDown(ImGuiMod_Ctrl);
             const bool shift = ImGui::IsKeyDown(ImGuiMod_Shift);
-            if (shift && extractAnchor_ >= 0) {
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                // Double-click: watch it.
+                previewSeq_ = static_cast<int>(i);
+                playback_.frame = 0;
+                playback_.playing = true;
+                mode_ = Mode::Preview;
+            } else if (shift && extractAnchor_ >= 0) {
                 std::size_t a = static_cast<std::size_t>(extractAnchor_), b = i;
                 if (a > b) std::swap(a, b);
                 if (!ctrl) std::fill(ex.selected.begin(), ex.selected.end(), char{0});
                 // Only what's currently visible: filter and "missing only"
                 // hide rows that would otherwise be silently exported too.
-                for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j) {
-                    const auto& q = ex.seqs[j];
-                    if (!needle.empty() && q.name.find(needle) == std::string::npos) continue;
-                    if (ex.onlyMissing && !ex.compareNames.empty() && existsInCompare(q.name))
-                        continue;
-                    ex.selected[j] = 1;
-                }
+                for (std::size_t j = a; j <= b && j < ex.selected.size(); ++j)
+                    if (visible(ex.seqs[j])) ex.selected[j] = 1;
             } else if (ctrl) {
                 ex.selected[i] = static_cast<char>(!sel);
                 extractAnchor_ = static_cast<int>(i);
@@ -3989,6 +4527,15 @@ void App::drawExtractPanel() {
                 ex.selected[i] = 1;
                 extractAnchor_ = static_cast<int>(i);
             }
+        }
+        if (ImGui::BeginPopupContextItem("exrow")) {
+            if (ImGui::MenuItem(tr(S::ExShowInPreview))) {
+                previewSeq_ = static_cast<int>(i);
+                playback_.frame = 0;
+                playback_.playing = true;
+                mode_ = Mode::Preview;
+            }
+            ImGui::EndPopup();
         }
         ImGui::TableNextColumn();
         ImGui::Text("%d", s.start);
@@ -4811,7 +5358,7 @@ void App::iconText(const char* icon, const IconColor& col, const char* text) {
     if (text && *text) ImGui::TextUnformatted(text);
 }
 
-bool App::iconButton(const char* icon, const IconColor& col, const char* text, bool small) {
+bool App::iconButton(const char* icon, const IconColor& col, const char* text, bool small, float width) {
     const bool haveIcon = iconsAvailable() && icon && *icon;
     const ImGuiStyle& st = ImGui::GetStyle();
 
@@ -4819,7 +5366,10 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
     const ImVec2 tSize = ImGui::CalcTextSize(text);
     const ImVec2 iSize = haveIcon ? ImGui::CalcTextSize(icon) : ImVec2(0, 0);
     const float gap = haveIcon ? st.ItemInnerSpacing.x : 0.0f;
-    const float w = iSize.x + gap + tSize.x + st.FramePadding.x * 2.0f;
+    const float content = iSize.x + gap + tSize.x;
+    float w = content + st.FramePadding.x * 2.0f;
+    if (width < 0.0f) w = std::max(w, ImGui::GetContentRegionAvail().x);
+    else if (width > 0.0f) w = std::max(w, width);
     const float h = tSize.y + (small ? 0.0f : st.FramePadding.y * 2.0f);
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -4829,7 +5379,8 @@ bool App::iconButton(const char* icon, const IconColor& col, const char* text, b
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float y = pos.y + (h - tSize.y) * 0.5f;
-    float x = pos.x + st.FramePadding.x;
+    // A wide button centers its content; a fitted one has the padding.
+    float x = width != 0.0f ? pos.x + (w - content) * 0.5f : pos.x + st.FramePadding.x;
     if (haveIcon) {
         dl->AddText(ImVec2(x, y), IM_COL32(static_cast<int>(col.r * 255),
                                            static_cast<int>(col.g * 255),
@@ -5025,7 +5576,9 @@ void App::draw() {
 
         ImGui::BeginChild("bottom", ImVec2(0, bottomH));
         if (ImGui::BeginTabBar("bottomtabs")) {
-            if (ImGui::BeginTabItem(tr(S::TabIssues))) {
+            // The issue list belongs to the scripts; in the other two modes
+            // it would only show the build mode's state.
+            if (mode_ == Mode::Build && ImGui::BeginTabItem(tr(S::TabIssues))) {
                 drawIssues();
                 ImGui::EndTabItem();
             }

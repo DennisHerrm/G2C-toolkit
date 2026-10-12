@@ -148,6 +148,9 @@ enum class S {
     LogNoDependents, LogDependents, LogGlmMissing, LogModViewMissing, LogModViewStarted,
     PickerAll, PickerOther, PickerHideUsed, PickerUsedHint,
     TipSpeedDefault,
+    StepGla, StepSelect, StepTarget, StepExport, ExSelCount, SelectAll, SelectNone, ExSelectHint, ExCompareHead, ExNeedGla, ExNeedTarget, ExNeedSelection, ExNeedCfg, DropGlaHint, ExOtherGla, PvEmptyHint, PvPrevFrame, PvNextFrame, PvKeys, PvInfo, PvLoopNone, ModeBuildSub, ModeExtractSub, ModePreviewSub, ExShowInPreview, ExFormat,
+    PvLoadGlm, PvShowMesh, PvShowSkeleton, PvWireframe, PvGlmHint, PvGlmInfo, PvGlmOther, PvRemoveGlm, LogGlmLoaded, LogGlmFailed, DlgTitleGlm,
+    PvTextures, PvTexOff, PvSkin, PvTexMissing, PvTexSourceTip,
 
     Count
 };

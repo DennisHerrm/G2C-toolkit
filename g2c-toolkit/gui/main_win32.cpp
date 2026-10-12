@@ -517,6 +517,23 @@ void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
 
 // --- DirectX ---------------------------------------------------------------
 
+// Repeating, mipmapped sampler for the preview's textures. ImGui's own
+// sampler clamps; models tile their textures.
+ID3D11SamplerState* g_wrapSampler = nullptr;
+
+void wrapSamplerCallback(const ImDrawList*, const ImDrawCmd*) {
+    if (!g_device || !g_context) return;
+    if (!g_wrapSampler) {
+        D3D11_SAMPLER_DESC sd{};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        sd.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        if (FAILED(g_device->CreateSamplerState(&sd, &g_wrapSampler))) return;
+    }
+    g_context->PSSetSamplers(0, 1, &g_wrapSampler);
+}
+
 bool createRenderTarget() {
     ID3D11Texture2D* back = nullptr;
     if (FAILED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&back))) || !back) return false;
@@ -1412,6 +1429,39 @@ int wWinMainGuarded(HINSTANCE inst) {
         ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + w + L"\"").c_str(),
                       nullptr, SW_SHOWNORMAL);
     };
+    // Preview textures: uploaded with mipmaps, so a large image drawn small
+    // does not shimmer; released before the device (see the end of main).
+    plat.createTexture = [](int w, int h, const std::uint8_t* rgba) -> std::uint64_t {
+        if (!g_device || !g_context || w <= 0 || h <= 0) return 0;
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = static_cast<UINT>(w);
+        desc.Height = static_cast<UINT>(h);
+        desc.MipLevels = 0;   // full chain
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        ID3D11Texture2D* tex = nullptr;
+        if (FAILED(g_device->CreateTexture2D(&desc, nullptr, &tex)) || !tex) return 0;
+        g_context->UpdateSubresource(tex, 0, nullptr, rgba, static_cast<UINT>(w) * 4u, 0);
+        D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+        view.Format = desc.Format;
+        view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        view.Texture2D.MipLevels = static_cast<UINT>(-1);
+        ID3D11ShaderResourceView* srv = nullptr;
+        const HRESULT hr = g_device->CreateShaderResourceView(tex, &view, &srv);
+        tex->Release();
+        if (FAILED(hr) || !srv) return 0;
+        g_context->GenerateMips(srv);
+        return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(srv));
+    };
+    plat.destroyTexture = [](std::uint64_t id) {
+        if (id && g_device)
+            reinterpret_cast<ID3D11ShaderResourceView*>(static_cast<std::uintptr_t>(id))->Release();
+    };
+    plat.wrapSampler = reinterpret_cast<void*>(&wrapSamplerCallback);
     plat.network.get = httpGet;
     plat.network.download = httpDownload;
     plat.exePath = exePath();
@@ -1574,6 +1624,12 @@ int wWinMainGuarded(HINSTANCE inst) {
 
     g_app = nullptr;
     g_relaunch = app.restartRequested();
+    // Textures belong to the device that is destroyed below.
+    app.releaseGpuResources();
+    if (g_wrapSampler) {
+        g_wrapSampler->Release();
+        g_wrapSampler = nullptr;
+    }
     saveWindowPlacement(hwnd);
 
     ImGui_ImplDX11_Shutdown();

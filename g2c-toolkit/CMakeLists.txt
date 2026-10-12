@@ -170,8 +170,8 @@ if(EXISTS ${IMGUI_DIR}/imgui.cpp)
   endif()
 
   add_executable(g2_gui_tests tests/gui_tests.cpp gui/app.cpp gui/i18n.cpp gui/icons.cpp gui/preview.cpp
-                 gui/update.cpp)
-  target_include_directories(g2_gui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+                 gui/update.cpp gui/assets.cpp)
+  target_include_directories(g2_gui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
   target_link_libraries(g2_gui_tests PRIVATE g2 imgui)
   g2c_utf8(g2_gui_tests)
 
@@ -190,8 +190,8 @@ if(EXISTS ${IMGUI_DIR}/imgui.cpp)
   target_compile_definitions(imgui_driver PUBLIC IMGUI_ENABLE_TEST_ENGINE
                              IMGUI_USER_CONFIG="gui_driver_imconfig.h")
   add_executable(g2_gui_driver tests/gui_driver.cpp gui/app.cpp gui/i18n.cpp gui/icons.cpp
-                 gui/preview.cpp gui/update.cpp)
-  target_include_directories(g2_gui_driver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+                 gui/preview.cpp gui/update.cpp gui/assets.cpp)
+  target_include_directories(g2_gui_driver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
   target_link_libraries(g2_gui_driver PRIVATE g2 imgui_driver)
   g2c_utf8(g2_gui_driver)
 
@@ -210,13 +210,13 @@ if(EXISTS ${IMGUI_DIR}/imgui.cpp)
     #
     # Program icon: the .rc is compiled by MSVC and linked into the exe.
     add_executable(g2c-gui WIN32 gui/app.cpp gui/i18n.cpp gui/icons.cpp gui/preview.cpp gui/main_win32.cpp
-                   gui/update.cpp tools/g2c.cpp assets/g2c.rc)
+                   gui/update.cpp gui/assets.cpp tools/g2c.cpp assets/g2c.rc)
     target_compile_definitions(g2c-gui PRIVATE G2C_NO_MAIN)
     set_target_properties(g2c-gui PROPERTIES OUTPUT_NAME "g2c")
     if(G2C_HAVE_IPO)
       set_property(TARGET g2c-gui PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     endif()
-    target_include_directories(g2c-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(g2c-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
     target_link_libraries(g2c-gui PRIVATE g2 imgui d3d11 dxgi comdlg32 ole32 shell32 winhttp)
     g2c_utf8(g2c-gui)
     if(MSVC)

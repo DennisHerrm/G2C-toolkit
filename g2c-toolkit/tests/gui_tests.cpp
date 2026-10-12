@@ -1374,6 +1374,132 @@ int main(){
     projectPoint({{0,0,20}}, side, 800, 600, xo, yo, dо);
     ck(yo < ym, "hoeher liegender Punkt erscheint weiter oben");
 
+    // Game files for the textures: .pk3 archives, priorities, shaders, skins.
+    {
+      namespace fs = std::filesystem;
+      const fs::path dir = fs::temp_directory_path() / "g2c_assets_test";
+      fs::remove_all(dir);
+      fs::create_directories(dir / "base" / "models" / "players" / "t");
+      // A .pk3 by hand: one stored entry, one deflated ("hello").
+      const auto zip = [](const fs::path& p, const std::vector<std::tuple<std::string, std::vector<std::uint8_t>, std::uint16_t, std::uint32_t>>& files) {
+        std::vector<std::uint8_t> out, dirb;
+        const auto w16 = [](std::vector<std::uint8_t>& v, std::uint32_t x) { v.push_back(x & 0xff); v.push_back((x >> 8) & 0xff); };
+        const auto w32 = [&](std::vector<std::uint8_t>& v, std::uint32_t x) { w16(v, x & 0xffff); w16(v, x >> 16); };
+        for (const auto& [name, data, method, size] : files) {
+          const std::uint32_t off = static_cast<std::uint32_t>(out.size());
+          w32(out, 0x04034b50); w16(out, 20); w16(out, 0); w16(out, method); w32(out, 0); w32(out, 0);
+          w32(out, static_cast<std::uint32_t>(data.size())); w32(out, size); w16(out, static_cast<std::uint32_t>(name.size())); w16(out, 0);
+          out.insert(out.end(), name.begin(), name.end()); out.insert(out.end(), data.begin(), data.end());
+          w32(dirb, 0x02014b50); w16(dirb, 20); w16(dirb, 20); w16(dirb, 0); w16(dirb, method); w32(dirb, 0); w32(dirb, 0);
+          w32(dirb, static_cast<std::uint32_t>(data.size())); w32(dirb, size); w16(dirb, static_cast<std::uint32_t>(name.size()));
+          w16(dirb, 0); w16(dirb, 0); w16(dirb, 0); w16(dirb, 0); w32(dirb, 0); w32(dirb, off);
+          dirb.insert(dirb.end(), name.begin(), name.end());
+        }
+        const std::uint32_t dirOff = static_cast<std::uint32_t>(out.size());
+        out.insert(out.end(), dirb.begin(), dirb.end());
+        w32(out, 0x06054b50); w16(out, 0); w16(out, 0); w16(out, static_cast<std::uint32_t>(files.size()));
+        w16(out, static_cast<std::uint32_t>(files.size())); w32(out, static_cast<std::uint32_t>(dirb.size())); w32(out, dirOff); w16(out, 0);
+        std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+      };
+      const std::string shader = "// comment\nmodels/players/t/body\n{\n  q3map_nolightmap\n  {\n    map $lightmap\n  }\n  {\n"
+                                 "    map models/players/t/body_diffuse.tga\n    rgbGen lightingDiffuse\n  }\n}\n"
+                                 "models/players/t/anim\n{\n  {\n    animMap 10 models/players/t/f1 models/players/t/f2\n  }\n}\n";
+      zip(dir / "base" / "assets0.pk3",
+          {{"shaders/t.shader", std::vector<std::uint8_t>(shader.begin(), shader.end()), 0, static_cast<std::uint32_t>(shader.size())},
+           {"Models/Players/T/Hello.TXT", {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, 8, 5},
+           {"models/players/t/body_diffuse.jpg", {1, 2, 3}, 0, 3},
+           {"models/players/t/over.txt", {'o', 'l', 'd'}, 0, 3}});
+      zip(dir / "base" / "assets1.pk3", {{"models/players/t/over.txt", {'n', 'e', 'w'}, 0, 3}});
+      std::ofstream(dir / "base" / "models" / "players" / "t" / "loose.txt") << "loose";
+      std::ofstream(dir / "base" / "models" / "players" / "t" / "over.txt") << "mine";
+
+      g2::gui::AssetFs afs;
+      afs.addFolder((dir / "base").string());
+      ck(afs.archiveCount() == 2, "Assets: zwei .pk3 gefunden");
+      const auto hello = afs.read("models/players/t/hello.txt");
+      ck(hello && std::string(hello->begin(), hello->end()) == "hello", "Assets: gepackter Eintrag entpackt, Gross-/Kleinschreibung egal");
+      const auto over = afs.read("models\\players\\t\\over.txt");
+      ck(over && std::string(over->begin(), over->end()) == "mine", "Assets: lose Datei vor .pk3");
+      fs::remove(dir / "base" / "models" / "players" / "t" / "over.txt");
+      g2::gui::AssetFs afs2;
+      afs2.addFolder((dir / "base").string());
+      const auto over2 = afs2.read("models/players/t/over.txt");
+      ck(over2 && std::string(over2->begin(), over2->end()) == "new", "Assets: spaetere .pk3 ueberschreibt fruehere");
+      ck(!afs2.read("models/players/t/nichtda.txt"), "Assets: fehlende Datei = leer");
+      ck(afs2.list("shaders", ".shader").size() == 1, "Assets: Shaderdateien aufgelistet");
+
+      const auto sh = g2::gui::loadShaderIndex(afs2);
+      ck(sh.count("models/players/t/body") && sh.at("models/players/t/body") == "models/players/t/body_diffuse.tga",
+         "Shader: erstes Bild, $lightmap uebersprungen");
+      ck(sh.count("models/players/t/anim") && sh.at("models/players/t/anim") == "models/players/t/f1",
+         "Shader: animMap nimmt das erste Bild");
+      ck(g2::gui::resolveImage(afs2, sh, "models/players/t/body") == "models/players/t/body_diffuse.jpg",
+         "Bild: .tga fehlt, .jpg wird genommen (wie die Engine)");
+      ck(g2::gui::resolveImage(afs2, sh, "models/players/t/gibtsnicht").empty(), "Bild: nichts gefunden = leer");
+
+      const auto skin = g2::gui::parseSkin("head,models/players/t/head\r\nhead_cap_torso_off,*off\n\ntorso , \"models/players/t/body\"\n");
+      ck(skin.size() == 3 && skin.at("torso") == "models/players/t/body" && skin.at("head_cap_torso_off") == "*off",
+         "Skin: Flaeche -> Shader, *off, Leerzeichen und Anfuehrungszeichen");
+
+      // A 2x1 uncompressed 32-bit TGA.
+      const std::vector<std::uint8_t> tga{0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 32, 0x28,
+                                          10, 20, 30, 255, 40, 50, 60, 128};
+      const auto img = g2::gui::decodeImage(tga);
+      ck(img && img->width == 2 && img->height == 1 && img->rgba.size() == 8 && img->rgba[0] == 30 &&
+             img->rgba[2] == 10 && img->rgba[7] == 128,
+         "Bild: TGA dekodiert (BGRA -> RGBA)");
+      ck(!g2::gui::decodeImage({1, 2, 3}), "Bild: Unsinn wird abgelehnt");
+      ck(g2::gui::baseOfAssetPath((dir / "base" / "models" / "players" / "t" / "model.glm").string()) == (dir / "base").string(),
+         "Assetwurzel aus dem Modellpfad");
+      fs::remove_all(dir);
+    }
+
+    // A model in the preview: skinned with the bone, tags and "off"
+    // surfaces left out, sorted far to near.
+    {
+      g2::MdxaFile gla;
+      gla.skeleton.bones.resize(1);
+      g2::Mesh mesh;
+      mesh.lods.resize(1);
+      const auto surf = [](std::uint32_t flags, float x) {
+        g2::Surface s;
+        s.flags = flags;
+        for (int i = 0; i < 3; ++i) {
+          g2::Vertex v;
+          v.position[0] = x + (i == 1 ? 4.0f : 0.0f);
+          v.position[2] = i == 2 ? 4.0f : 0.0f;
+          v.weights.push_back({0, 1.0f});
+          s.vertices.push_back(v);
+        }
+        s.triangles.push_back(g2::Triangle{{0, 1, 2}});
+        return s;
+      };
+      mesh.lods[0].surfaces = {surf(0, 0.0f), surf(1, 10.0f), surf(2, 20.0f), surf(0, -10.0f)};
+      PreviewCamera mc; mc.yawDeg = 0; mc.pitchDeg = 0; mc.distance = 100; mc.target = {{0, 0, 0}};
+      std::vector<g2::Mat3x4> rest(1, g2::Mat3x4::identity());
+      const auto t0 = buildMeshTriangles(mesh, gla, rest, mc, 800, 600);
+      ck(t0.size() == 2, "Modell: Tag- und _off-Flaechen weggelassen (2 von 4 Dreiecken)");
+      ck(t0.size() == 2 && t0[0].depth >= t0[1].depth, "Modell: von hinten nach vorne sortiert");
+      // Seen face-on, a surface is fully lit; edge-on it is dark.
+      {
+        float best = 0.0f;
+        for (float yaw : {0.0f, 90.0f}) {
+          PreviewCamera fc = mc; fc.yawDeg = yaw;
+          for (const auto& t : buildMeshTriangles(mesh, gla, rest, fc, 800, 600)) best = std::max(best, t.shade);
+        }
+        ck(best > 0.95f && best <= 1.0f, "Modell: Flaeche frontal gesehen voll beleuchtet");
+      }
+      // The bone moves up by 20: the model follows it.
+      std::vector<g2::Mat3x4> up(1, g2::Mat3x4::identity());
+      up[0].m[2][3] = 20.0f;
+      const auto t1 = buildMeshTriangles(mesh, gla, up, mc, 800, 600);
+      float y0 = 0, y1 = 0;
+      for (const auto& t : t0) y0 += t.y[0];
+      for (const auto& t : t1) y1 += t.y[0];
+      ck(t1.size() == 2 && y1 < y0, "Modell folgt dem Bone (hoeher = weiter oben)");
+      ck(buildMeshTriangles(mesh, gla, {}, mc, 800, 600).empty(), "ohne Pose kein Modell, kein Absturz");
+    }
+
     // Play back at the sequence's rate.
     Playback pb; pb.playing = true;
     advancePlayback(pb, 0.5f, 20, 30);      // 0.5 s at 20 frames/s = 10

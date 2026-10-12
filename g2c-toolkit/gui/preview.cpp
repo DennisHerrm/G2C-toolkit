@@ -1,5 +1,7 @@
 #include "gui/preview.h"
 
+#include "g2/format.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -149,6 +151,83 @@ std::vector<BoneLine> buildBoneLines(const MdxaFile& gla, const std::vector<Mat3
     // thus ends up on top.
     std::sort(out.begin(), out.end(),
               [](const BoneLine& a, const BoneLine& b) { return a.depth > b.depth; });
+    return out;
+}
+
+std::vector<MeshTriangle> buildMeshTriangles(const Mesh& mesh, const MdxaFile& gla,
+                                             const std::vector<Mat3x4>& world,
+                                             const PreviewCamera& cam, float viewW, float viewH,
+                                             const std::vector<char>* hidden) {
+    std::vector<MeshTriangle> out;
+    if (mesh.lods.empty() || world.empty()) return out;
+
+    // Per bone: from the bind pose to the current pose.
+    const std::size_t nb = std::min(world.size(), gla.skeleton.bones.size());
+    std::vector<Mat3x4> skin(nb);
+    for (std::size_t b = 0; b < nb; ++b)
+        skin[b] = mul(world[b], affineInverse(gla.skeleton.bones[b].basePose));
+
+    const std::array<float, 3> eye = eyePosition(cam);
+    const auto& surfaces = mesh.lods[0].surfaces;
+    for (std::size_t si = 0; si < surfaces.size(); ++si) {
+        const Surface& s = surfaces[si];
+        if (s.flags & (fmt::kSurfFlagIsBolt | fmt::kSurfFlagOff)) continue;
+        if (hidden && si < hidden->size() && (*hidden)[si]) continue;
+        const std::size_t nv = s.vertices.size();
+        std::vector<std::array<float, 3>> pos(nv);
+        std::vector<float> sx(nv), sy(nv), sd(nv);
+        std::vector<char> visible(nv, 0);
+        for (std::size_t i = 0; i < nv; ++i) {
+            const Vertex& v = s.vertices[i];
+            std::array<float, 3> p{{0.0f, 0.0f, 0.0f}};
+            float total = 0.0f;
+            for (const VertexWeight& w : v.weights) {
+                if (w.boneIndex < 0 || static_cast<std::size_t>(w.boneIndex) >= nb || w.weight <= 0.0f) continue;
+                const Mat3x4& m = skin[static_cast<std::size_t>(w.boneIndex)];
+                for (int r = 0; r < 3; ++r)
+                    p[static_cast<std::size_t>(r)] +=
+                        w.weight * (m.m[r][0] * v.position[0] + m.m[r][1] * v.position[1] +
+                                    m.m[r][2] * v.position[2] + m.m[r][3]);
+                total += w.weight;
+            }
+            // Unweighted (or only foreign bones): stays in the bind pose.
+            if (total <= 0.0f) p = {{v.position[0], v.position[1], v.position[2]}};
+            else if (std::fabs(total - 1.0f) > 1e-3f)
+                for (auto& c : p) c /= total;
+            pos[i] = p;
+            visible[i] = projectPoint(p, cam, viewW, viewH, sx[i], sy[i], sd[i]) ? 1 : 0;
+        }
+        for (const Triangle& t : s.triangles) {
+            const int a = t.indexes[0], b = t.indexes[1], c = t.indexes[2];
+            if (a < 0 || b < 0 || c < 0 || static_cast<std::size_t>(a) >= nv ||
+                static_cast<std::size_t>(b) >= nv || static_cast<std::size_t>(c) >= nv)
+                continue;
+            const auto ua = static_cast<std::size_t>(a), ub = static_cast<std::size_t>(b),
+                       uc = static_cast<std::size_t>(c);
+            if (!visible[ua] || !visible[ub] || !visible[uc]) continue;
+            const std::array<float, 3> n = cross(sub(pos[ub], pos[ua]), sub(pos[uc], pos[ua]));
+            const float len = std::sqrt(dot(n, n));
+            if (len < 1e-8f) continue;
+            const std::array<float, 3> centre{{(pos[ua][0] + pos[ub][0] + pos[uc][0]) / 3.0f,
+                                                (pos[ua][1] + pos[ub][1] + pos[uc][1]) / 3.0f,
+                                                (pos[ua][2] + pos[ub][2] + pos[uc][2]) / 3.0f}};
+            const std::array<float, 3> toEye = normalize(sub(eye, centre));
+            MeshTriangle mt;
+            mt.x[0] = sx[ua]; mt.y[0] = sy[ua];
+            mt.x[1] = sx[ub]; mt.y[1] = sy[ub];
+            mt.x[2] = sx[uc]; mt.y[2] = sy[uc];
+            mt.u[0] = s.vertices[ua].uv[0]; mt.v[0] = s.vertices[ua].uv[1];
+            mt.u[1] = s.vertices[ub].uv[0]; mt.v[1] = s.vertices[ub].uv[1];
+            mt.u[2] = s.vertices[uc].uv[0]; mt.v[2] = s.vertices[uc].uv[1];
+            mt.surface = static_cast<int>(si);
+            mt.depth = (sd[ua] + sd[ub] + sd[uc]) / 3.0f;
+            // Two-sided: the winding does not matter, the nearer face is drawn last.
+            mt.shade = std::fabs(dot(n, toEye)) / len;
+            out.push_back(mt);
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const MeshTriangle& l, const MeshTriangle& r) { return l.depth > r.depth; });
     return out;
 }
 

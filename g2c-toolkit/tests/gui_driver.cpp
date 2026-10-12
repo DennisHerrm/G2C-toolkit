@@ -1565,7 +1565,7 @@ int main(int argc, char** argv) {
         check(ex.outDir == outX.string(), "Zielordner gesetzt");
         char lbl[128];
         std::snprintf(lbl, sizeof(lbl), tr(S::ExportSelected), nsel);
-        D.click(D.findEnds(lbl, "extract"));
+        D.click(D.findIconButton(lbl, "extract"));
         D.frames(2);
         std::size_t nx = 0;
         for (const auto& e : fs::directory_iterator(outX))
@@ -1671,13 +1671,37 @@ int main(int argc, char** argv) {
         }
         check(canvas != nullptr, "Zeichenflaeche vorhanden, Drehen und Zoomen ohne Fehler");
         D.click(D.find(tr(S::PreviewReset)));
-        // Sequence selection.
-        D.click(D.find(tr(S::PreviewSeq)));
-        D.frames(2);
+        // Sequence selection: a click in the list on the left plays it.
         const auto& ex = app->extract();
-        const Item* s = D.findIf([&](const Item& i) { return displayOf(i.label) == ex.seqs.back().name && i.window.find("##Combo") != std::string::npos; });
-        D.click(s);
-        check(true, "Sequenz in der Vorschau gewechselt");
+        if (ex.seqs.size() >= 2) {
+            const Item* s = D.findIf([&](const Item& i) {
+                return displayOf(i.label) == ex.seqs[1].name && i.window.find("pvlist") != std::string::npos;
+            });
+            check(s != nullptr, "Sequenzliste links in der Vorschau");
+            D.click(s);
+            D.frames(2);
+            check(app->previewSequence() == 1 && app->previewPlaying(),
+                  "Klick in der Liste wechselt die Sequenz und spielt sie ab");
+            // Keyboard: space pauses, down arrow goes to the next sequence.
+            D.key(ImGuiKey_Space);
+            D.frames(1);
+            check(!app->previewPlaying(), "Leertaste haelt an");
+            D.key(ImGuiKey_DownArrow);
+            D.frames(1);
+            check(app->previewSequence() == 2 || ex.seqs.size() == 2, "Pfeil runter: naechste Sequenz");
+        }
+        // Double-click in the GLA -> XSI list opens the preview on that row.
+        {
+            app->setMode(g2::gui::App::Mode::Extract);
+            D.frames(2);
+            const Item* r0 = D.findIf([&](const Item& i) {
+                return i.window.find("extract") != std::string::npos && displayOf(i.label) == ex.seqs[0].name;
+            });
+            D.doubleClick(r0);
+            D.frames(2);
+            check(app->mode() == g2::gui::App::Mode::Preview && app->previewSequence() == 0,
+                  "Doppelklick in GLA -> XSI zeigt die Sequenz in der Vorschau");
+        }
 
         // animation.cfg that matches NONE of this GLA's sequences.
         const fs::path badCfg = work / "fremd_animation.cfg";
