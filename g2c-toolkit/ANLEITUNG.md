@@ -4084,3 +4084,23 @@ Deine 39 Ein-Frame-Animationen in `__new_anim/multiplayer` sind neu
 exportiert (die alten liegen in
 `C:\jka_animations\g2c_backups\multiplayer_2frames_2026-10-12`); nach dem nächsten Bauen stimmen alle 177
 MP-Sequenzen in Frames, Loop und Speed mit dem Original überein.
+
+---
+
+## 77. Viele Ordner auf einmal öffnen
+
+"Ordner öffnen" (Werkzeugleiste, Strg+Umschalt+O, Startseite) nimmt jetzt
+mehrere Ordner auf einmal: im Dialog mit Strg oder Umschalt markieren, oder
+Strg+A für alle. Jeder Ordner wird mitsamt Unterordnern nach .car-Dateien
+durchsucht. Ordner lassen sich auch ins Fenster ziehen.
+
+Haben alle gefundenen Dateien denselben Namen (z. B. 25 x `_humanoid.car`),
+gehen sie sofort als Tabs auf. Liegen verschiedene .car nebeneinander, fragt
+ein kleines Fenster, welche Namen geöffnet werden sollen:
+
+    [x] _humanoid.car (25)
+    [ ] model.car (12)
+
+Die häufigste steht oben; "Alle" und "Keine" schalten alle um. Groß- und
+Kleinschreibung spielen keine Rolle, und ein Ordner, der doppelt gewählt
+wurde, zählt einmal.

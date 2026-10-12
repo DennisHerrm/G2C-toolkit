@@ -260,6 +260,13 @@ public:
 
     bool openCar(const std::string& path);
     std::size_t openFolder(const std::string& root);   // returns the number of hits
+    // Several folders at once (dialog, dropping). If they hold .car files of
+    // different names, the user picks which names to open; with one name
+    // they open right away. Returns the number of .car files found.
+    std::size_t openFolders(const std::vector<std::string>& roots);
+    bool        carPickPending() const { return !carPick_.paths.empty(); }
+    // Opens the found files whose (lower-case) name is in `names`.
+    std::size_t carPickConfirm(const std::set<std::string>& names);
 
     // File or folder, whichever it is. For dropping onto the window and for
     // command-line arguments at startup.
@@ -791,6 +798,16 @@ private:
     std::string          pvSkin_;        // file name of the chosen skin
     void                 refreshPreviewTextures();
     void                 releaseTextureCache();
+
+    // Found .car files waiting for the user's choice by name.
+    struct CarPick {
+        std::vector<std::string>       paths;
+        std::size_t                    folders = 0;
+        std::map<std::string, std::size_t> counts;   // lower-case file name -> how many
+        std::set<std::string>          chosen;
+    };
+    CarPick              carPick_;
+    void                 drawCarPickDialog();
 
     // --- Notifications ("toasts") bottom right ----------------------------------
     struct Toast {
