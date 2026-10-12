@@ -2422,6 +2422,32 @@ int main(int argc, char** argv) {
             D.frames(2);
         }
 
+        // Open folders: two names found -> the choice window; untick
+        // model.car, open the rest.
+        {
+            const fs::path mf = work / "multifolder";
+            for (int k = 0; k < 2; ++k)
+                writeText(mf / ("c" + std::to_string(k)) / "_humanoid.car",
+                          "$aseanimgrabinit\n$aseanimgrab x.xsi\n$aseanimgrabfinalize\n");
+            writeText(mf / "c1" / "model.car", "$aseanimgrabinit\n$aseanimgrab y.xsi\n$aseanimgrabfinalize\n");
+            const std::size_t docsBefore = app->documents().size();
+            app->openFolders({mf.string()});
+            D.frames(3);
+            check(app->carPickPending() && D.popupOpen(), "Ordner mit verschiedenen .car: Auswahlfenster offen");
+            D.click(D.find("model.car (1)"));
+            D.frames(2);
+            char lbl[64];
+            std::snprintf(lbl, sizeof(lbl), tr(S::CarPickOpen), static_cast<std::size_t>(2));
+            D.click(D.find(lbl));
+            D.frames(3);
+            check(!app->carPickPending() && app->documents().size() == docsBefore + 2,
+                  "nur die zwei _humanoid.car geöffnet");
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (app->documents()[k].path == mpath || app->documents()[k].path == (mdir / "m_kopie.car").string())
+                    app->activate(static_cast<int>(k));
+            D.frames(2);
+        }
+
         // Validate: there are issues (the .xsi files are missing), so the
         // panel opens by itself.
         D.click(D.findIconButton(tr(S::BtnValidate), "##main"));
