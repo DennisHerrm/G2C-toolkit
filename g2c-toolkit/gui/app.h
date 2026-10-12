@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "gui/assets.h"
 #include "gui/i18n.h"
 #include "gui/icons.h"
 #include "gui/preview.h"
@@ -21,6 +22,7 @@
 #include "g2/carbuild.h"
 #include "g2/carscript.h"
 #include "g2/carvalidate.h"
+#include "g2/mdxm.h"
 
 #include <atomic>
 #include <deque>
@@ -74,6 +76,16 @@ struct Platform {
 
     // Version of this build. Tests pretend to be an older release.
     update::BuildInfo build = update::thisBuild();
+
+    // --- Textures for the preview (DirectX in main_win32.cpp) ---------------
+    //
+    // Uploads RGBA pixels and returns an ImTextureID, 0 on failure. Missing in
+    // the tests: the preview then shades the model without textures.
+    std::function<std::uint64_t(int w, int h, const std::uint8_t* rgba)> createTexture;
+    std::function<void(std::uint64_t id)> destroyTexture;
+    // An ImDrawCallback that switches to a repeating sampler, so texture
+    // coordinates outside 0..1 tile as in the game. nullptr = clamp.
+    void* wrapSampler = nullptr;
 
     // Opens a web page in the browser: release notes, download page.
     std::function<void(const std::string& url)> openUrl;
@@ -305,6 +317,13 @@ public:
     };
 
     Mode                mode() const { return mode_; }
+    int                 previewSequence() const { return previewSeq_; }
+    // A model shown in the preview, skinned with the playing animation.
+    bool                loadPreviewGlm(const std::string& path);
+    bool                previewGlmLoaded() const { return previewGlmLoaded_; }
+    // Textures live on the graphics card: released before the device goes.
+    void                releaseGpuResources();
+    bool                previewPlaying() const { return playback_.playing; }
     void                setMode(Mode m) { mode_ = m; }
     ExtractState&       extract() { return extract_; }
     const ExtractState& extract() const { return extract_; }
@@ -611,8 +630,19 @@ private:
     //
     // Without an icon font only the text is drawn, and the button is
     // correspondingly narrower.
+    // width: 0 = fit the text, < 0 = fill the row (content centered).
     static bool iconButton(const char* icon, const IconColor& col, const char* text,
-                           bool small = false);
+                           bool small = false, float width = 0.0f);
+    // Numbered heading for the guided panels; green with a check when done.
+    void stepHeader(int n, const char* title, bool done);
+    // Muted wrapped line with an info icon: why a button is disabled, what
+    // to do next.
+    static void hintText(const char* text);
+    // Shared "no GLA yet" page of the extract and preview modes.
+    void drawGlaEmptyState(bool forPreview);
+    void openGlaDialog();
+    void drawExtractSteps(std::size_t nsel);
+    void drawExtractList();
     void drawStatusBar();
     void applyStyle();
     void refreshTabTitles();
@@ -677,6 +707,33 @@ private:
     PreviewCamera        previewCam_;
     Playback             playback_;
     int                  previewSeq_ = -1;
+    MdxmFile             previewGlm_;
+    bool                 previewGlmLoaded_ = false;
+    std::string          previewGlmPath_;
+    bool                 pvShowMesh_ = true;
+    bool                 pvShowSkeleton_ = true;
+    bool                 pvWireframe_ = false;
+    // Textures of the preview model.
+    struct PreviewTextures {
+        std::vector<std::string>             gameDirs;   // detected GameData folders
+        bool                                 gameDirsScanned = false;
+        std::string                          fsKey;      // what fs and shaders were built for
+        std::string                          activeSource; // GameData folder in use
+        AssetFs                              fs;
+        std::map<std::string, std::string>   shaders;
+        std::vector<std::string>             skins;      // game paths
+        std::string                          skin;       // in use
+        std::vector<std::uint64_t>           perSurface; // LOD 0 surface -> texture
+        std::vector<char>                    hidden;     // switched off by the skin
+        std::map<std::string, std::uint64_t> cache;      // image -> texture
+        std::size_t                          missing = 0;
+        bool                                 dirty = true;
+    };
+    PreviewTextures      pvTex_;
+    std::string          pvTexSource_;   // GameData folder; "-" = none, "" = first found
+    std::string          pvSkin_;        // file name of the chosen skin
+    void                 refreshPreviewTextures();
+    void                 releaseTextureCache();
     double               previewLastTime_ = 0.0;
     ExtractState         extract_;
     char                 extractFilter_[128] = {0};
