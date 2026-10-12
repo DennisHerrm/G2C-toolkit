@@ -116,7 +116,7 @@ g2::MdxaFile loadReference(const std::string& refPath) {
             "\" gibt es nicht.\n"
             "       Sie liefert das SKELETT - Bonenamen, Hierarchie, Bindeposen,\n"
             "       Skalierung. Die .xsi-Dateien enthalten nur Animationsdaten;\n"
-            "       ohne Skelett laesst sich keine GLA schreiben.\n"
+            "       ohne Skelett lässt sich keine GLA schreiben.\n"
             "       Eine vorhandene GLA mit demselben Skelett angeben.");
     return g2::readMdxa(readFile(refPath));
 }
@@ -217,7 +217,7 @@ int cmdAbout() {
                         (dir / "g2c-startup.log").string().c_str());
     }
     if (g2::staticRuntime())
-        std::printf("  Laufzeit     : fest eingebaut - laeuft auf jedem Windows 10/11\n"
+        std::printf("  Laufzeit     : fest eingebaut - läuft auf jedem Windows 10/11\n"
                     "                 ohne Visual C++ Redistributable.\n");
     else
         std::printf("  Laufzeit     : DYNAMISCH GEBUNDEN.\n"
@@ -232,7 +232,7 @@ int cmdInfoGlm(const std::string& path, const std::vector<std::uint8_t>& data) {
     const g2::MdxmFile f = g2::readMdxm(data);
     const g2::Mesh& m = f.mesh;
     std::printf("Datei        : %s\n", path.c_str());
-    std::printf("Groesse      : %zu Bytes\n", data.size());
+    std::printf("Größe      : %zu Bytes\n", data.size());
     std::printf("GLM-Name     : %s\n", m.name.c_str());
     std::printf("GLA          : %s\n", m.animName.c_str());
     std::printf("Bones        : %d\n", m.numBones);
@@ -268,12 +268,12 @@ int cmdInfo(const std::string& path) {
     const g2::MdxaFile f = g2::readMdxa(data);
 
     std::printf("Datei        : %s\n", path.c_str());
-    std::printf("Groesse      : %zu Bytes\n", data.size());
+    std::printf("Größe      : %zu Bytes\n", data.size());
     std::printf("GLA-Name     : %s\n", f.skeleton.name.c_str());
     std::printf("Scale        : %g\n", f.skeleton.scale);
     std::printf("Frames       : %d\n", f.numFrames);
     std::printf("Bones        : %zu\n", f.skeleton.bones.size());
-    std::printf("Pool         : %zu Eintraege (%zu Bytes)\n", f.bonePool.size(),
+    std::printf("Pool         : %zu Einträge (%zu Bytes)\n", f.bonePool.size(),
                 f.bonePool.size() * 14);
 
     const std::size_t naive = f.indices.size();
@@ -323,7 +323,7 @@ int cmdCheck(const std::string& path) {
     std::printf("\nRequantisierung (Legacy/Carcass):\n%s\n", repL.describe().c_str());
 
     if (repL.maxPositionError > 0 && rep.maxPositionError >= 0) {
-        std::printf("\nVerhaeltnis max. Positionsfehler Legacy/Nearest: %.2fx\n",
+        std::printf("\nVerhältnis max. Positionsfehler Legacy/Nearest: %.2fx\n",
                     rep.maxPositionError > 0 ? repL.maxPositionError / rep.maxPositionError : 0.0);
     }
     return errs.empty() ? 0 : 1;
@@ -339,7 +339,7 @@ int cmdXsi(const std::string& path) {
     const double mb = double(f.tellg()) / (1024.0 * 1024.0);
 
     std::printf("Datei     : %s\n", path.c_str());
-    std::printf("Groesse   : %.2f MB\n", mb);
+    std::printf("Größe   : %.2f MB\n", mb);
     std::printf("Version   : dotXSI %s (%s)\n", doc.version.toString().c_str(),
                 doc.version.raw.c_str());
     std::printf("Templates : %zu\n", doc.templateCount());
@@ -462,7 +462,7 @@ int cmdAnim(int argc, char** argv) {
     for (const auto& w : cat.warnings) std::printf("  ! %s\n", w.c_str());
 
     const auto res = g2::writeMdxa(ref.skeleton, cat.frames);
-    std::printf("\nErgebnis  : %d Frames, %zu Pool-Eintraege (%.1f%% dedupliziert)\n",
+    std::printf("\nErgebnis  : %d Frames, %zu Pool-Einträge (%.1f%% dedupliziert)\n",
                 cat.frames.frameCount(), res.poolEntries, res.dedupeRatio() * 100.0);
     std::printf("Kompression: %s\n", res.stats.summary().c_str());
 
@@ -507,9 +507,9 @@ int cmdAnim(int argc, char** argv) {
                   std::to_string(seqs.size()) + " sequences; erzeugt von g2c");
     g2::writeFileChecked(cfgPath, cfg);
     std::printf("Geschrieben: %s\n", cfgPath.c_str());
-    std::printf("             Diese Datei gehoert ZUSAMMEN mit der GLA kopiert.\n"
+    std::printf("             Diese Datei gehört ZUSAMMEN mit der GLA kopiert.\n"
                 "             Ohne sie spielt das Spiel an jeder Stelle die Animation ab,\n"
-                "             die dort zufaellig steht.\n");
+                "             die dort zufällig steht.\n");
     std::printf("\nHinweis: frameSpeed und loopFrame stehen auf Vorgabewerten (20 / -1).\n"
                 "Die echten Werte kommen aus den -framespeed/-loop Flags der .car.\n");
     return 0;
@@ -577,7 +577,7 @@ int runJobCli(const std::string& carPath, g2::car::JobOptions jo, const g2::car:
         std::printf("Frames    : %d\n", r.anim.totalFrames());
         std::printf("Sequenzen : %zu\n", r.anim.sequences.size());
         if (r.poolEntries) {
-            std::printf("Pool      : %zu Eintraege (%.1f%% dedupliziert)\n", r.poolEntries,
+            std::printf("Pool      : %zu Einträge (%.1f%% dedupliziert)\n", r.poolEntries,
                         r.dedupeRatio * 100.0);
             std::printf("Kompression: %s\n", r.compression.c_str());
         }
@@ -604,10 +604,10 @@ int runJobCli(const std::string& carPath, g2::car::JobOptions jo, const g2::car:
     // not like a forgotten file.
     if (cfgWritten)
         std::printf("\n"
-                    "WICHTIG: animation.cfg gehoert ZUSAMMEN mit der GLA kopiert.\n"
-                    "         Werden Animationen eingefuegt oder entfernt, verschieben sich die\n"
+                    "WICHTIG: animation.cfg gehört ZUSAMMEN mit der GLA kopiert.\n"
+                    "         Werden Animationen eingefügt oder entfernt, verschieben sich die\n"
                     "         Zielframes. Bleibt die alte Datei im Spiel liegen, wird bei\n"
-                    "         jedem Namen die Animation abgespielt, die dort zufaellig steht.\n"
+                    "         jedem Namen die Animation abgespielt, die dort zufällig steht.\n"
                     "         Das betrifft auch jedes andere Modell, das dieselbe GLA nutzt.\n");
     return 0;
 }
@@ -717,7 +717,7 @@ int cmdBuild(int argc, char** argv) {
             jo.build.cacheDir = (fs::path(carPath).parent_path() / "g2c_cache").string();
         if (clearCache) {
             g2::AnimCache c(jo.build.cacheDir);
-            std::printf("Cache geleert: %zu Eintraege entfernt\n", c.clear());
+            std::printf("Cache geleert: %zu Einträge entfernt\n", c.clear());
         }
     }
     return runJobCli(carPath, jo, script);
@@ -789,7 +789,7 @@ int cmdMesh(int argc, char** argv) {
         // Every offset comes from the file. Without checks, a truncated GLM or
         // a text file passed by mistake read outside the buffer.
         const auto bad = [&] {
-            return std::runtime_error("\"" + comparePath + "\" ist keine gueltige GLM");
+            return std::runtime_error("\"" + comparePath + "\" ist keine gültige GLM");
         };
         const auto i32 = [&](long long o) {
             if (o < 0 || static_cast<std::size_t>(o) + 4 > d.size()) throw bad();
@@ -846,7 +846,7 @@ int cmdMesh(int argc, char** argv) {
             std::size_t lines = 0;
             for (char c : skin)
                 if (c == '\n') ++lines;
-            std::printf("Geschrieben: %s (%zu Eintraege)\n", skinPath.c_str(), lines);
+            std::printf("Geschrieben: %s (%zu Einträge)\n", skinPath.c_str(), lines);
         }
     }
 
@@ -886,7 +886,7 @@ int cmdValidate(int argc, char** argv, int firstOpt) {
     g2::anim::EnumTable table;
     if (!enumPath.empty()) {
         table = g2::anim::parseEnumHeaderFile(enumPath);
-        std::printf("Enumtabelle: %s (%zu Eintraege)\n\n", enumPath.c_str(), table.size());
+        std::printf("Enumtabelle: %s (%zu Einträge)\n\n", enumPath.c_str(), table.size());
         vo.enums = &table;
     }
 
@@ -999,7 +999,7 @@ int cmdDiff(int argc, char** argv) {
 
     std::printf("Verglichen: %d Frames x %d Bones = %llu Instanzen\n", r.frames, r.bones,
                 static_cast<unsigned long long>(r.instances));
-    std::printf("  ausserhalb der Toleranz : %llu  (%.3f%%)\n",
+    std::printf("  außerhalb der Toleranz : %llu  (%.3f%%)\n",
                 static_cast<unsigned long long>(r.outliers), r.outlierPercent());
     std::printf("  max. Rotation : %10.5f Grad   (Toleranz %.3f)\n", r.maxRotationDeg,
                 opt.toleranceRotationDeg);
@@ -1009,7 +1009,7 @@ int cmdDiff(int argc, char** argv) {
                 r.meanTranslation);
 
     if (r.clean()) {
-        std::printf("\nKeine Abweichung ueber der Quantisierungsgrenze.\n");
+        std::printf("\nKeine Abweichung über der Quantisierungsgrenze.\n");
         return 0;
     }
 
@@ -1084,7 +1084,7 @@ int offerBuild(const std::string& carPath) {
     std::printf("\n------------------------------------------------------------\n");
     if (baseDir.empty()) {
         std::printf("Assetwurzel : nicht gefunden\n");
-        std::printf("\nDie Pfade aus $aseanimgrab gehen von keinem uebergeordneten\n"
+        std::printf("\nDie Pfade aus $aseanimgrab gehen von keinem übergeordneten\n"
                     "Verzeichnis aus auf. Bau von Hand:\n"
                     "  g2c build \"%s\" -ref <referenz.gla> -basedir <pfad>\n",
                     carPath.c_str());
@@ -1095,7 +1095,7 @@ int offerBuild(const std::string& carPath) {
     if (refPath.empty()) {
         std::printf("Referenz-GLA: nicht gefunden\n");
         std::printf("\nErwartet wurde sie laut -makeskel unter:\n  %s\\%s.gla\n"
-                    "\nBau mit ausdruecklicher Referenz:\n"
+                    "\nBau mit ausdrücklicher Referenz:\n"
                     "  g2c build \"%s\" -ref <referenz.gla> -basedir \"%s\"\n",
                     baseDir.c_str(),
                     script.convert ? script.convert->makeSkel.c_str() : "?", carPath.c_str(),
@@ -1140,8 +1140,8 @@ int offerBuild(const std::string& carPath) {
         jo.glaPath = outGla.string();
         if (runJobCli(carPath, jo, script) != 0) return 1;
 
-        std::printf("\nDie Referenz-GLA wurde nicht angeruehrt. Zum Testen die Dateien\n"
-                    "zusammen kopieren — GLA und animation.cfg gehoeren immer als Paar\n"
+        std::printf("\nDie Referenz-GLA wurde nicht angerührt. Zum Testen die Dateien\n"
+                    "zusammen kopieren — GLA und animation.cfg gehören immer als Paar\n"
                     "zusammen, die GLM zum Modell.\n");
     } catch (const std::exception& e) {
         std::fprintf(stderr, "\nFehler: %s\n", e.what());
@@ -1179,7 +1179,7 @@ int cmdDropped(int argc, char** argv) {
                 case FileKind::Glm:
                     std::printf("Erkannt: GLM (Mesh)\n");
                     std::printf("============================================================\n");
-                    std::printf("Fuer GLM gibt es noch keinen Reader.\n");
+                    std::printf("Für GLM gibt es noch keinen Reader.\n");
                     break;
                 case FileKind::Unknown:
                     std::printf("Unbekanntes Format: %s\n", path.c_str());
@@ -1196,7 +1196,7 @@ int cmdDropped(int argc, char** argv) {
 
     // When files are dropped onto the exe, the console belongs to us alone and
     // would vanish immediately. So wait.
-    std::printf("\nEnter zum Schliessen...");
+    std::printf("\nEnter zum Schließen...");
     std::fflush(stdout);
     (void)std::getchar();
     return rc;
@@ -1214,20 +1214,20 @@ void usage() {
         "        -outdir <ordner>  alle Ausgaben in diesen Ordner\n"
         "        -only gla,cfg     nur diese Ausgaben (gla cfg frames glm skin info)\n"
         "        -nogla -nocfg -noframes -noglm -noskin -noinfo   einzeln abschalten\n"
-        "        -nooutput         alles bauen und pruefen, nichts schreiben\n"
+        "        -nooutput         alles bauen und prüfen, nichts schreiben\n"
         "        -ref <gla>        Skelett aus dieser GLA (Vorgabe: aus dem Skript)\n"
         "        -newskel          Skelett neu aus den Quellen, wie Carcass\n"
-        "        -framestep N      nur jeden N-ten Frame (Dateien heissen ..._skip)\n"
+        "        -framestep N      nur jeden N-ten Frame (Dateien heißen ..._skip)\n"
         "        -makeskin -smooth -losedupverts -flatten   wie in Carcass\n"
         "        -basedir <pfad>   Wurzel, unter der \"models/\" liegt\n"
         "        -threads N        Vorgabe: alle Kerne\n"
         "        -cache <ordner>   Vorgabe: g2c_cache neben der .car\n"
         "        -nocache          ohne Zwischenspeicher\n"
         "        -clearcache       Cache vorher leeren\n"
-        "        -skipmissing      fehlende .xsi ueberspringen\n"
-        "        -carcass          wie Carcass runden und glaetten (bytegleich, ungenauer)\n"
-        "        -origin x y z     ueberschreibt das Skript\n"
-        "        -framespeed N     Rueckfall ohne -framespeed und ohne SI_Scene\n"
+        "        -skipmissing      fehlende .xsi überspringen\n"
+        "        -carcass          wie Carcass runden und glätten (bytegleich, ungenauer)\n"
+        "        -origin x y z     überschreibt das Skript\n"
+        "        -framespeed N     Rückfall ohne -framespeed und ohne SI_Scene\n"
         "        -nomesh           nur GLA, keine GLM\n"
         "\n"
         "  g2c anim  <referenz.gla> <aus.gla> <anim1.xsi> [anim2.xsi ...]\n"
@@ -1238,42 +1238,42 @@ void usage() {
         "  g2c mesh  <root.xsi> -ref <referenz.gla>\n"
         "        GLM aus dotXSI bauen\n"
         "        -o <aus.glm>      Ausgabename\n"
-        "        -compare <ref.glm> gegen eine vorhandene GLM pruefen\n"
-        "        -smooth           Normalen an Nahtstellen glaetten (wie Carcass)\n"
+        "        -compare <ref.glm> gegen eine vorhandene GLM prüfen\n"
+        "        -smooth           Normalen an Nahtstellen glätten (wie Carcass)\n"
         "        -losedupverts     doppelte Vertices entfernen\n"
         "        -makeskin         .skin danebenlegen\n"
         "        -alias gla=xsi    Bone-Umbenennung\n"
         "\n"
         "PRUEFEN\n"
         "  g2c validate <datei.car> [weitere.car ...]\n"
-        "        Skript pruefen wie Assimilate, plus die Gegenrichtung\n"
-        "        -enums <anims.h>  Enumtabelle fuer die Namenspruefung\n"
-        "        -basedir <pfad>   Wurzel fuer die Dateipruefung\n"
+        "        Skript prüfen wie Assimilate, plus die Gegenrichtung\n"
+        "        -enums <anims.h>  Enumtabelle für die Namensprüfung\n"
+        "        -basedir <pfad>   Wurzel für die Dateiprüfung\n"
         "        -frames           Framezahlen aus den .xsi lesen (langsamer)\n"
-        "        -all              alle Meldungen statt der ersten fuenfzehn\n"
+        "        -all              alle Meldungen statt der ersten fünfzehn\n"
         "  g2c scan  <ordner> [-enums <anims.h>] [-validate]\n"
         "        Verzeichnisbaum nach .car durchsuchen\n"
         "  g2c info  <datei.gla|glm>  Header, Skelett/Surfaces, Poolstatistik\n"
         "  g2c dump  <datei.gla|glm> [-verbose]  wie carcass -dump\n"
-        "  g2c check <datei.gla>   Strukturpruefung und Fehlermessung\n"
+        "  g2c check <datei.gla>   Strukturprüfung und Fehlermessung\n"
         "  g2c diff  <a.gla> <b.gla>\n"
-        "        Zwei GLA vollstaendig vergleichen, Bone fuer Bone\n"
+        "        Zwei GLA vollständig vergleichen, Bone für Bone\n"
         "        -cfg <animation.cfg> Abweichungen Sequenzen zuordnen\n"
         "        -offset N         Frameversatz der zweiten Datei\n"
         "        -tol M            Toleranzen skalieren\n"
-        "        -all              alle Treffer statt der ersten zwoelf\n"
+        "        -all              alle Treffer statt der ersten zwölf\n"
         "\n"
         "ZERLEGEN\n"
         "  g2c export <datei.gla> [-cfg <animation.cfg>] [-o <ordner>]\n"
-        "        GLA zurueck nach dotXSI, eine Datei je Sequenz\n"
-        "        -frames <.frames>  Wurzelbewegung aus der .frames statt geschaetzt\n"
+        "        GLA zurück nach dotXSI, eine Datei je Sequenz\n"
+        "        -frames <.frames>  Wurzelbewegung aus der .frames statt geschätzt\n"
         "        -only <name>       nur diese Sequenz\n"
-        "        -makecar <a.car>   dazu ein .car, mit dem sich die GLA neu bauen laesst\n"
+        "        -makecar <a.car>   dazu ein .car, mit dem sich die GLA neu bauen lässt\n"
         "        -prefix <pfad>     Pfadvorsatz der .xsi in der .car\n"
         "        -origin x y z / -noorigin / -scale S / -noscale\n"
-        "        -nomotion          Wurzelbewegung nicht aus der GLA schaetzen\n"
+        "        -nomotion          Wurzelbewegung nicht aus der GLA schätzen\n"
         "        -keepmotion        $keepmotion ins erzeugte .car\n"
-        "        -force             vorhandene Dateien ueberschreiben\n"
+        "        -force             vorhandene Dateien überschreiben\n"
         "        -makeskel <pfad>   -makeskel im erzeugten .car\n"
         "        -xsi 3.0|3.5       dotXSI-Fassung, -basepose world|local|none\n"
         "  g2c makecar <ordner> [-o <a.car>] [-root <root.xsi>] [-makeskel <pfad>]\n"
@@ -1282,7 +1282,7 @@ void usage() {
         "\n"
         "ANSEHEN\n"
         "  g2c xsi   <datei.xsi>   dotXSI parsen, Templatetypen und Tempo\n"
-        "  g2c car   <datei.car>   Carcass-Skript aufloesen (-v fuer alle Zeilen)\n"
+        "  g2c car   <datei.car>   Carcass-Skript auflösen (-v für alle Zeilen)\n"
         "  g2c about               Fassung, Laufzeit, Ort des Startprotokolls\n"
         "  g2c update [-check]     Neue Version von GitHub holen (nur g2c.exe)\n"
         "  g2c help                diese Hilfe\n"
@@ -1290,12 +1290,12 @@ void usage() {
         "CARCASS-MODUS\n"
         "  g2c carcass [optionen] <a.car> ...   oder direkt: g2c -recursive\n"
         "        Dieselben Schalter wie carcass.exe: -recursive -filelist <datei>\n"
-        "        -forcebuild (sonst nur Geaendertes) -nooutput -framestep N -dump <datei>\n"
+        "        -forcebuild (sonst nur Geändertes) -nooutput -framestep N -dump <datei>\n"
         "        -verbose -silent -keypress -nocarpet (= ohne Cache) -flatten\n"
         "        -smooth -losedupverts -makeskin -origin x y z; -carcass = Ausgaben\n"
-        "        bytegleich zu Carcass (dessen Rundung und Glaetten)\n"
+        "        bytegleich zu Carcass (dessen Rundung und Glätten)\n"
         "\n"
-        "Dateien koennen auch direkt auf g2c.exe gezogen werden; das Format\n"
+        "Dateien können auch direkt auf g2c.exe gezogen werden; das Format\n"
         "wird am Inhalt erkannt. Bei einer .car werden Assetwurzel und\n"
         "Referenz-GLA selbst gesucht und der Bau angeboten.\n");
 }
@@ -1405,7 +1405,7 @@ int cmdMakeCar(int argc, char** argv) {
     }
     if (rootPath.empty()) {
         std::fprintf(stderr,
-                     "Keine root.xsi gefunden. Ohne Modelldatei laesst sich kein\n"
+                     "Keine root.xsi gefunden. Ohne Modelldatei lässt sich kein\n"
                      "$aseanimconvertmdx schreiben — mit -root <datei> angeben.\n");
         return 1;
     }
@@ -1415,7 +1415,7 @@ int cmdMakeCar(int argc, char** argv) {
     if (!enumsPath.empty()) {
         try {
             enums = g2::anim::parseEnumHeaderFile(enumsPath);
-            std::printf("Enumtabelle  : %zu Eintraege\n", enums.size());
+            std::printf("Enumtabelle  : %zu Einträge\n", enums.size());
         } catch (const std::exception& e) {
             std::fprintf(stderr, "anims.h nicht lesbar: %s\n", e.what());
         }
@@ -1464,7 +1464,7 @@ int cmdMakeCar(int argc, char** argv) {
     const std::string text = g2::car::writeScript(sc);
     const std::string out = outPath.empty() ? (fs::path(folder) / "_humanoid.car").string() : outPath;
     if (fs::exists(out, ec)) {
-        std::fprintf(stderr, "%s gibt es schon — nicht ueberschrieben.\n", out.c_str());
+        std::fprintf(stderr, "%s gibt es schon — nicht überschrieben.\n", out.c_str());
         return 1;
     }
     g2::writeFileChecked(out, text);
@@ -1478,7 +1478,7 @@ int cmdMakeCar(int argc, char** argv) {
                 "  -loop        welcher Frame die Schleife beginnt, steht in keiner .xsi\n"
                 "  -additional  Unterbereiche einer Datei sind eine reine Autorenangabe\n"
                 "  -origin      %s\n",
-                origin ? "angegeben" : "nicht angegeben (ueblich: -origin 0 0 24)");
+                origin ? "angegeben" : "nicht angegeben (üblich: -origin 0 0 24)");
     return 0;
 }
 
@@ -1563,7 +1563,7 @@ int cmdExport(int argc, char** argv) {
     if (!origin && !noOrigin) {
         opt.origin = g2::xsiexp::detectOrigin(gla);
         if (opt.origin)
-            std::printf("Origin       : %.2f %.2f %.2f (geschaetzt, mit -origin ueberschreibbar)\n",
+            std::printf("Origin       : %.2f %.2f %.2f (geschätzt, mit -origin überschreibbar)\n",
                         (*opt.origin)[0], (*opt.origin)[1], (*opt.origin)[2]);
     } else if (origin) {
         std::printf("Origin       : %.2f %.2f %.2f (angegeben)\n", (*origin)[0], (*origin)[1],
@@ -1659,7 +1659,7 @@ int cmdExport(int argc, char** argv) {
             std::fprintf(stderr, "%zu Datei(en) gibt es schon, z. B.:\n", existing.size());
             for (std::size_t k = 0; k < existing.size() && k < 5; ++k)
                 std::fprintf(stderr, "  %s\n", existing[k].c_str());
-            std::fprintf(stderr, "Nichts geschrieben. Mit -force ueberschreiben.\n");
+            std::fprintf(stderr, "Nichts geschrieben. Mit -force überschreiben.\n");
             return 1;
         }
     }
@@ -1731,7 +1731,7 @@ int cmdExport(int argc, char** argv) {
             if (host) host->extra.push_back(e);
             else blocks.push_back({e, {}});
         }
-        std::printf("Bloecke      : %zu Master, %zu als -additional\n", blocks.size(),
+        std::printf("Blöcke      : %zu Master, %zu als -additional\n", blocks.size(),
                     cfg.size() - blocks.size());
 
         g2::car::Script sc;
@@ -1793,7 +1793,7 @@ int cmdExport(int argc, char** argv) {
     // everything inside them becomes -additional.
     if (!carPath.empty() && !only.empty())
         std::printf("Achtung      : -only zusammen mit -car. Das Skript nennt ALLE Sequenzen,\n"
-                    "               exportiert wurden aber nur die gefilterten. So laesst es\n"
+                    "               exportiert wurden aber nur die gefilterten. So lässt es\n"
                     "               sich nicht bauen.\n");
     if (!carPath.empty() && !grouping.masters.empty()) {
         // Write the scale from the GLA as well; $keepmotion only if explicitly
@@ -1809,7 +1809,7 @@ int cmdExport(int argc, char** argv) {
         std::printf("Skript       : %s (%zu Grabs, %zu mit -additional)\n", carPath.c_str(),
                     grouping.masters.size(), withAdd);
         if (grouping.partial)
-            std::printf("Achtung      : %zu Sequenzen ueberlappen nur teilweise und fehlen im "
+            std::printf("Achtung      : %zu Sequenzen überlappen nur teilweise und fehlen im "
                         "Skript.\n", grouping.partial);
     }
 
@@ -1822,7 +1822,7 @@ int cmdExport(int argc, char** argv) {
                     withMotion, noMotion);
     }
     if (residual)
-        std::printf("Hinweis      : %zu Sequenz(en) sind Ausschnitte laengerer Animationen und\n"
+        std::printf("Hinweis      : %zu Sequenz(en) sind Ausschnitte längerer Animationen und\n"
                     "               tragen einen Rest Wurzelbewegung. Beim Neubauen wandert der\n"
                     "               in die .frames — die Animation bleibt heil, aber die neue\n"
                     "               GLA ist dort nicht bitgleich zur Quelle.\n",
@@ -2126,11 +2126,11 @@ int cmdCarcass(int argc, char** argv, int first) {
     if (noOutput) {
         jo.outputs = g2::car::JobOutputs{false, false, false, false, false, false};
         force = true;
-        std::printf("( -nooutput: alles wird gebaut und geprueft, nichts geschrieben )\n");
+        std::printf("( -nooutput: alles wird gebaut und geprüft, nichts geschrieben )\n");
     }
     if (force) std::printf("( -forcebuild: auch was aktuell ist, wird gebaut )\n");
     if (baseNote)
-        std::printf("( -ignorebasedeviations ist nicht noetig: g2c bricht bei abweichenden Bindeposen "
+        std::printf("( -ignorebasedeviations ist nicht nötig: g2c bricht bei abweichenden Bindeposen "
                     "nicht ab )\n");
 
     bool batch = recursive || !fileList.empty();
@@ -2177,7 +2177,7 @@ int cmdCarcass(int argc, char** argv, int first) {
                     ++current;
                     continue;
                 }
-                std::printf("( Ausloeser: %s )\n", trig.c_str());
+                std::printf("( Auslöser: %s )\n", trig.c_str());
             }
             const auto tc = std::chrono::steady_clock::now();
             one.log = [&](g2::car::JobLog l, const std::string& t) {
@@ -2213,7 +2213,7 @@ int cmdCarcass(int argc, char** argv, int first) {
     else std::printf("Ok    ( Elapsed: %s )\n", carcassElapsed(total).c_str());
     carcassSound(failed ? Sound::Error : warned ? Sound::Warn : Sound::Ok, silent);
     if (keypress) {
-        std::printf("\n( Enter druecken ... )");
+        std::printf("\n( Enter drücken ... )");
         std::fflush(stdout);
         (void)std::getchar();
     }

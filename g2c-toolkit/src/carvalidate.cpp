@@ -48,10 +48,10 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     // A model script ($aseanimgrab_gla) and an MDR script build without
     // $aseanimgrab lines.
     if (script.grabs.empty() && !hasGrabGla && !hasMdr)
-        add(r, Issue::Level::Error, "Das Skript enthaelt keine $aseanimgrab-Anweisungen");
+        add(r, Issue::Level::Error, "Das Skript enthält keine $aseanimgrab-Anweisungen");
     if (!script.grabs.empty() && hasGrabGla)
         add(r, Issue::Level::Error,
-            "$aseanimgrab_gla (fertige GLA benutzen) und $aseanimgrab im selben Skript schliessen sich aus");
+            "$aseanimgrab_gla (fertige GLA benutzen) und $aseanimgrab im selben Skript schließen sich aus");
 
     // What Carcass refuses on the convert line - with the real reason.
     if (script.convert) {
@@ -65,7 +65,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
             if (a == "-maxtris") ++i;
             else if (a == "-smooth" || a == "-losedupverts" || a == "-skew90" || a == "-noskew90") {
             } else if (a == "-scale") {
-                add(r, Issue::Level::Error, "-scale gehoert nicht auf die $aseanimconvertmdx-Zeile - stattdessen "
+                add(r, Issue::Level::Error, "-scale gehört nicht auf die $aseanimconvertmdx-Zeile - stattdessen "
                                             "\"$scale <wert>\" nach $aseanimgrabinit", {}, convLine);
                 ++i;   // its value
             } else if (a == "-skel") {
@@ -73,7 +73,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
                                             "\"$aseanimgrab_gla <name.gla>\" benutzt", {}, convLine);
                 ++i;
             } else if (a == "-ignorebasedeviations")
-                add(r, Issue::Level::Error, "-ignorebasedeviations gehoert nicht auf die $aseanimconvertmdx-Zeile",
+                add(r, Issue::Level::Error, "-ignorebasedeviations gehört nicht auf die $aseanimconvertmdx-Zeile",
                     {}, convLine);
             else
                 add(r, Issue::Level::Error, "Unbekannte Angabe \"" + xa[i] + "\" auf der $aseanimconvertmdx-Zeile",
@@ -83,7 +83,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
     for (const auto& st : script.statements)
         if (st.cmd == Cmd::Unknown)
             add(r, Issue::Level::Warning,
-                "Unbekannter Befehl \"" + st.raw + "\" - g2c uebergeht ihn, Carcass brach hier ab", {}, st.line);
+                "Unbekannter Befehl \"" + st.raw + "\" - g2c übergeht ihn, Carcass brach hier ab", {}, st.line);
 
     // --- 0a. Size of animation.cfg ----------------------------------------
     //
@@ -110,12 +110,12 @@ ValidateResult validate(const Script& script, const std::string& carPath,
         if (bytes > kLimit)
             add(r, Issue::Level::Error,
                 "Die animation.cfg wird etwa " + std::to_string(bytes) +
-                    " Byte gross - die Engine liest hoechstens " + std::to_string(kLimit) +
-                    ". Weniger Sequenzen oder kuerzere Namen sind noetig.");
+                    " Byte groß - die Engine liest höchstens " + std::to_string(kLimit) +
+                    ". Weniger Sequenzen oder kürzere Namen sind nötig.");
         else if (bytes > kLimit * 9 / 10)
             add(r, Issue::Level::Warning,
                 "Die animation.cfg wird etwa " + std::to_string(bytes) +
-                    " Byte gross - die Grenze der Engine liegt bei " + std::to_string(kLimit) +
+                    " Byte groß - die Grenze der Engine liegt bei " + std::to_string(kLimit) +
                     ".");
     }
 
@@ -155,7 +155,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
             add(r, Issue::Level::Error,
                 name + " steht " + std::to_string(wo.size()) +
                     "x im Skript (Zeilen " + zeilen +
-                    "). Die Engine nimmt den letzten - die uebrigen sind unerreichbar.",
+                    "). Die Engine nimmt den letzten - die übrigen sind unerreichbar.",
                 name, script.grabs[wo.front()].line);
         }
     }
@@ -250,7 +250,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
             }
             if (a.loopFrame >= a.frameCount)
                 add(r, Issue::Level::Error,
-                    "Loopframe " + std::to_string(a.loopFrame) + " liegt ausserhalb von 0.." +
+                    "Loopframe " + std::to_string(a.loopFrame) + " liegt außerhalb von 0.." +
                         std::to_string(a.frameCount - 1),
                     a.name, g.line);
             if (a.targetOffset < 0)
@@ -270,7 +270,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
             if (st.cmd == Cmd::AseAnimGrabGla || st.cmd == Cmd::AseAnimRefGla) hasGlaSeq = true;
         if (hasGlaSeq && script.convert && !script.convert->makeSkel.empty())
             add(r, Issue::Level::Error,
-                "-makeskel zusammen mit einer GLA-Sequenz ist widerspruechlich");
+                "-makeskel zusammen mit einer GLA-Sequenz ist widersprüchlich");
     }
 
     // --- 6. Frame counts against the source files -------------------------
@@ -300,7 +300,7 @@ ValidateResult validate(const Script& script, const std::string& carPath,
                         add(r, Issue::Level::Error,
                             "Bereich " + std::to_string(ad.targetOffset) + ".." +
                                 std::to_string(ad.targetOffset + ad.frameCount - 1) +
-                                " liegt ausserhalb der " + std::to_string(frames) +
+                                " liegt außerhalb der " + std::to_string(frames) +
                                 " Frames von \"" + script.grabs[i].file + "\"",
                             ad.name, script.grabs[i].line);
                     }

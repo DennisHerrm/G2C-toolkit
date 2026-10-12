@@ -72,6 +72,9 @@ constexpr const char* ICON_INFO        = "\xEE\xA5\x86";   // U+E946  info
 constexpr const char* ICON_PAUSE       = "\xEE\x9D\xA9";   // U+E769  pause
 constexpr const char* ICON_PREV        = "\xEE\xA2\x92";   // U+E892  previous
 constexpr const char* ICON_NEXT        = "\xEE\xA2\x93";   // U+E893  next
+constexpr const char* ICON_UNDO        = "\xEE\x9E\xA7";   // U+E7A7  undo
+constexpr const char* ICON_REDO        = "\xEE\x9E\xA6";   // U+E7A6  redo
+constexpr const char* ICON_SEARCH      = "\xEE\x9C\xA1";   // U+E721  search
 
 // Icons can be switched off in case the font is missing.
 bool iconsAvailable();

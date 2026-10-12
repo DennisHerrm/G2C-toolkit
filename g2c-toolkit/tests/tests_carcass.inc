@@ -42,7 +42,7 @@ g2::Mesh carcassTestMesh(int lods) {
 }  // namespace
 
 void testGlmRead() {
-    section("GLM lesen (fuer -dump/info und die Vergleiche mit Carcass)");
+    section("GLM lesen (für -dump/info und die Vergleiche mit Carcass)");
 
     const g2::Mesh m = carcassTestMesh(3);
     const auto w = g2::writeMdxm(m);
@@ -78,7 +78,7 @@ void testGlmRead() {
                     same = same && a.triangles[t].indexes[k] == b.triangles[t].indexes[k];
         }
     }
-    check(same, "alle Surfaces, Vertices, Gewichte und Dreiecke kommen unveraendert zurueck");
+    check(same, "alle Surfaces, Vertices, Gewichte und Dreiecke kommen unverändert zurück");
 
     // Writing what was read gives the identical file.
     const auto again = g2::writeMdxm(f.mesh);
@@ -109,7 +109,7 @@ void testGlmRead() {
         } catch (const std::exception&) {
         }
     }
-    check(true, "400 zufaellig beschaedigte GLM ohne Absturz gelesen (" + std::to_string(survived) +
+    check(true, "400 zufällig beschaedigte GLM ohne Absturz gelesen (" + std::to_string(survived) +
                     " davon noch gueltig)");
 
     std::vector<std::uint8_t> huge = w.data;
@@ -195,7 +195,7 @@ void testCarcassScriptSyntax() {
         "$aseanimgrabinit\r\n"
         "$CFGNameFromCAR\r\n"
         "/* ein Block\r\n"
-        "   ueber zwei Zeilen */\r\n"
+        "   über zwei Zeilen */\r\n"
         "$aseanimgrab models/a/one.xsi -loop 2 ; dahinter\r\n"
         "$basedir c:/anderswo/\r\n"
         "$aseanimgrab two\r\n"
@@ -206,7 +206,7 @@ void testCarcassScriptSyntax() {
     check(s.grabs[0].loop && *s.grabs[0].loop == 2, "Wert vor einem ;-Kommentar gelesen");
     check(s.grabs[0].trailingComment.find("dahinter") != std::string::npos, ";-Kommentar am Zeilenende behalten");
     check(s.grabs[0].baseDir.empty() && s.grabs[1].baseDir == "c:/anderswo/",
-          "$basedir gilt nur fuer die Grabs danach (wie Carcass)");
+          "$basedir gilt nur für die Grabs danach (wie Carcass)");
     bool unknown = false;
     for (const auto& st : s.statements) unknown = unknown || st.cmd == g2::car::Cmd::Unknown;
     check(!unknown, "$CFGNameFromCAR ist ein bekannter Befehl");
@@ -214,7 +214,7 @@ void testCarcassScriptSyntax() {
     if (back != text) {
         std::printf("  --- erwartet ---\n%s  --- geschrieben ---\n%s", text.c_str(), back.c_str());
     }
-    check(back == text, "Speichern gibt die Datei byte-gleich zurueck (alle Kommentarformen)");
+    check(back == text, "Speichern gibt die Datei byte-gleich zurück (alle Kommentarformen)");
     const std::string noNl = "$aseanimgrab a.xsi\r\n$aseanimconvertmdx_noask root -makeskel x/x";
     check(g2::car::writeScript(g2::car::parse(noNl, "x.car")) == noNl,
           "REGRESSION: Datei ohne Zeilenumbruch am Ende bekommt beim Speichern keinen dazu");
@@ -242,7 +242,7 @@ void testSkeletonBuild() {
     check(sk.bones.back().name == "late", "spaeter auftauchender Bone hinten angehaengt, _always_ abgeschnitten");
     const auto* tib = ctBone(sk, "ltibia");
     check(tib && sk.bones[static_cast<std::size_t>(tib->parent)].name == "pelvis",
-          "Kind eines weggefallenen Bones haengt am Grosselternteil");
+          "Kind eines weggefallenen Bones hängt am Grosselternteil");
     const auto* face = ctBone(sk, "face");
     check(face && (face->flags & g2::fmt::kBoneFlagAlwaysXform), "face_always_ -> face mit ALWAYSXFORM");
     const auto* mot = ctBone(sk, "Motion");
@@ -270,7 +270,7 @@ void testSkeletonBuild() {
     const auto r3 = g2::buildSkeleton({&a1, &a3}, {"pelvis", "ltibia"}, so);
     const auto* tib3 = ctBone(r3.skeleton, "ltibia");
     check(tib3 && r3.skeleton.bones[static_cast<std::size_t>(tib3->parent)].name == "pelvis",
-          "REGRESSION: andere Schreibweise in der zweiten Datei aendert die Hierarchie nicht (Carcass: ja)");
+          "REGRESSION: andere Schreibweise in der zweiten Datei ändert die Hierarchie nicht (Carcass: ja)");
 
     // $pcj $flatten: everything under the topmost node.
     g2::SkeletonBuildOptions sf = so;
@@ -278,11 +278,11 @@ void testSkeletonBuild() {
     const auto rf = g2::buildSkeleton({&a1}, {"pelvis", "ltibia", "jaw"}, sf);
     bool flat = true;
     for (std::size_t b = 1; b < rf.skeleton.bones.size(); ++b) flat = flat && rf.skeleton.bones[b].parent == 0;
-    check(flat, "$pcj $flatten haengt alle Bones an die Wurzel");
+    check(flat, "$pcj $flatten hängt alle Bones an die Wurzel");
     // ... but only from the grab on that follows the $pcj line.
     sf.pcjFrom = {1};
     const auto rf2 = g2::buildSkeleton({&a1}, {"pelvis", "ltibia", "jaw"}, sf);
-    check(ctBone(rf2.skeleton, "ltibia")->parent != 0, "$pcj nach den Grabs aendert nichts (wie Carcass)");
+    check(ctBone(rf2.skeleton, "ltibia")->parent != 0, "$pcj nach den Grabs ändert nichts (wie Carcass)");
 
     // $bonehiercap: everything below spine goes, the _always_ bone stays.
     g2::SkeletonBuildOptions sc = so;
@@ -290,7 +290,7 @@ void testSkeletonBuild() {
     const auto rc = g2::buildSkeleton({&a1}, {"pelvis", "ltibia", "jaw"}, sc);
     check(!ctBone(rc.skeleton, "ltibia") && !ctBone(rc.skeleton, "jaw") && ctBone(rc.skeleton, "face"),
           "$bonehiercap kappt alles darunter ausser _always_-Bones");
-    check(rc.capped.size() == 1 && rc.capped[0].first == "pelvis", ".bonecap-Inhalt: ein Eintrag fuer pelvis");
+    check(rc.capped.size() == 1 && rc.capped[0].first == "pelvis", ".bonecap-Inhalt: ein Eintrag für pelvis");
     check(g2::writeBoneCap(rc.capped) == "pelvis ltibia jaw \r\n", ".bonecap im Format von Carcass");
 
     // keepBoneOrder: same bones, other order -> existing order.
@@ -336,7 +336,7 @@ void testFrameStepAndOutputs() {
         const auto ext = e.path().extension().string();
         if (ext == ".gla" || ext == ".cfg" || ext == ".glm" || ext == ".frames" || ext == ".txt" || ext == ".skin") ++files;
     }
-    check(r.written.size() == 2 && files == 2, "nur GLA und animation.cfg gewaehlt: genau zwei Dateien");
+    check(r.written.size() == 2 && files == 2, "nur GLA und animation.cfg gewählt: genau zwei Dateien");
 
     // Everything, with -framestep 3.
     jo.outputs = g2::car::JobOutputs{};
@@ -346,7 +346,7 @@ void testFrameStepAndOutputs() {
               fs::exists(root / "models" / "players" / "t" / "t_skip.glm") &&
               fs::exists(root / "models" / "players" / "t" / "t_skip_info.txt"),
           "-framestep: eigene _skip-Namen, auch bei Schritt 2-3 (Carcass: erst ab 3)");
-    check(r3.anim.totalFrames() == 4 + 3, "a: 10 Frames -> 4 (0,3,6,9); b: 3 Frames bleiben (nicht laenger als n)");
+    check(r3.anim.totalFrames() == 4 + 3, "a: 10 Frames -> 4 (0,3,6,9); b: 3 Frames bleiben (nicht länger als n)");
     check(r3.anim.sequences[0].frameSpeed == 10 && r3.anim.sequences[0].loopFrame == 1,
           "Geschwindigkeit und Loop mit dem Schritt geteilt (Carcass: doppelt so schnell)");
     check(r3.anim.frameBlocks[0].fps == 10, ".frames: fps durch den Schritt geteilt");
@@ -453,7 +453,7 @@ void testFractionalSpeed() {
           "REGRESSION -additional mit Speed 12.5 gelesen (Fehler: 12)");
 
     // Saving: unchanged lines verbatim, a changed line keeps the decimals.
-    check(g2::car::writeScript(script) == text, "unveraendert gespeichert: byte-gleich");
+    check(g2::car::writeScript(script) == text, "unverändert gespeichert: byte-gleich");
     script.grabs[0].loop = 0;
     script.grabs[1].loop = 0;
     const std::string w = g2::car::writeScript(script);
@@ -471,7 +471,7 @@ void testFractionalSpeed() {
     std::map<std::string, double> sp;
     for (const auto& q : cfg) sp[q.name] = q.frameSpeed;
     check(sp.count("A") && sp["A"] == 16.5, "REGRESSION animation.cfg: A mit 16.5 (Fehler: 16)");
-    check(sp.count("B") && sp["B"] == -20, "animation.cfg: B rueckwaerts mit -20");
+    check(sp.count("B") && sp["B"] == -20, "animation.cfg: B rückwärts mit -20");
     check(sp.count("B_PART") && sp["B_PART"] == 12.5, "animation.cfg: B_PART mit 12.5");
     {
         const std::string t = g2::readWholeFile((root / "out" / "animation.cfg").string());
@@ -501,7 +501,7 @@ void testFractionalSpeed() {
 }
 
 void testMeshLikeCarcass() {
-    section("GLM aus dotXSI wie Carcass: Zusammenlegen nach Wert, LODs, Tags, Glaetten");
+    section("GLM aus dotXSI wie Carcass: Zusammenlegen nach Wert, LODs, Tags, Glätten");
     // Two triangles sharing an edge, but with SEPARATE position indices for
     // the shared points: Carcass merges by value.
     const std::string src =
@@ -570,7 +570,7 @@ void testMeshLikeCarcass() {
     check(sides, "REGRESSION -smooth: doppelseitige Flaeche behaelt ihre Normalen (Carcass: Null-Normalen)");
     sm.carcassSmooth = true;
     const auto rc = g2::xsi::importMesh(g2::xsi::parse(sheet), sm);
-    check(rc.mesh.lods[0].surfaces[0].vertices.size() == 3, "-carcass: Carcass' Glaetten, beide Seiten verschmolzen");
+    check(rc.mesh.lods[0].surfaces[0].vertices.size() == 3, "-carcass: Carcass' Glätten, beide Seiten verschmolzen");
 }
 
 void testAseAndMdr() {
@@ -674,5 +674,5 @@ void testCarCorpus() {
                         w.substr(from, 160).c_str());
         }
     }
-    check(n > 0 && same == n, std::to_string(same) + " von " + std::to_string(n) + " .car byte-gleich zurueck");
+    check(n > 0 && same == n, std::to_string(same) + " von " + std::to_string(n) + " .car byte-gleich zurück");
 }

@@ -446,7 +446,7 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
     // this file instead of not at all.
     const int outFrames = seq.frameCount == 1 ? 2 : seq.frameCount;
     if (seq.startFrame < 0 || seq.startFrame + seq.frameCount > gla.numFrames)
-        throw std::runtime_error("Sequenzbereich liegt ausserhalb der GLA");
+        throw std::runtime_error("Sequenzbereich liegt außerhalb der GLA");
 
     const float scale = opt.scale > 0.0f ? opt.scale : 1.0f;
     const Mat3x4 C = axisC();
@@ -493,7 +493,7 @@ std::string exportSequence(const MdxaFile& gla, const Sequence& seq,
             }
         }
         if (topo.size() != static_cast<std::size_t>(numBones))
-            throw std::runtime_error("Skelett enthaelt einen Zyklus");
+            throw std::runtime_error("Skelett enthält einen Zyklus");
     }
 
     for (int f = 0; f < outFrames; ++f) {

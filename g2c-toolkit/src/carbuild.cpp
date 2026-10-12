@@ -155,7 +155,7 @@ std::vector<BuildResult::MissingFile> findMissingFiles(const Script& script,
 BuildResult build(const Script& script, const Skeleton& reference, const std::string& carPath,
                   const BuildOptions& opt) {
     if (script.grabs.empty())
-        throw std::runtime_error("Das Skript enthaelt keine $aseanimgrab-Anweisungen");
+        throw std::runtime_error("Das Skript enthält keine $aseanimgrab-Anweisungen");
 
     const int numBones = static_cast<int>(reference.bones.size());
     if (numBones == 0) throw std::runtime_error("Referenzskelett hat keine Bones");
@@ -318,7 +318,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
                     out.warning = std::string("Lesefehler in \"") + g.file + "\": " + e.what();
                 }
             } else {
-                out.warning = "uebersprungen (Datei fehlt): " + g.file;
+                out.warning = "übersprungen (Datei fehlt): " + g.file;
             }
 
             if (opt.progress) {
@@ -460,7 +460,7 @@ BuildResult build(const Script& script, const Skeleton& reference, const std::st
                 static_cast<long long>(a.targetOffset) + a.frameCount > fullCount)
                 res.warnings.push_back(g.file + ": -additional " + a.name + " (Start " +
                                        std::to_string(a.targetOffset) + ", " +
-                                       std::to_string(a.frameCount) + " Frames) liegt ausserhalb der " +
+                                       std::to_string(a.frameCount) + " Frames) liegt außerhalb der " +
                                        std::to_string(fullCount) + " Frames der Datei");
             Sequence x;
             x.name = a.name;

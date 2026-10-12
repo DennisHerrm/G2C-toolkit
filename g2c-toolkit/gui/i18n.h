@@ -151,6 +151,8 @@ enum class S {
     StepGla, StepSelect, StepTarget, StepExport, ExSelCount, SelectAll, SelectNone, ExSelectHint, ExCompareHead, ExNeedGla, ExNeedTarget, ExNeedSelection, ExNeedCfg, DropGlaHint, ExOtherGla, PvEmptyHint, PvPrevFrame, PvNextFrame, PvKeys, PvInfo, PvLoopNone, ModeBuildSub, ModeExtractSub, ModePreviewSub, ExShowInPreview, ExFormat,
     PvLoadGlm, PvShowMesh, PvShowSkeleton, PvWireframe, PvGlmHint, PvGlmInfo, PvGlmOther, PvRemoveGlm, LogGlmLoaded, LogGlmFailed, DlgTitleGlm,
     PvTextures, PvTexOff, PvSkin, PvTexMissing, PvTexSourceTip,
+    WelcomeTitle, WelcomeRoot, WelcomeRootHint, WelcomeOpen, WelcomeOpenHint, WelcomeBuild, WelcomeBuildHint, PathRootChip, PathRefChip, PathRefAuto, PathChipTip, WritesLabel, OutputChipTip, BottomIssues, BottomToggleTip, ToastBuilt, ToastBuildErrors, ToastCancelled, ToastShowLog, ToastOpenFolder, ToastSaved, ToastDismiss, AddXsiMenuFiles, AddXsiMenuFolder, AddXsiMenuFilesAll, AddXsiMenuFolderAll, SettingsToggleTip,
+    ChipAll, ChipProblems, ChipNoEnum, ChipBackwards, ChipParts, ChipTip, CellEditTip, BackwardsTip, MenuEdit, Undo, Redo, Palette, PaletteHint, PaletteNone, PaletteSeq, PaletteTab, PaletteMode, LogUndone, LogRedone,
 
     Count
 };

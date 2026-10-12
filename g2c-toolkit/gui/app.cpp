@@ -17,6 +17,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,10 @@
 
 namespace g2::gui {
 namespace fs = std::filesystem;
+
+static double nowSeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // Filter match ignoring case: "run" finds BOTH_RUN1.
 static bool containsNoCase(const std::string& hay, const char* needle) {
@@ -235,7 +240,7 @@ bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool 
             }
         }
     }
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     return true;
 }
@@ -305,6 +310,8 @@ void App::saveSettings() const {
     f << "framestep=" << settings_.frameStep << "\n";
     f << "onlynewxsi=" << (settings_.onlyNewXsi ? 1 : 0) << "\n";
     f << "mode=" << static_cast<int>(mode_) << "\n";
+    f << "bottomopen=" << (bottomOpen_[0] ? 1 : 0) << (bottomOpen_[1] ? 1 : 0) << (bottomOpen_[2] ? 1 : 0) << "\n";
+    f << "showsettings=" << (showSettings_ ? 1 : 0) << "\n";
     if (!previewGlmPath_.empty()) f << "pvglm=" << previewGlmPath_ << "\n";
     f << "pvmesh=" << (pvShowMesh_ ? 1 : 0) << "\n";
     f << "pvskel=" << (pvShowSkeleton_ ? 1 : 0) << "\n";
@@ -401,6 +408,10 @@ void App::loadSettings() {
         else if (key == "pvskel") pvShowSkeleton_ = asBool();
         else if (key == "pvwire") pvWireframe_ = asBool();
         else if (key == "pvtexsrc") pvTexSource_ = val;
+        else if (key == "bottomopen") {
+            for (std::size_t m = 0; m < 3 && m < val.size(); ++m) bottomOpen_[m] = val[m] == '1';
+        }
+        else if (key == "showsettings") showSettings_ = asBool();
         else if (key == "pvskin") pvSkin_ = val;
         else if (key == "backup") settings_.keepBackup = asBool();
         else if (key == "xsiver")
@@ -453,6 +464,7 @@ void App::loadSettings() {
 
 void App::log(LogLine::Kind kind, std::string text) {
     std::lock_guard<std::mutex> lock(logMutex_);
+    if (kind == LogLine::Kind::Bad) ++badLogCount_;
     log_.push_back(LogLine{kind, std::move(text)});
     // Don't let it grow without bound - a batch build over hundreds of scripts
     // would otherwise quickly pile up more than anyone reads.
@@ -938,6 +950,13 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     }
     char msg[128];
     std::snprintf(msg, sizeof(msg), tr(S::Exported), ok);
+    {
+        const std::string outDir = extract_.outDir;
+        toast(ok ? LogLine::Kind::Good : LogLine::Kind::Warn, msg, platform_.revealInExplorer ? tr(S::ToastOpenFolder) : "",
+              [this, outDir] {
+                  if (platform_.revealInExplorer) platform_.revealInExplorer(outDir);
+              });
+    }
     log(failed ? LogLine::Kind::Warn : LogLine::Kind::Good, msg);
     return ok;
 }
@@ -1138,6 +1157,7 @@ void App::closeDocument(std::size_t index) {
     resetRowState();
     if (index >= docs_.size()) return;
     const std::string path = docs_[index].path;
+    undo_.erase(path);
     // Its output folder outlives the tab: reopened later (or next session) it
     // is there again. It used to be forgotten as soon as the tab closed.
     if (!docs_[index].outputDir.empty()) savedOutputs_[path] = docs_[index].outputDir;
@@ -1407,7 +1427,7 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
             ++n;
         }
         if (n == 0) return 0;
-        d.dirty = true;
+        touch(d);
         d.validated = false;
         d.syncSelection();
         return n;
@@ -1465,6 +1485,7 @@ bool App::saveDocument(std::size_t index) {
         return false;
     }
     d.dirty = false;
+    toast(LogLine::Kind::Good, trf(S::ToastSaved, d.title.c_str()));
     log(LogLine::Kind::Good,
         trf(S::LogSaved, d.title.c_str(),
             settings_.keepBackup ? (d.title + ".bak").c_str() : "-"));
@@ -1567,7 +1588,7 @@ std::size_t App::setFrameSpeed(std::size_t docIndex, const std::vector<std::size
         g.frameSpeed = speed;
         ++n;
     }
-    if (n) d.dirty = true;
+    if (n) touch(d);
     return n;
 }
 
@@ -1742,7 +1763,7 @@ bool App::moveGrab(std::size_t docIndex, std::size_t from, std::size_t to) {
         d.selected.insert(d.selected.begin() + static_cast<long>(to), sel);
     }
 
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     return true;
 }
@@ -1791,7 +1812,7 @@ std::size_t App::moveGrabs(std::size_t docIndex, std::vector<std::size_t> rows,
     d.selected.insert(d.selected.begin() + static_cast<long>(target), blockSel.begin(),
                       blockSel.end());
 
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     closeEditorOf(docIndex);
     keepRootLast(docIndex);
@@ -1815,7 +1836,7 @@ bool App::keepRootLast(std::size_t docIndex) {
             d.selected.erase(d.selected.begin() + static_cast<long>(i));
             d.selected.push_back(sel);
         }
-        d.dirty = true;
+        touch(d);
         closeEditorOf(docIndex);
         return true;
     }
@@ -1855,7 +1876,7 @@ std::size_t App::deleteGrabs(std::size_t docIndex, std::vector<std::size_t> rows
         ++n;
     }
     if (n) {
-        d.dirty = true;
+        touch(d);
         d.validated = false;
         // An open edit dialog could point at a deleted row.
         closeEditorOf(docIndex);
@@ -1897,7 +1918,7 @@ std::size_t App::pasteGrabs(std::size_t docIndex, std::size_t before) {
                           items.end());
     d.selected.insert(d.selected.begin() + static_cast<long>(before), items.size(), 0);
 
-    d.dirty = true;
+    touch(d);
     d.validated = false;
     closeEditorOf(docIndex);
     keepRootLast(docIndex);
@@ -1963,14 +1984,15 @@ bool App::loadEnums(const std::string& path) {
     return true;
 }
 
-void App::validateDocument(std::size_t index) {
+void App::validateDocument(std::size_t index, bool light) {
     if (index >= docs_.size()) return;
     Document& d = docs_[index];
     if (!d.loadError.empty()) return;
 
     car::ValidateOptions vo;
     vo.baseDir = settings_.baseDir;
-    vo.readFrameCounts = settings_.readFrameCounts;
+    // The automatic check after an edit stays cheap: no .xsi is parsed.
+    vo.readFrameCounts = settings_.readFrameCounts && !light;
     vo.threads = 0;   // all cores
     if (!enums_.empty()) vo.enums = &enums_;
     if (settings_.useCache && !settings_.baseDir.empty())
@@ -1985,6 +2007,8 @@ void App::validateAll() {
     std::size_t err = 0, warn = 0;
     for (const auto& d : docs_) { err += d.validation.errors; warn += d.validation.warnings; }
     log(err ? LogLine::Kind::Bad : LogLine::Kind::Good, trf(S::LogValidation, err, warn));
+    // Whoever presses "Validate" wants to see the result.
+    if (err || warn) bottomOpen_[static_cast<int>(Mode::Build)] = true;
 }
 
 // --- Building --------------------------------------------------------------
@@ -2252,6 +2276,13 @@ void App::startBuildIndices(std::vector<std::size_t> which, bool cfgOnly) {
     job_.cancel.store(false);
     job_.done.store(0);
     job_.total.store(targets.size());
+    buildStarted_ = nowSeconds();
+    buildCount_ = targets.size();
+    buildFirstOut_ = targets.front().outputDir;
+    {
+        std::lock_guard<std::mutex> lock(logMutex_);
+        badAtBuildStart_ = badLogCount_;
+    }
     job_.running.store(true);
 
     // Copies of the documents AND the settings, so the UI stays usable during
@@ -2283,13 +2314,16 @@ void App::applyStyle() {
     // instead of 6 pixels, and the windows' resize grip covered the buttons
     // along their bottom edge.
     s = ImGuiStyle();
-    s.WindowRounding = 6.0f;
-    s.FrameRounding = 4.0f;
-    s.GrabRounding = 4.0f;
-    s.TabRounding = 4.0f;
-    s.ScrollbarRounding = 4.0f;
-    s.FramePadding = ImVec2(8, 5);
+    s.WindowRounding = 8.0f;
+    s.ChildRounding = 6.0f;
+    s.PopupRounding = 8.0f;
+    s.FrameRounding = 5.0f;
+    s.GrabRounding = 5.0f;
+    s.TabRounding = 5.0f;
+    s.ScrollbarRounding = 6.0f;
+    s.FramePadding = ImVec2(9, 5);
     s.ItemSpacing = ImVec2(8, 6);
+    s.PopupBorderSize = 1.0f;
     s.WindowPadding = ImVec2(12, 10);
     s.CellPadding = ImVec2(8, 4);
     s.ScrollbarSize = 12.0f;
@@ -2370,6 +2404,14 @@ void App::drawMenuBar() {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu(tr(S::MenuEdit))) {
+        if (ImGui::MenuItem(withIcon(ICON_UNDO, tr(S::Undo)), "Ctrl+Z", false, canUndo())) undo();
+        if (ImGui::MenuItem(withIcon(ICON_REDO, tr(S::Redo)), "Ctrl+Y", false, canRedo())) redo();
+        ImGui::Separator();
+        if (ImGui::MenuItem(withIcon(ICON_SEARCH, tr(S::Palette)), "Ctrl+K")) paletteRequest_ = true;
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu(tr(S::MenuBuild))) {
         if (ImGui::MenuItem(tr(S::BuildCurrent), "F5", false, !docs_.empty() && !buildRunning()))
             startBuild(false);
@@ -2442,9 +2484,24 @@ void App::drawToolbar() {
         ImGui::EndDisabled();
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(!canUndo());
+    if (ImGui::Button(iconsAvailable() ? ICON_UNDO : "<")) undo();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s (Ctrl+Z)", tr(S::Undo));
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canRedo());
+    if (ImGui::Button(iconsAvailable() ? ICON_REDO : ">")) redo();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s (Ctrl+Y)", tr(S::Redo));
+    ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
-    if (iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuild))) startBuild(false);
+    // The main action stands out.
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.46f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.36f, 1.0f));
+    const bool buildClicked = iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuild));
+    ImGui::PopStyleColor(2);
+    if (buildClicked) startBuild(false);
     ImGui::SameLine();
     if (iconButton(ICON_BUILD, kIconGood, tr(S::BtnBuildAll))) startBuild(true);
     ImGui::SameLine();
@@ -2462,34 +2519,46 @@ void App::drawToolbar() {
     if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::BtnOpenFolder))) openFolderDialog();
     ImGui::SameLine();
     ImGui::BeginDisabled(!have);
-    if (iconButton(ICON_ADD, kIconInfo, tr(S::BtnAddXsi)) && platform_.openFiles) {
-        const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
-        if (!files.empty()) addXsiFiles(files, false);
-    }
-    ImGui::SameLine();
-    if (iconButton(ICON_FOLDER, kIconInfo, tr(S::BtnAddXsiFolder)) &&
-        (platform_.pickFolders || platform_.pickFolder)) {
-        // Several folders at once: for a model with animations from ten
-        // sources, clicking ten times is the actual work.
-        const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        std::size_t files = 0;
-        for (const auto& d : dirs) files += addXsiFolder(d, false);
-        if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
-    }
-    ImGui::SameLine();
-    if (iconButton(ICON_FOLDER, kIconAccent, tr(S::BtnAddXsiFolderAll)) &&
-        (platform_.pickFolders || platform_.pickFolder)) {
-        const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-        std::size_t files = 0;
-        for (const auto& d : dirs) files += addXsiFolder(d, true);
-        if (dirs.size() > 1)
-            log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
-    }
-    ImGui::SameLine();
-    if (iconButton(ICON_ADD, kIconAccent, tr(S::BtnAddXsiAll)) && platform_.openFiles) {
-        const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
-        if (!files.empty()) addXsiFiles(files, true);
+    // One button with a menu instead of four: files or a folder, for this
+    // script or - set apart, because it touches every open one - for all.
+    {
+        const std::string lbl = std::string(tr(S::BtnAddXsi)) + "    ";
+        const bool open = iconButton(ICON_ADD, kIconInfo, lbl.c_str());
+        // A small down arrow in the space at the end of the label.
+        const ImVec2 mx = ImGui::GetItemRectMax(), mn = ImGui::GetItemRectMin();
+        const float ah = (mx.y - mn.y) * 0.18f;
+        const ImVec2 c(mx.x - ImGui::GetStyle().FramePadding.x - ah, (mn.y + mx.y) * 0.5f);
+        ImGui::GetWindowDrawList()->AddTriangleFilled(ImVec2(c.x - ah, c.y - ah * 0.5f), ImVec2(c.x + ah, c.y - ah * 0.5f),
+                                                      ImVec2(c.x, c.y + ah * 0.7f), ImGui::GetColorU32(ImGuiCol_Text));
+        if (open) ImGui::OpenPopup("addxsimenu");
+        if (ImGui::BeginPopup("addxsimenu")) {
+            if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::AddXsiMenuFiles))) && platform_.openFiles) {
+                const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
+                if (!files.empty()) addXsiFiles(files, false);
+            }
+            if (ImGui::MenuItem(withIcon(ICON_FOLDER, tr(S::AddXsiMenuFolder))) &&
+                (platform_.pickFolders || platform_.pickFolder)) {
+                // Several folders at once: for a model with animations from
+                // ten sources, clicking ten times is the actual work.
+                const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
+                std::size_t files = 0;
+                for (const auto& d : dirs) files += addXsiFolder(d, false);
+                if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::AddXsiMenuFilesAll))) && platform_.openFiles) {
+                const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
+                if (!files.empty()) addXsiFiles(files, true);
+            }
+            if (ImGui::MenuItem(withIcon(ICON_FOLDER, tr(S::AddXsiMenuFolderAll))) &&
+                (platform_.pickFolders || platform_.pickFolder)) {
+                const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
+                std::size_t files = 0;
+                for (const auto& d : dirs) files += addXsiFolder(d, true);
+                if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+            }
+            ImGui::EndPopup();
+        }
     }
     ImGui::EndDisabled();
     // Right next to the buttons it applies to: decided while adding, not
@@ -2502,6 +2571,19 @@ void App::drawToolbar() {
     if (busy) {
         ImGui::SameLine();
         if (ImGui::Button(withIcon(ICON_CANCEL, tr(S::BtnCancel)))) job_.cancel.store(true);
+    }
+
+    // Settings on the right edge: shown or hidden, highlighted when shown.
+    {
+        const char* lbl = tr(S::Settings);
+        const float w = ImGui::CalcTextSize(withIcon(ICON_SETTINGS, lbl)).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - w));
+        if (showSettings_) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
+        const bool hit = iconButton(ICON_SETTINGS, kIconInfo, lbl);
+        if (showSettings_) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::SettingsToggleTip));
+        if (hit) showSettings_ = !showSettings_;
     }
 }
 
@@ -2789,16 +2871,40 @@ void drawDropLine(bool below, float k) {
 }  // namespace
 
 // Same rule as when drawing: the name or the file contains the filter text.
+bool App::rowHasIssue(const Document& d, std::size_t i) const {
+    if (!d.validated || i >= d.script.grabs.size()) return false;
+    const auto& g = d.script.grabs[i];
+    const std::string name = g.enumName ? *g.enumName : g.derivedName();
+    for (const auto& is : d.validation.issues) {
+        if (is.level == car::Issue::Level::Info) continue;
+        if ((is.line && is.line == g.line) || (!is.sequence.empty() && is.sequence == name)) return true;
+        for (const auto& a : g.additional)
+            if (!is.sequence.empty() && is.sequence == a.name) return true;
+    }
+    return false;
+}
+
 bool App::rowVisible(const Document& d, std::size_t i) const {
-    if (filter_[0] == '\0') return true;
+    if (filter_[0] == '\0' && rowFilter_ == 0) return true;
     if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
     // Split part names too, exactly like the table: rows shown only because
-    // of a part were skipped by Shift-click and drag-select.
-    return name.find(filter_) != std::string::npos || g.file.find(filter_) != std::string::npos ||
-           std::any_of(g.additional.begin(), g.additional.end(),
-                       [&](const auto& a) { return a.name.find(filter_) != std::string::npos; });
+    // of a part were skipped by Shift-click and drag-select. Case does not
+    // matter: "walk" finds BOTH_WALK1.
+    if (filter_[0] != '\0' && !containsNoCase(name, filter_) && !containsNoCase(g.file, filter_) &&
+        std::none_of(g.additional.begin(), g.additional.end(),
+                     [&](const auto& a) { return containsNoCase(a.name, filter_); }))
+        return false;
+    switch (rowFilter_) {
+        case 1: return rowHasIssue(d, i);
+        case 2: return !enums_.empty() && !enums_.contains(name);
+        case 3:
+            return effectiveSpeed(g) < 0 ||
+                   std::any_of(g.additional.begin(), g.additional.end(), [](const auto& a) { return a.frameSpeed < 0; });
+        case 4: return !g.additional.empty();
+        default: return true;
+    }
 }
 
 void App::drawSequenceTable(Document& d) {
@@ -2841,6 +2947,10 @@ void App::drawSequenceTable(Document& d) {
             ImGui::SameLine();
             if (ImGui::SmallButton(tr(S::ClearFolder))) d.outputDir.clear();
         }
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        drawOutputChips();
     }
 
     ImGui::SetNextItemWidth(220 * settings_.dpiScale);
@@ -2882,6 +2992,41 @@ void App::drawSequenceTable(Document& d) {
         }
     }
 
+    // Quick filters with their counts: the rows that need attention are one
+    // click away.
+    {
+        std::size_t counts[5] = {d.script.grabs.size(), 0, 0, 0, 0};
+        for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
+            const auto& g = d.script.grabs[i];
+            const std::string name = g.enumName ? *g.enumName : g.derivedName();
+            if (rowHasIssue(d, i)) ++counts[1];
+            if (!enums_.empty() && !enums_.contains(name)) ++counts[2];
+            if (effectiveSpeed(g) < 0 ||
+                std::any_of(g.additional.begin(), g.additional.end(), [](const auto& a) { return a.frameSpeed < 0; }))
+                ++counts[3];
+            if (!g.additional.empty()) ++counts[4];
+        }
+        const S labels[5] = {S::ChipAll, S::ChipProblems, S::ChipNoEnum, S::ChipBackwards, S::ChipParts};
+        for (int c = 0; c < 5; ++c) {
+            if (c > 0 && counts[c] == 0 && rowFilter_ != c) continue;   // nothing to filter
+            char lbl[64];
+            std::snprintf(lbl, sizeof(lbl), tr(labels[c]), counts[c]);
+            const bool on = rowFilter_ == c;
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.40f, 0.62f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.47f, 0.72f, 1.0f));
+            }
+            ImGui::PushID(c);
+            const bool hit = ImGui::SmallButton(lbl);
+            ImGui::PopID();
+            if (on) ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ChipTip));
+            if (hit) rowFilter_ = c;
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+    }
+
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                   ImGuiTableFlags_SizingStretchProp;
@@ -2915,20 +3060,14 @@ void App::drawSequenceTable(Document& d) {
     if (ImGui::TableGetHoveredColumn() == 4 && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::TipSpeedColumn));
 
-    const std::string needle = filter_;
-    const bool hasFilter = !needle.empty();
+    const bool hasFilter = filter_[0] != '\0' || rowFilter_ != 0;
     if (d.selected.size() != d.script.grabs.size()) d.syncSelection();
     const std::vector<int> targets = targetFrames(d);
 
     for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
         auto& g = d.script.grabs[i];
         const std::string name = g.enumName ? *g.enumName : g.derivedName();
-        if (!needle.empty() && name.find(needle) == std::string::npos &&
-            g.file.find(needle) == std::string::npos &&
-            std::none_of(g.additional.begin(), g.additional.end(), [&](const auto& a) {
-                return a.name.find(needle) != std::string::npos;
-            }))
-            continue;
+        if (!rowVisible(d, i)) continue;
 
         // Show comment lines above the sequence.
         //
@@ -2976,7 +3115,7 @@ void App::drawSequenceTable(Document& d) {
                     } else {
                         d.script.grabs[i].commentsBefore[ci] = neu;
                     }
-                    d.dirty = true;
+                    touch(d);
                     editCommentGrab_ = -1;
                     editCommentLine_ = -1;
                 }
@@ -3053,7 +3192,7 @@ void App::drawSequenceTable(Document& d) {
                     if (ImGui::MenuItem(tr(S::DeleteSeq))) {
                         d.script.grabs[i].commentsBefore.erase(
                             d.script.grabs[i].commentsBefore.begin() + static_cast<long>(ci));
-                        d.dirty = true;
+                        touch(d);
                     }
                     ImGui::EndPopup();
                 }
@@ -3255,7 +3394,7 @@ void App::drawSequenceTable(Document& d) {
             if (ImGui::MenuItem(tr(S::AddDivider))) {
                 d.script.grabs[i].commentsBefore.push_back(
                     "//////////////////////////////////////////");
-                d.dirty = true;
+                touch(d);
             }
             if (ImGui::MenuItem(tr(S::AddComment))) {
                 // Create an empty line and open it for editing right away -
@@ -3266,7 +3405,7 @@ void App::drawSequenceTable(Document& d) {
                 editCommentLine_ =
                     static_cast<int>(d.script.grabs[i].commentsBefore.size()) - 1;
                 editCommentBuf_[0] = '\0';
-                d.dirty = true;
+                touch(d);
             }
 
             // Framespeed for every row at once - Assimilate only had it per
@@ -3330,30 +3469,105 @@ void App::drawSequenceTable(Document& d) {
             else if (fc == -2) iconText(ICON_CANCEL, kIconBad, tr(S::EnumMissing));
             else ImGui::Text("%d", fc);
         }
-        ImGui::TableNextColumn();
-        // Without -loop the build writes 0, exactly as Carcass does (checked
-        // against Raven's animation.cfg) - shown greyed, because it is not in
-        // the script.
-        if (g.loop) ImGui::Text("%d", *g.loop);
-        else ImGui::TextDisabled("0");
-        if (!g.loop && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::TipLoopDefault));
-        ImGui::TableNextColumn();
-        {
-            // The real number, as the build writes it. Greyed when it comes
-            // from the .xsi rather than from -framespeed in the script.
-            const double sp = effectiveSpeed(g);
-            if (g.frameSpeed) ImGui::Text("%g", sp);
-            else if (sp > 0) ImGui::TextDisabled("%g", sp);
-            else ImGui::TextDisabled("...");
-            if (!g.frameSpeed && sp > 0 && ImGui::IsItemHovered()) {
-                // From the file only if the file has a rate; otherwise it is
-                // the build's default, and the tooltip used to claim the file.
-                // Both are whole numbers.
-                const int whole = static_cast<int>(sp);
-                if (xsiRateOf(g.file) > 0) ImGui::SetTooltip(tr(S::TipSpeedFromXsi), whole);
-                else ImGui::SetTooltip(tr(S::TipSpeedDefault), whole);
+        // Loop and speed: double-click edits right in the cell; Enter takes
+        // it, Escape drops it, an empty field removes the flag (default).
+        const auto cellEditor = [&](int col) {
+            ImGui::SetNextItemWidth(-1);
+            if (focusCellField_) {
+                ImGui::SetKeyboardFocusHere();
+                focusCellField_ = false;
             }
+            const bool enter = ImGui::InputText("##cell", editCellBuf_, sizeof(editCellBuf_),
+                                                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                editCellRow_ = -1;
+                return;
+            }
+            if (!enter && !(ImGui::IsItemDeactivated() && !ImGui::IsItemActive())) return;
+            std::string t = editCellBuf_;
+            t.erase(0, t.find_first_not_of(" \t"));
+            t.erase(t.find_last_not_of(" \t") + 1);
+            std::replace(t.begin(), t.end(), ',', '.');   // "16,5" works too
+            char* end = nullptr;
+            if (col == 0) {
+                if (t.empty()) g.loop.reset();
+                else {
+                    const long v = std::strtol(t.c_str(), &end, 10);
+                    if (end && *end == '\0') g.loop = static_cast<int>(v);
+                }
+            } else {
+                if (t.empty()) g.frameSpeed.reset();
+                else {
+                    const double v = std::strtod(t.c_str(), &end);
+                    if (end && *end == '\0' && v != 0.0) g.frameSpeed = v;
+                }
+            }
+            touch(d);
+            editCellRow_ = -1;
+        };
+        const auto startCellEdit = [&](int col, const std::string& text) {
+            if (!(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) return;
+            editCellRow_ = static_cast<int>(i);
+            editCellCol_ = col;
+            focusCellField_ = true;
+            std::snprintf(editCellBuf_, sizeof(editCellBuf_), "%s", text.c_str());
+        };
+        ImGui::TableNextColumn();
+        ImGui::PushID("loopcell");
+        if (editCellRow_ == static_cast<int>(i) && editCellCol_ == 0) {
+            cellEditor(0);
+        } else {
+            // Without -loop the build writes 0, exactly as Carcass does
+            // (checked against Raven's animation.cfg) - shown greyed, because
+            // it is not in the script.
+            const std::string t = g.loop ? std::to_string(*g.loop) : std::string("0");
+            if (!g.loop) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            textSelectable(t, ImGuiSelectableFlags_AllowDoubleClick);
+            if (!g.loop) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                if (g.loop) ImGui::SetTooltip("%s", tr(S::CellEditTip));
+                else ImGui::SetTooltip("%s\n%s", tr(S::TipLoopDefault), tr(S::CellEditTip));
+            }
+            startCellEdit(0, g.loop ? t : std::string());
         }
+        ImGui::PopID();
+        ImGui::TableNextColumn();
+        ImGui::PushID("speedcell");
+        if (editCellRow_ == static_cast<int>(i) && editCellCol_ == 1) {
+            cellEditor(1);
+        } else {
+            // The real number, as the build writes it. Greyed when it comes
+            // from the .xsi rather than from -framespeed in the script;
+            // violet when it runs backwards.
+            const double sp = effectiveSpeed(g);
+            char t[32];
+            if (sp != 0) std::snprintf(t, sizeof(t), "%g", sp);
+            else std::snprintf(t, sizeof(t), "...");
+            const bool pushed = !g.frameSpeed || sp < 0;
+            if (pushed)
+                ImGui::PushStyleColor(ImGuiCol_Text, sp < 0 ? ImVec4(0.78f, 0.66f, 1.0f, 1.0f)
+                                                            : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            textSelectable(t, ImGuiSelectableFlags_AllowDoubleClick);
+            if (pushed) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                if (sp < 0) {
+                    ImGui::SetTooltip("%s\n%s", tr(S::BackwardsTip), tr(S::CellEditTip));
+                } else if (!g.frameSpeed && sp > 0) {
+                    // From the file only if the file has a rate; otherwise it
+                    // is the build's default. Both are whole numbers.
+                    char tip[256];
+                    std::snprintf(tip, sizeof(tip), xsiRateOf(g.file) > 0 ? tr(S::TipSpeedFromXsi) : tr(S::TipSpeedDefault),
+                                  static_cast<int>(sp));
+                    ImGui::SetTooltip("%s\n%s", tip, tr(S::CellEditTip));
+                } else {
+                    ImGui::SetTooltip("%s", tr(S::CellEditTip));
+                }
+            }
+            char cur[32] = "";
+            if (g.frameSpeed) std::snprintf(cur, sizeof(cur), "%g", *g.frameSpeed);
+            startCellEdit(1, cur);
+        }
+        ImGui::PopID();
         ImGui::TableNextColumn();
         if (g.additional.empty()) {
             ImGui::TextDisabled("-");
@@ -3388,7 +3602,10 @@ void App::drawSequenceTable(Document& d) {
             }
         }
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(g.file.c_str());
+        // The file name is what tells the rows apart; the folder is the same
+        // for hundreds of them and only pushed the name out of the column.
+        ImGui::TextUnformatted(fs::path(g.file).filename().string().c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g.file.c_str());
         ImGui::TableNextColumn();
         if (enums_.empty()) {
             ImGui::TextDisabled("-");
@@ -3429,7 +3646,7 @@ void App::drawSequenceTable(Document& d) {
                     // the file, but garbage after the numbers.
                     if (!neu.empty() && neu.compare(0, 2, "//") != 0) neu = "// " + neu;
                     d.script.grabs[i].trailingComment = neu;
-                    d.dirty = true;
+                    touch(d);
                     editTrailGrab_ = -1;
                 }
             } else {
@@ -3536,12 +3753,12 @@ void App::drawSequenceTable(Document& d) {
                 d.script.grabs.back().commentsBefore.push_back(c);
                 d.script.trailingComments.erase(
                     d.script.trailingComments.begin() + static_cast<long>(ti));
-                d.dirty = true;
+                touch(d);
             }
             if (ImGui::MenuItem(tr(S::DeleteSeq))) {
                 d.script.trailingComments.erase(
                     d.script.trailingComments.begin() + static_cast<long>(ti));
-                d.dirty = true;
+                touch(d);
             }
             ImGui::EndPopup();
         }
@@ -3587,7 +3804,7 @@ void App::drawSequenceTable(Document& d) {
             if (pos != kAnhaengen && gleicheListe && m.vonZeile < pos) --pos;
             if (pos == kAnhaengen || pos > ziel.size()) pos = ziel.size();
             ziel.insert(ziel.begin() + static_cast<long>(pos), text);
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
     }
@@ -3641,12 +3858,12 @@ void App::drawSequenceTable(Document& d) {
 
 void App::drawTabs() {
     if (docs_.empty()) {
-        ImGui::TextDisabled("%s", tr(S::NoScriptOpen));
-        ImGui::Spacing();
-        ImGui::TextDisabled("%s", tr(S::HintOpenFolder1));
-        ImGui::TextDisabled("%s", tr(S::HintOpenFolder2));
+        drawWelcome();
         return;
     }
+    // With the settings hidden, their state in one line: what is missing is
+    // red and one click away.
+    if (!showSettings_) drawPathStatus();
 
     if (!ImGui::BeginTabBar("cars", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_TabListPopupButton |
                                         ImGuiTabBarFlags_FittingPolicyScroll))
@@ -3713,6 +3930,484 @@ void App::drawTabs() {
         ImGui::TextDisabled("%s", d.path.c_str());
         drawSequenceTable(d);
     }
+}
+
+// The page without any script: three steps, the recent files, and the hint
+// that dropping works. It replaces two lines of grey text.
+void App::drawWelcome() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float w = std::min(avail.x - 20.0f * k, 640.0f * k);
+    // Centered both ways with the block's size from the previous frame.
+    const ImVec2 size = welcomeW_ > 0.0f ? ImVec2(welcomeW_, welcomeH_) : ImVec2(w, 360.0f * k);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.0f, (avail.x - size.x) * 0.5f),
+                               ImGui::GetCursorPosY() + std::max(0.0f, (avail.y - size.y) * 0.5f)));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.45f);
+    ImGui::TextUnformatted(tr(S::WelcomeTitle));
+    ImGui::PopFont();
+    ImGui::TextDisabled("%s", tr(S::ModeBuildHint));
+    ImGui::Spacing();
+
+    const bool haveRoot = !settings_.baseDir.empty();
+    stepHeader(1, tr(S::WelcomeRoot), haveRoot);
+    if (haveRoot) {
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1), "%s", settings_.baseDir.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, tr(S::ChooseFolder)))) {
+            const std::string p = askFolder("assetroot", tr(S::AssetRoot));
+            if (!p.empty()) settings_.baseDir = p;
+        }
+    } else {
+        hintText(tr(S::WelcomeRootHint));
+        if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::ChooseFolder))) {
+            const std::string p = askFolder("assetroot", tr(S::AssetRoot));
+            if (!p.empty()) settings_.baseDir = p;
+        }
+    }
+
+    stepHeader(2, tr(S::WelcomeOpen), false);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.42f, 0.70f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.27f, 0.49f, 0.80f, 1.0f));
+    const bool openOne = iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenScript));
+    ImGui::PopStyleColor(2);
+    if (openOne) openScriptDialog();
+    ImGui::SameLine();
+    if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::OpenFolder))) openFolderDialog();
+    ImGui::SameLine();
+    if (iconButton(ICON_ADD, kIconInfo, tr(S::NewCar))) newCarDialog();
+    hintText(tr(S::WelcomeOpenHint));
+
+    stepHeader(3, tr(S::WelcomeBuild), false);
+    hintText(tr(S::WelcomeBuildHint));
+
+    if (!recent_.empty()) {
+        ImGui::Spacing();
+        ImGui::SeparatorText(tr(S::Recent));
+        std::string pick;
+        int shown = 0;
+        for (const auto& r : recent_) {
+            if (shown++ >= 8) break;
+            std::error_code ec;
+            const bool there = fs::exists(r, ec);
+            ImGui::BeginDisabled(!there);
+            ImGui::PushID(r.c_str());
+            if (ImGui::Selectable(fs::path(r).filename().string().c_str())) pick = r;
+            ImGui::PopID();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", fs::path(r).parent_path().string().c_str());
+        }
+        if (!pick.empty()) openPath(pick);
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::EndGroup();
+    welcomeW_ = ImGui::GetItemRectSize().x;
+    welcomeH_ = ImGui::GetItemRectSize().y;
+}
+
+// Paths in one line, each a chip: green with a check when set, red when it
+// is missing. A click shows the settings.
+void App::drawPathStatus() {
+    const auto chip = [&](const char* label, const std::string& value, bool ok, bool optional) {
+        const std::string text =
+            std::string(label) + ": " + (value.empty() ? std::string(optional ? tr(S::PathRefAuto) : tr(S::NotSet)) : value);
+        const bool hit = iconButton(ok ? ICON_CHECK : ICON_WARNING, ok ? kIconGood : (optional ? kIconMuted : kIconBad),
+                                    text.c_str(), true);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::PathChipTip));
+        if (hit) showSettings_ = true;
+        ImGui::SameLine();
+    };
+    chip(tr(S::PathRootChip), settings_.baseDir.empty() ? std::string() : fs::path(settings_.baseDir).filename().string(),
+         !settings_.baseDir.empty(), false);
+    chip(tr(S::PathRefChip),
+         settings_.referenceGla.empty() ? std::string() : fs::path(settings_.referenceGla).filename().string(),
+         !settings_.referenceGla.empty(), true);
+    std::string enums;
+    if (!enums_.empty()) enums = "anims.h (" + std::to_string(enums_.size()) + ")";
+    chip("Enums", enums, !enums_.empty(), true);
+    ImGui::NewLine();
+}
+
+// What a build writes, as toggles next to the output folder - the same
+// switches as in the settings, where they are needed.
+void App::drawOutputChips() {
+    // Not enough room left in the line (settings shown, narrow window): the
+    // chips get a line of their own instead of being cut off.
+    {
+        const ImGuiStyle& st = ImGui::GetStyle();
+        float need = ImGui::CalcTextSize(tr(S::WritesLabel)).x;
+        for (const char* l : {"GLA", "animation.cfg", ".frames", "_info.txt", "GLM", ".skin"})
+            need += ImGui::CalcTextSize(l).x + st.FramePadding.x * 2.0f + st.ItemSpacing.x;
+        if (ImGui::GetContentRegionAvail().x < need) ImGui::NewLine();
+    }
+    ImGui::TextDisabled("%s", tr(S::WritesLabel));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OutputChipTip));
+    const auto chip = [&](const char* label, bool& on, bool enabled) {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!enabled);
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.40f, 0.62f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.47f, 0.72f, 1.0f));
+        }
+        const bool hit = ImGui::SmallButton(label);
+        if (on) ImGui::PopStyleColor(2);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OutputChipTip));
+        if (hit) on = !on;
+    };
+    chip("GLA", settings_.writeGla, true);
+    chip("animation.cfg", settings_.writeCfg, true);
+    chip(".frames", settings_.writeFrames, true);
+    chip("_info.txt", settings_.writeInfo, true);
+    chip("GLM", settings_.writeMesh, true);
+    chip(".skin", settings_.writeSkin, settings_.writeMesh);
+}
+
+void App::toast(LogLine::Kind kind, std::string text, std::string actionLabel, std::function<void()> action) {
+    Toast t;
+    t.kind = kind;
+    t.text = std::move(text);
+    t.actionLabel = std::move(actionLabel);
+    t.action = std::move(action);
+    t.born = nowSeconds();
+    t.life = kind == LogLine::Kind::Bad ? 10.0 : 5.0;
+    toasts_.push_back(std::move(t));
+    // At most four at a time: the oldest goes.
+    while (toasts_.size() > 4) toasts_.erase(toasts_.begin());
+}
+
+void App::drawToasts() {
+    const double now = nowSeconds();
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    float y = vp->WorkPos.y + vp->WorkSize.y - ImGui::GetFrameHeightWithSpacing() * 1.6f;
+    const float x = vp->WorkPos.x + vp->WorkSize.x - 16.0f * k;
+    for (std::size_t i = toasts_.size(); i-- > 0;) {
+        Toast& t = toasts_[i];
+        const double age = now - t.born;
+        const float alpha = age > t.life - 0.6 ? static_cast<float>(std::max(0.0, (t.life - age) / 0.6)) : 1.0f;
+        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+        ImGui::SetNextWindowBgAlpha(0.96f * alpha);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, std::max(0.05f, alpha));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * k);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * k, 10.0f * k));
+        char id[32];
+        std::snprintf(id, sizeof(id), "##toast%zu", i);
+        bool close = false;
+        bool hovered = false;
+        if (ImGui::Begin(id, nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove)) {
+            const IconColor col = t.kind == LogLine::Kind::Bad    ? kIconBad
+                                  : t.kind == LogLine::Kind::Warn ? kIconWarn
+                                  : t.kind == LogLine::Kind::Good ? kIconGood
+                                                                  : kIconInfo;
+            const char* icon = t.kind == LogLine::Kind::Bad    ? ICON_ERROR
+                               : t.kind == LogLine::Kind::Warn ? ICON_WARNING
+                               : t.kind == LogLine::Kind::Good ? ICON_CHECK
+                                                               : ICON_INFO;
+            iconText(icon, col, t.text.c_str());
+            if (!t.actionLabel.empty()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton(t.actionLabel.c_str())) {
+                    if (t.action) t.action();
+                    close = true;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(iconsAvailable() ? ICON_CANCEL : "x")) close = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ToastDismiss));
+            hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+            y -= ImGui::GetWindowHeight() + 8.0f * k;
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+        // Hovering keeps it; otherwise it goes after its time.
+        if (hovered) t.born = now - std::min(age, 1.0);
+        if (close || (!hovered && age > t.life)) toasts_.erase(toasts_.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+}
+
+// The bottom panel: issues and log. Folded it is one line - the newest
+// message and the issue count - and it opens by itself on an error.
+void App::drawBottomPanel(float height) {
+    bool& open = bottomOpen_[static_cast<int>(mode_)];
+    ImGui::BeginChild("bottom", ImVec2(0, height));
+    if (ImGui::ArrowButton("##bottomtoggle", open ? ImGuiDir_Down : ImGuiDir_Right)) open = !open;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::BottomToggleTip));
+    ImGui::SameLine();
+    if (!open) {
+        if (mode_ == Mode::Build && active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+            const Document& d = docs_[static_cast<std::size_t>(active_)];
+            if (d.validated && (d.validation.errors || d.validation.warnings)) {
+                char b[96];
+                std::snprintf(b, sizeof(b), tr(S::BottomIssues), static_cast<int>(d.validation.errors),
+                              static_cast<int>(d.validation.warnings));
+                if (iconButton(d.validation.errors ? ICON_ERROR : ICON_WARNING, d.validation.errors ? kIconBad : kIconWarn, b,
+                               true))
+                    open = true;
+                ImGui::SameLine();
+            }
+        }
+        LogLine last{LogLine::Kind::Info, std::string()};
+        {
+            std::lock_guard<std::mutex> lock(logMutex_);
+            if (!log_.empty()) last = log_.back();
+        }
+        ImGui::AlignTextToFramePadding();
+        const ImVec4 c = last.kind == LogLine::Kind::Bad    ? ImVec4(1.0f, 0.5f, 0.5f, 1)
+                         : last.kind == LogLine::Kind::Warn ? ImVec4(1.0f, 0.8f, 0.35f, 1)
+                         : last.kind == LogLine::Kind::Good ? ImVec4(0.45f, 0.85f, 0.55f, 1)
+                                                            : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        ImGui::TextColored(c, "%s", last.text.c_str());
+        if (ImGui::IsItemClicked()) open = true;
+        ImGui::EndChild();
+        return;
+    }
+    if (ImGui::BeginTabBar("bottomtabs")) {
+        // The issue list belongs to the scripts; in the other two modes
+        // it would only show the build mode's state.
+        if (mode_ == Mode::Build && ImGui::BeginTabItem(tr(S::TabIssues))) {
+            drawIssues();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem(tr(S::TabLog))) {
+            drawLog();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::EndChild();
+}
+
+void App::onBuildFinished() {
+    const double secs = nowSeconds() - buildStarted_;
+    std::size_t bad = 0;
+    {
+        std::lock_guard<std::mutex> lock(logMutex_);
+        bad = badLogCount_ - badAtBuildStart_;
+    }
+    if (job_.cancel.load()) {
+        toast(LogLine::Kind::Warn, tr(S::ToastCancelled));
+    } else if (bad > 0) {
+        toast(LogLine::Kind::Bad, trf(S::ToastBuildErrors, bad), tr(S::ToastShowLog),
+              [this] { bottomOpen_[static_cast<int>(Mode::Build)] = true; });
+    } else {
+        char m[160];
+        std::snprintf(m, sizeof(m), tr(S::ToastBuilt), buildCount_, secs);
+        const std::string dir = buildFirstOut_;
+        toast(LogLine::Kind::Good, m, platform_.revealInExplorer && !dir.empty() ? tr(S::ToastOpenFolder) : "",
+              [this, dir] {
+                  if (platform_.revealInExplorer) platform_.revealInExplorer(dir);
+              });
+    }
+}
+
+// --- Undo ----------------------------------------------------------------------
+//
+// Every change bumps the script's revision (touch). After each frame the
+// state before the change goes onto the undo stack; typing in a field within
+// a second counts as one step, not one per letter.
+void App::trackUndo() {
+    const double now = nowSeconds();
+    for (auto& d : docs_) {
+        auto& u = undo_[d.path];
+        if (!u.baseSet) {
+            u.base = d.script;
+            u.baseRev = d.rev;
+            u.baseSet = true;
+            continue;
+        }
+        if (d.rev == u.baseRev) continue;
+        const bool typing = ImGui::IsAnyItemActive() && now - u.lastPush < 1.0 && !u.undo.empty();
+        if (!typing && car::writeScript(u.base) != car::writeScript(d.script)) {
+            u.undo.push_back(std::move(u.base));
+            if (u.undo.size() > 100) u.undo.erase(u.undo.begin());
+            u.redo.clear();
+            u.lastPush = now;
+        }
+        u.base = d.script;
+        u.baseRev = d.rev;
+    }
+}
+
+bool App::canUndo() const {
+    if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return false;
+    const auto it = undo_.find(docs_[static_cast<std::size_t>(active_)].path);
+    return it != undo_.end() && !it->second.undo.empty();
+}
+
+bool App::canRedo() const {
+    if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return false;
+    const auto it = undo_.find(docs_[static_cast<std::size_t>(active_)].path);
+    return it != undo_.end() && !it->second.redo.empty();
+}
+
+bool App::undo() {
+    if (!canUndo()) return false;
+    Document& d = docs_[static_cast<std::size_t>(active_)];
+    auto& u = undo_[d.path];
+    u.redo.push_back(d.script);
+    d.script = std::move(u.undo.back());
+    u.undo.pop_back();
+    touch(d);
+    d.syncSelection();
+    u.base = d.script;
+    u.baseRev = d.rev;
+    editCellRow_ = -1;
+    log(LogLine::Kind::Info, trf(S::LogUndone, u.undo.size()));
+    return true;
+}
+
+bool App::redo() {
+    if (!canRedo()) return false;
+    Document& d = docs_[static_cast<std::size_t>(active_)];
+    auto& u = undo_[d.path];
+    u.undo.push_back(d.script);
+    d.script = std::move(u.redo.back());
+    u.redo.pop_back();
+    touch(d);
+    d.syncSelection();
+    u.base = d.script;
+    u.baseRev = d.rev;
+    editCellRow_ = -1;
+    log(LogLine::Kind::Info, tr(S::LogRedone));
+    return true;
+}
+
+float App::buildProgress() const {
+    if (!job_.running.load()) return -1.0f;
+    const std::size_t total = job_.total.load();
+    return total ? static_cast<float>(job_.done.load()) / static_cast<float>(total) : 0.0f;
+}
+
+// --- Command palette (Ctrl+K) ----------------------------------------------------
+//
+// Type a few letters, Enter: every action, every sequence of the open script
+// and every tab, without knowing where its button lives.
+void App::drawPalette() {
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    if (paletteRequest_) {
+        paletteRequest_ = false;
+        paletteBuf_[0] = '\0';
+        paletteSel_ = 0;
+        paletteFocus_ = true;
+        ImGui::OpenPopup("###palette");
+    }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 70.0f * k), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(640.0f * k, vp->WorkSize.x - 40.0f * k), 0.0f));
+    if (!ImGui::BeginPopup("###palette")) return;
+
+    struct Entry {
+        std::string           label;
+        std::string           keys;
+        std::function<void()> run;
+    };
+    std::vector<Entry> all;
+    const bool have = !docs_.empty();
+    const bool busy = buildRunning();
+    const auto add = [&](std::string label, std::string keys, std::function<void()> run, bool enabled = true) {
+        if (enabled) all.push_back({std::move(label), std::move(keys), std::move(run)});
+    };
+    add(tr(S::BtnBuild), "F5", [this] { startBuild(false); }, have && !busy);
+    add(tr(S::BtnBuildAll), "Shift+F5", [this] { startBuild(true); }, have && !busy);
+    add(tr(S::BtnValidate), "F7", [this] { validateAll(); }, have);
+    add(tr(S::BtnSave), "Ctrl+S", [this] { saveDocument(static_cast<std::size_t>(active_)); }, have);
+    add(tr(S::SaveAll), "Ctrl+Shift+S", [this] { saveAllDocuments(); }, have);
+    add(tr(S::Undo), "Ctrl+Z", [this] { undo(); }, canUndo());
+    add(tr(S::Redo), "Ctrl+Y", [this] { redo(); }, canRedo());
+    add(tr(S::OpenScript), "Ctrl+O", [this] { openScriptDialog(); });
+    add(tr(S::OpenFolder), "Ctrl+Shift+O", [this] { openFolderDialog(); });
+    add(tr(S::NewCar), "Ctrl+N", [this] { newCarDialog(); });
+    add(std::string("XSI: ") + tr(S::AddXsiMenuFiles), "", [this] {
+        const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
+        if (!files.empty()) addXsiFiles(files, false);
+    }, have);
+    add(std::string("XSI: ") + tr(S::AddXsiMenuFolder), "", [this] {
+        for (const auto& dir : askFolders("xsifolder", tr(S::DlgTitleXsiFolder))) addXsiFolder(dir, false);
+    }, have);
+    add(tr(S::Settings), "", [this] { showSettings_ = !showSettings_; mode_ = Mode::Build; });
+    add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModeBuild), "", [this] { mode_ = Mode::Build; });
+    add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModeExtract), "", [this] { mode_ = Mode::Extract; });
+    add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModePreview), "", [this] { mode_ = Mode::Preview; });
+    add(tr(S::OpenGla), "", [this] { openGlaDialog(); });
+    add(tr(S::PvLoadGlm), "", [this] {
+        const auto f = askFiles("previewglm", tr(S::DlgTitleGlm), "GLM (*.glm)\0*.glm\0Alle\0*.*\0", false);
+        if (!f.empty() && loadPreviewGlm(f.front())) mode_ = Mode::Preview;
+    });
+    add(settings_.darkMode ? tr(S::Light) : tr(S::Dark), "", [this] {
+        settings_.darkMode = !settings_.darkMode;
+        applyStyle();
+    });
+    for (std::size_t t = 0; t < docs_.size(); ++t)
+        add(std::string(tr(S::PaletteTab)) + ": " + docs_[t].title, "", [this, t] {
+            mode_ = Mode::Build;
+            activate(static_cast<int>(t));
+        });
+    // Sequences only once something is typed: 2000 rows are no menu.
+    if (paletteBuf_[0] && active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+        const auto& d = docs_[static_cast<std::size_t>(active_)];
+        for (std::size_t r = 0; r < d.script.grabs.size(); ++r) {
+            const auto& g = d.script.grabs[r];
+            const std::string name = g.enumName ? *g.enumName : g.derivedName();
+            add(std::string(tr(S::PaletteSeq)) + ": " + name, "", [this, r] {
+                mode_ = Mode::Build;
+                filter_[0] = '\0';
+                rowFilter_ = 0;
+                jumpToRow_ = static_cast<int>(r);
+            });
+        }
+    }
+
+    // Every word typed must appear (in any case).
+    std::vector<std::string> words;
+    {
+        std::istringstream in(paletteBuf_);
+        for (std::string w; in >> w;) words.push_back(w);
+    }
+    std::vector<const Entry*> hits;
+    for (const auto& e : all) {
+        bool ok = true;
+        for (const auto& w : words) ok = ok && containsNoCase(e.label, w.c_str());
+        if (ok) hits.push_back(&e);
+    }
+    if (paletteSel_ >= static_cast<int>(hits.size())) paletteSel_ = std::max(0, static_cast<int>(hits.size()) - 1);
+
+    ImGui::SetNextItemWidth(-1);
+    if (paletteFocus_) {
+        ImGui::SetKeyboardFocusHere();
+        paletteFocus_ = false;
+    }
+    if (ImGui::InputTextWithHint("##q", tr(S::PaletteHint), paletteBuf_, sizeof(paletteBuf_))) paletteSel_ = 0;
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) paletteSel_ = std::min(paletteSel_ + 1, static_cast<int>(hits.size()) - 1);
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) paletteSel_ = std::max(paletteSel_ - 1, 0);
+    const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
+
+    std::function<void()> chosen;
+    const int shown = std::min(static_cast<int>(hits.size()), 12);
+    if (hits.empty()) ImGui::TextDisabled("%s", tr(S::PaletteNone));
+    ImGui::BeginChild("##palresults", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(std::max(shown, 1)) + 4.0f * k));
+    for (int h = 0; h < static_cast<int>(hits.size()) && h < 200; ++h) {
+        ImGui::PushID(h);
+        if (ImGui::Selectable(hits[static_cast<std::size_t>(h)]->label.c_str(), h == paletteSel_)) chosen = hits[static_cast<std::size_t>(h)]->run;
+        if (h == paletteSel_ && (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow)))
+            ImGui::SetScrollHereY();
+        if (!hits[static_cast<std::size_t>(h)]->keys.empty()) {
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(hits[static_cast<std::size_t>(h)]->keys.c_str()).x);
+            ImGui::TextDisabled("%s", hits[static_cast<std::size_t>(h)]->keys.c_str());
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    if (enter && !hits.empty()) chosen = hits[static_cast<std::size_t>(paletteSel_)]->run;
+    if (chosen) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    // Run after closing: an action may open a dialog of its own.
+    if (chosen) chosen();
 }
 
 // Skeleton preview.
@@ -4223,35 +4918,81 @@ void App::openGlaDialog() {
 
 // The page for "no GLA open yet", centered: what this mode does, one big
 // button, and the hint that dropping a file works too.
+// Text wrapped at word boundaries, every line centered between x0 and
+// x0 + w (ImGui's own wrapping only aligns left).
+static void textCenteredWrapped(const char* text, float x0, float w) {
+    std::vector<std::string> lines;
+    std::string line, word;
+    const auto width = [](const std::string& t) { return ImGui::CalcTextSize(t.c_str()).x; };
+    const auto flushWord = [&] {
+        if (word.empty()) return;
+        const std::string cand = line.empty() ? word : line + " " + word;
+        if (!line.empty() && width(cand) > w) {
+            lines.push_back(line);
+            line = word;
+        } else {
+            line = cand;
+        }
+        word.clear();
+    };
+    for (const char* c = text; *c; ++c) {
+        if (*c == ' ') flushWord();
+        else if (*c == '\n') {
+            flushWord();
+            lines.push_back(line);
+            line.clear();
+        } else {
+            word += *c;
+        }
+    }
+    flushWord();
+    if (!line.empty()) lines.push_back(line);
+    for (const auto& l : lines) {
+        ImGui::SetCursorPosX(x0 + std::max(0.0f, (w - width(l)) * 0.5f));
+        ImGui::TextUnformatted(l.c_str());
+    }
+}
+
+// The page for "no GLA open yet", centered: what this mode does, one big
+// button, and the hint that dropping a file works too.
 void App::drawGlaEmptyState(bool forPreview) {
     const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float w = std::min(avail.x - 20.0f * k, 520.0f * k);
-    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.0f, (avail.x - w) * 0.5f),
-                               ImGui::GetCursorPosY() + std::max(0.0f, avail.y * 0.25f)));
-    ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    const float w = std::min(avail.x - 20.0f * k, 560.0f * k);
+    const float x0 = ImGui::GetCursorPosX() + std::max(0.0f, (avail.x - w) * 0.5f);
+    // Vertically centered with the block's height from the previous frame
+    // (the first frame uses an estimate).
+    const float startY = ImGui::GetCursorPosY();
+    const float blockH = emptyStateHeight_ > 0.0f ? emptyStateHeight_ : 180.0f * k;
+    ImGui::SetCursorPosY(startY + std::max(0.0f, (avail.y - blockH) * 0.5f));
+    const float blockTop = ImGui::GetCursorPosY();
+
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.35f);
-    ImGui::TextUnformatted(tr(S::NoGlaOpen));
+    textCenteredWrapped(tr(S::NoGlaOpen), x0, w);
     ImGui::PopFont();
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", forPreview ? tr(S::PvEmptyHint) : tr(S::NoGlaHint));
+    textCenteredWrapped(forPreview ? tr(S::PvEmptyHint) : tr(S::NoGlaHint), x0, w);
     ImGui::PopStyleColor();
     ImGui::Spacing();
     ImGui::Spacing();
+    const float bw = 240.0f * k;
+    ImGui::SetCursorPosX(x0 + std::max(0.0f, (w - bw) * 0.5f));
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.42f, 0.70f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.27f, 0.49f, 0.80f, 1.0f));
-    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenGla), false, 220.0f * k)) openGlaDialog();
+    if (iconButton(ICON_OPEN_FILE, kIconAccent, tr(S::OpenGla), false, bw)) openGlaDialog();
     ImGui::PopStyleColor(2);
     ImGui::Spacing();
-    ImGui::TextDisabled("%s", tr(S::DropGlaHint));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    textCenteredWrapped(tr(S::DropGlaHint), x0, w);
+    ImGui::PopStyleColor();
     if (!extract_.error.empty()) {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%s", extract_.error.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.45f, 0.45f, 1));
+        textCenteredWrapped(extract_.error.c_str(), x0, w);
+        ImGui::PopStyleColor();
     }
-    ImGui::PopTextWrapPos();
-    ImGui::EndGroup();
+    emptyStateHeight_ = ImGui::GetCursorPosY() - blockTop;
 }
 
 // GLA -> XSI as four numbered steps on the left (open, choose, target,
@@ -4859,7 +5600,7 @@ bool App::applyModelEdit(std::size_t docIndex, const ModelEdit& e) {
 
     const bool changed = car::writeScript(d.script) != before;
     if (changed) {
-        d.dirty = true;
+        touch(d);
         d.validated = false;
         log(LogLine::Kind::Info, trf(S::LogModelChanged, d.title.c_str()));
     }
@@ -5133,7 +5874,7 @@ void App::drawSequenceDialog(Document& d) {
                     if (!ec && !r.empty() && r.string().rfind("..", 0) != 0) rel = r.generic_string();
                 }
                 g.file = rel;
-                d.dirty = true;
+                touch(d);
                 d.validated = false;
             }
         }
@@ -5156,7 +5897,7 @@ void App::drawSequenceDialog(Document& d) {
         ImGui::SameLine();
         if (ImGui::Button((std::string(tr(S::DlgClear)) + "##m").c_str())) {
             g.enumName.reset();
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
         ImGui::SameLine();
@@ -5165,7 +5906,7 @@ void App::drawSequenceDialog(Document& d) {
         std::string picked = name;
         if (drawEnumChooser("enum_master", picked, &d)) {
             g.enumName = picked;
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
 
@@ -5178,7 +5919,7 @@ void App::drawSequenceDialog(Document& d) {
         // to show -1 - a value that was then not built.
         int loop = g.loop.value_or(0);
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
-        if (ImGui::InputInt(tr(S::DlgLoopFrame), &loop)) { g.loop = loop; d.dirty = true; }
+        if (ImGui::InputInt(tr(S::DlgLoopFrame), &loop)) { g.loop = loop; touch(d); }
 
         // The real speed, as it is built - not 0 for "from the file".
         const int fileRate = xsiRateOf(g.file);
@@ -5189,7 +5930,7 @@ void App::drawSequenceDialog(Document& d) {
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
         if (ImGui::InputDouble(tr(S::DlgFrameSpeed), &speed, 1.0, 10.0, "%g")) {
             g.frameSpeed = speed;
-            d.dirty = true;
+            touch(d);
         }
         ImGui::SameLine();
         if (g.frameSpeed) {
@@ -5198,7 +5939,7 @@ void App::drawSequenceDialog(Document& d) {
             std::snprintf(lbl, sizeof(lbl), tr(S::SpeedResetToXsi), back);
             if (ImGui::SmallButton(lbl)) {
                 g.frameSpeed.reset();
-                d.dirty = true;
+                touch(d);
             }
         } else {
             ImGui::TextDisabled("%s", fileRate > 0 ? tr(S::SpeedFromXsi) : tr(S::SpeedDefault));
@@ -5235,7 +5976,7 @@ void App::drawSequenceDialog(Document& d) {
                 enumFilter_[0] = '\0';
                 ImGui::OpenPopup("enum_add");
             }
-            if (drawEnumChooser("enum_add", ad.name, &d)) { d.dirty = true; d.validated = false; }
+            if (drawEnumChooser("enum_add", ad.name, &d)) { touch(d); d.validated = false; }
             if (!enums_.empty() && !enums_.contains(ad.name)) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "!");
@@ -5244,14 +5985,14 @@ void App::drawSequenceDialog(Document& d) {
             const auto intCol = [&](const char* id, int& v) {
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1);
-                if (ImGui::InputInt(id, &v, 0, 0)) { d.dirty = true; d.validated = false; }
+                if (ImGui::InputInt(id, &v, 0, 0)) { touch(d); d.validated = false; }
             };
             intCol("##s", ad.targetOffset);
             intCol("##c", ad.frameCount);
             intCol("##l", ad.loopFrame);
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::InputDouble("##p", &ad.frameSpeed, 0, 0, "%g")) { d.dirty = true; d.validated = false; }
+            if (ImGui::InputDouble("##p", &ad.frameSpeed, 0, 0, "%g")) { touch(d); d.validated = false; }
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton(iconsAvailable() ? ICON_DELETE : "X")) remove = static_cast<int>(a);
@@ -5261,7 +6002,7 @@ void App::drawSequenceDialog(Document& d) {
 
         if (remove >= 0) {
             g.additional.erase(g.additional.begin() + remove);
-            d.dirty = true;
+            touch(d);
             d.validated = false;
         }
     }
@@ -5298,12 +6039,12 @@ void App::drawSequenceDialog(Document& d) {
             // serve no purpose in the cfg.
             while (!g.commentsBefore.empty() && g.commentsBefore.back().empty())
                 g.commentsBefore.pop_back();
-            d.dirty = true;
+            touch(d);
         }
     }
     if (ImGui::Button(tr(S::AddDivider))) {
         g.commentsBefore.push_back("//////////////////////////////////////////");
-        d.dirty = true;
+        touch(d);
     }
     ImGui::Separator();
 
@@ -5315,7 +6056,7 @@ void App::drawSequenceDialog(Document& d) {
         // The master's real speed (it used to be a fixed 20).
         a.frameSpeed = effectiveSpeed(g) != 0 ? effectiveSpeed(g) : car::BuildOptions{}.defaultFrameSpeed;
         g.additional.push_back(std::move(a));
-        d.dirty = true;
+        touch(d);
         d.validated = false;
     }
     ImGui::SameLine();
@@ -5506,6 +6247,9 @@ void App::handleShortcuts() {
         requestClose({static_cast<std::size_t>(active_)});
     if (!ctrl && pressed(ImGuiKey_F5) && have && !buildRunning()) startBuild(shift);
     if (!ctrl && !shift && pressed(ImGuiKey_F7) && have) validateAll();
+    if (ctrl && !shift && pressed(ImGuiKey_Z)) undo();
+    if (ctrl && (pressed(ImGuiKey_Y) || (shift && pressed(ImGuiKey_Z)))) redo();
+    if (ctrl && pressed(ImGuiKey_K)) paletteRequest_ = true;
 }
 
 void App::draw() {
@@ -5547,8 +6291,22 @@ void App::draw() {
         const float statusH = ImGui::GetFrameHeightWithSpacing();
         const float avail = ImGui::GetContentRegionAvail().y;
 
-        float bottomH = avail * 0.28f;
-        bottomH = std::clamp(bottomH, 150.0f * k, 340.0f * k);
+        // An error line opens the panel by itself - nobody has to look for it.
+        {
+            std::size_t bad = 0;
+            {
+                std::lock_guard<std::mutex> lock(logMutex_);
+                bad = badLogCount_;
+            }
+            if (bad != badLogSeen_) {
+                badLogSeen_ = bad;
+                bottomOpen_[static_cast<int>(mode_)] = true;
+            }
+        }
+        const bool bottomOpen = bottomOpen_[static_cast<int>(mode_)];
+        float bottomH = std::clamp(avail * 0.28f, 150.0f * k, 340.0f * k);
+        // Folded: exactly one row (the child has no padding of its own).
+        if (!bottomOpen) bottomH = ImGui::GetFrameHeight() + 2.0f * k;
         const float mainH = std::max(120.0f * k, avail - bottomH - statusH);
 
         ImGui::BeginChild("upper", ImVec2(0, mainH));
@@ -5574,21 +6332,7 @@ void App::draw() {
         }
         ImGui::EndChild();
 
-        ImGui::BeginChild("bottom", ImVec2(0, bottomH));
-        if (ImGui::BeginTabBar("bottomtabs")) {
-            // The issue list belongs to the scripts; in the other two modes
-            // it would only show the build mode's state.
-            if (mode_ == Mode::Build && ImGui::BeginTabItem(tr(S::TabIssues))) {
-                drawIssues();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem(tr(S::TabLog))) {
-                drawLog();
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-        ImGui::EndChild();
+        drawBottomPanel(bottomH);
 
         drawStatusBar();
 
@@ -5663,8 +6407,31 @@ void App::draw() {
         drawOverwriteDialog();
         drawSpeedDialog();
         drawModelDialog();
+        drawPalette();
     }
     ImGui::End();
+
+    // A build that just ended gets its toast.
+    const bool building = buildRunning();
+    if (wasBuilding_ && !building) onBuildFinished();
+    wasBuilding_ = building;
+
+    // Validate the active script shortly after the last edit, in the
+    // background of the user's attention: missing files and unknown names
+    // show up while working, not only after pressing "Validate".
+    if (mode_ == Mode::Build && active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+        Document& d = docs_[static_cast<std::size_t>(active_)];
+        const double now = nowSeconds();
+        if (d.rev != lastRevSeen_) {
+            lastRevSeen_ = d.rev;
+            lastEditSeen_ = now;
+        }
+        if (!d.validated && d.loadError.empty() && now - lastEditSeen_ > 0.8 && !ImGui::IsAnyItemActive())
+            validateDocument(static_cast<std::size_t>(active_), true);
+    }
+
+    trackUndo();
+    drawToasts();
 }
 
 }  // namespace g2::gui

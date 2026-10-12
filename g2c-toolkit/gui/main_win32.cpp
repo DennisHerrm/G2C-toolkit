@@ -21,6 +21,7 @@
 #include <shlobj.h>
 #include <tchar.h>
 #include <windows.h>
+#include <shobjidl.h>
 #include <winhttp.h>
 
 #include <filesystem>
@@ -1200,7 +1201,7 @@ int cmdUpdate(const Args& args) {
         std::printf("%s\n", g2::gui::describeUpdateError(st).c_str());
         return 1;
     }
-    std::printf("Verfuegbar  : %s\n", upd::displayName(st.release, channel).c_str());
+    std::printf("Verfügbar  : %s\n", upd::displayName(st.release, channel).c_str());
     if (st.phase == upd::Phase::UpToDate) {
         std::printf("g2c ist aktuell.\n");
         return 0;
@@ -1229,7 +1230,7 @@ int cmdUpdate(const Args& args) {
         return 1;
     }
     if (!st.detail.empty()) std::printf("Hinweis: %s\n", st.detail.c_str());
-    std::printf("Installiert. Der naechste Start verwendet %s.\n",
+    std::printf("Installiert. Der nächste Start verwendet %s.\n",
                 upd::displayName(st.release, channel).c_str());
     return 0;
 }
@@ -1338,7 +1339,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     const int  h = MulDiv(950, static_cast<int>(dpiRaw), 96);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"g2c \x2014 Ghoul2 Toolkit", WS_OVERLAPPEDWINDOW,
                               100, 100, w, h, nullptr, nullptr, inst, nullptr);
-    startupLog("DirectX-Geraet erzeugen");
+    startupLog("DirectX-Gerät erzeugen");
     if (!createDevice(hwnd)) {
         destroyDevice();
         UnregisterClassW(wc.lpszClassName, inst);
@@ -1353,12 +1354,12 @@ int wWinMainGuarded(HINSTANCE inst) {
                      L"g2c konnte die Grafikausgabe nicht starten.\n\n"
                      L"Fehlercode: 0x%08X\n\n"
                      L"Weder die Grafikkarte noch der Software-Rasterisierer (WARP) "
-                     L"liessen sich verwenden.\n\n"
-                     L"Moegliche Ursachen:\n"
+                     L"ließen sich verwenden.\n\n"
+                     L"Mögliche Ursachen:\n"
                      L"  - Grafiktreiber fehlt oder ist veraltet\n"
-                     L"  - Windows-Fassung aelter als 10\n"
+                     L"  - Windows-Fassung älter als 10\n"
                      L"  - Remotedesktop ohne Grafikweiterleitung\n\n"
-                     L"Die Kommandozeile funktioniert unabhaengig davon:\n"
+                     L"Die Kommandozeile funktioniert unabhängig davon:\n"
                      L"  g2c build ... / g2c export ... / g2c about\n\n"
                      L"Protokoll: %s",
                      static_cast<unsigned>(g_deviceError), startupLogPath().c_str());
@@ -1393,7 +1394,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     // someone else's machine - a damaged or replaced segoeui.ttf can't be
     // ruled out. This switch skips them entirely.
     if (args.hasNoFont()) {
-        startupLog("Schriften ueberspringen (-nofont)");
+        startupLog("Schriften überspringen (-nofont)");
         io.Fonts->Clear();
         io.Fonts->AddFontDefault();
         io.Fonts->Build();
@@ -1574,6 +1575,33 @@ int wWinMainGuarded(HINSTANCE inst) {
 
         app.draw();
 
+        // Build progress on the taskbar button, visible with the window in
+        // the background. Only changes are sent.
+        {
+            static ITaskbarList3* taskbar = nullptr;
+            static bool tried = false;
+            static int lastShown = -2;
+            if (!tried) {
+                tried = true;
+                if (FAILED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&taskbar))) ||
+                    !taskbar || FAILED(taskbar->HrInit())) {
+                    if (taskbar) taskbar->Release();
+                    taskbar = nullptr;
+                }
+            }
+            const float p = app.buildProgress();
+            const int now = p < 0.0f ? -1 : static_cast<int>(p * 1000.0f);
+            if (taskbar && now != lastShown) {
+                if (now < 0) {
+                    taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
+                } else {
+                    taskbar->SetProgressState(hwnd, TBPF_NORMAL);
+                    taskbar->SetProgressValue(hwnd, static_cast<ULONGLONG>(now), 1000);
+                }
+                lastShown = now;
+            }
+        }
+
         // Window close button with unsaved changes: the UI has asked, and
         // the answer was "save" or "discard".
         if (app.quitApproved()) running = false;
@@ -1600,7 +1628,7 @@ int wWinMainGuarded(HINSTANCE inst) {
         // that EVERY further call fails - without a check the user sees a
         // white window and then a crash.
         if (firstFrame) {
-            startupLog("erstes Bild gezeichnet - ab hier laeuft alles");
+            startupLog("erstes Bild gezeichnet - ab hier läuft alles");
             firstFrame = false;
         }
         const HRESULT pr = g_swapChain->Present(1, 0);   // vsync
@@ -1611,11 +1639,11 @@ int wWinMainGuarded(HINSTANCE inst) {
                                                               : pr;
             wchar_t text[512];
             _snwprintf_s(text, _TRUNCATE,
-                         L"Der Grafiktreiber wurde zurueckgesetzt und g2c muss beendet "
+                         L"Der Grafiktreiber wurde zurückgesetzt und g2c muss beendet "
                          L"werden.\n\nCode: 0x%08X\n\n"
-                         L"Ungespeicherte Aenderungen an den Skripten gehen verloren.\n"
-                         L"Haeufigste Ursache ist ein Treiberupdate im laufenden Betrieb "
-                         L"oder ein haengender Grafiktreiber.",
+                         L"Ungespeicherte Änderungen an den Skripten gehen verloren.\n"
+                         L"Häufigste Ursache ist ein Treiberupdate im laufenden Betrieb "
+                         L"oder ein hängender Grafiktreiber.",
                          static_cast<unsigned>(reason));
             MessageBoxW(hwnd, text, L"g2c", MB_OK | MB_ICONERROR);
             break;

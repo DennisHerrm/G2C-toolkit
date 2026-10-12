@@ -89,7 +89,7 @@ std::vector<std::string> Mesh::validate() const {
         if (lods[i].surfaces.size() != n)
             errs.push_back("LOD " + std::to_string(i) + " hat " +
                            std::to_string(lods[i].surfaces.size()) + " Surfaces, LOD 0 hat " +
-                           std::to_string(n) + " — alle LODs muessen gleich viele haben");
+                           std::to_string(n) + " — alle LODs müssen gleich viele haben");
     }
 
     for (std::size_t l = 0; l < lods.size(); ++l) {
@@ -101,7 +101,7 @@ std::vector<std::string> Mesh::validate() const {
                     if (t.indexes[k] < 0 || t.indexes[k] >= nv) {
                         errs.push_back("LOD " + std::to_string(l) + " Surface \"" + surf.name +
                                        "\": Dreiecksindex " + std::to_string(t.indexes[k]) +
-                                       " ausserhalb 0.." + std::to_string(nv - 1));
+                                       " außerhalb 0.." + std::to_string(nv - 1));
                         goto nextSurface;
                     }
                 }
@@ -116,7 +116,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
     const auto errs = mesh.validate();
     if (!errs.empty()) {
         std::ostringstream os;
-        os << "Mesh ist ungueltig:";
+        os << "Mesh ist ungültig:";
         for (const auto& e : errs) os << "\n  - " << e;
         throw std::runtime_error(os.str());
     }
@@ -140,7 +140,7 @@ MdxmWriteResult writeMdxm(const Mesh& mesh) {
 
     const std::size_t headerEnd = buf.size();
     if (headerEnd != sizeof(fmt::MdxmHeader))
-        throw std::logic_error("Header-Groesse stimmt nicht mit MdxmHeader ueberein");
+        throw std::logic_error("Header-Größe stimmt nicht mit MdxmHeader überein");
 
     // Offset table of the surface hierarchy, relative to the end of the header.
     std::vector<std::size_t> patchHierOffsets(static_cast<std::size_t>(numSurfaces));
@@ -287,7 +287,7 @@ public:
     void need(std::int64_t off, std::int64_t n, const char* what) const {
         if (off < 0 || n < 0 || off > static_cast<std::int64_t>(d_.size()) ||
             n > static_cast<std::int64_t>(d_.size()) - off)
-            throw std::runtime_error(std::string("GLM beschaedigt oder abgeschnitten bei ") + what);
+            throw std::runtime_error(std::string("GLM beschädigt oder abgeschnitten bei ") + what);
     }
     std::int32_t i32(std::int64_t off, const char* what) const {
         need(off, 4, what);
@@ -328,7 +328,7 @@ private:
 // 64 GB.
 void checkCount(std::int32_t n, std::size_t elemSize, std::size_t fileSize, const char* what) {
     if (n < 0 || static_cast<std::uint64_t>(n) * elemSize > fileSize)
-        throw std::runtime_error(std::string("GLM beschaedigt: unsinnige Anzahl bei ") + what);
+        throw std::runtime_error(std::string("GLM beschädigt: unsinnige Anzahl bei ") + what);
 }
 
 }  // namespace
@@ -361,7 +361,7 @@ MdxmFile readMdxm(const std::vector<std::uint8_t>& d) {
     const std::int32_t ofsEnd = r.i32(160, "ofsEnd");
     if (ofsEnd != static_cast<std::int32_t>(d.size()))
         throw std::runtime_error("GLM: ofsEnd (" + std::to_string(ofsEnd) +
-                                 ") passt nicht zur Dateigroesse (" + std::to_string(d.size()) + ")");
+                                 ") passt nicht zur Dateigröße (" + std::to_string(d.size()) + ")");
     checkCount(numLODs, 4, d.size(), "numLODs");
     checkCount(numSurfaces, sizeof(fmt::MdxmSurfHierarchy), d.size(), "numSurfaces");
 
@@ -380,7 +380,7 @@ MdxmFile readMdxm(const std::vector<std::uint8_t>& d) {
         checkCount(kids, 4, d.size(), "numChildren");
         r.need(e + 144, 4LL * kids, "Kinderliste");
         if (s.parentIndex < -1 || s.parentIndex >= numSurfaces)
-            throw std::runtime_error("GLM: Surface \"" + s.name + "\" hat ungueltigen Parent " +
+            throw std::runtime_error("GLM: Surface \"" + s.name + "\" hat ungültigen Parent " +
                                      std::to_string(s.parentIndex));
     }
     (void)ofsHier;
@@ -452,7 +452,7 @@ MdxmFile readMdxm(const std::vector<std::uint8_t>& d) {
         }
         m.lods.push_back(std::move(lod));
         out.boneRefs.push_back(std::move(lodRefs));
-        if (lodEnd <= 0) throw std::runtime_error("GLM: LOD " + std::to_string(l) + " ohne Laenge");
+        if (lodEnd <= 0) throw std::runtime_error("GLM: LOD " + std::to_string(l) + " ohne Länge");
         lodStart += lodEnd;
     }
     return out;

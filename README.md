@@ -43,6 +43,7 @@ g2c does what they did, more accurately, and adds the direction they never had: 
 - Copy and paste sequences **between scripts**
 - Validation that reports missing files by **sequence name and line number**
 - Batch build across every open script
+- Undo/redo (Ctrl+Z / Ctrl+Y), a command palette (Ctrl+K), quick filters, editing loop and speed right in the table
 
 ### Extract (GLA → XSI)
 
@@ -54,7 +55,7 @@ g2c does what they did, more accurately, and adds the direction they never had: 
 
 ### Preview
 
-Play back a sequence's skeleton. Orbit, zoom, scrub frames, at the rate from `animation.cfg`.
+Play back any sequence at the rate from `animation.cfg` - the skeleton, or a **model with its textures**: load a `.glm` and it is skinned with the animation, textured the way the game does it (skin -> shader -> image, from loose files and the game's `.pk3` archives; the Steam install is found automatically). Orbit, zoom, scrub; space, arrow keys.
 
 ### Command line
 
@@ -171,7 +172,7 @@ On Windows, `build.bat` does the same and checks that the result is redistributa
 
 GitHub Actions runs exactly this on every push to `main` and every version tag — see [`.github/workflows`](.github/workflows).
 
-Needs a C++20 compiler. Dear ImGui 1.92.1 is vendored; there are no other dependencies.
+Needs a C++20 compiler. Dear ImGui 1.92.8 and stb_image (public domain) are vendored; there are no other dependencies.
 
 ---
 
@@ -221,7 +222,7 @@ The full list is in [`g2c-toolkit/docs/BUGS.md`](g2c-toolkit/docs/BUGS.md).
 
 ## Verification
 
-591 automated checks run on every build, including round-trip tests against real files — all 55 real `.car` scripts are saved back byte for byte. A separate driver (`g2_gui_driver`) clicks, drags and types through every window of the real interface — 207 checks, reporting every ImGui assertion and ID conflict. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
+605 automated checks run on every build, including round-trip tests against real files — all 55 real `.car` scripts are saved back byte for byte. A separate driver (`g2_gui_driver`) clicks, drags and types through every window of the real interface — 231 checks, reporting every ImGui assertion and ID conflict. Address, behaviour and thread sanitizers run clean over the whole suite and over real data. 150 deliberately corrupted `.gla` files produce zero crashes.
 
 Three static checkers run at build time for the parts that cannot be unit-tested: the Win32 layer, GUI wiring, and `build.bat`.
 

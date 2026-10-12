@@ -132,7 +132,7 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
                 throw std::runtime_error("SI_FCurve " + fc->values[0].text() + " " + channel + ": " +
                                          std::to_string(*keyCount) + " Keys angegeben, aber nur " +
                                          std::to_string((fc->values.size() - first) / stride) +
-                                         " vorhanden - Datei beschaedigt");
+                                         " vorhanden - Datei beschädigt");
 
             auto& target = out.nodes[static_cast<std::size_t>(self)].channels[channel];
             std::map<int, float> keys;
@@ -150,7 +150,7 @@ void collectModels(const Template& t, int parent, AnimFile& out) {
                 if (!f || !v || !std::isfinite(*v) || std::fabs(*f) > 1e7)
                     throw std::runtime_error("SI_FCurve " + fc->values[0].text() + " " + channel +
                                              ": Key " + std::to_string((i - first) / stride + 1) +
-                                             " ist keine gueltige Zahl (\"" + fc->values[i].text() +
+                                             " ist keine gültige Zahl (\"" + fc->values[i].text() +
                                              "\", \"" + fc->values[i + 1].text() + "\")");
                 keys[static_cast<int>(std::lround(*f))] = static_cast<float>(*v);
             }
@@ -454,7 +454,7 @@ EvalResult evaluate(const Skeleton& reference, const AnimFile& anim, const EvalO
             }
         }
         if (static_cast<int>(topo.size()) < numBones)
-            throw std::runtime_error("Referenzskelett enthaelt einen Zyklus");
+            throw std::runtime_error("Referenzskelett enthält einen Zyklus");
     }
 
     // Determine the root motion as a ramp up front.
