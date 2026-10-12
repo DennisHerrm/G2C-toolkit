@@ -337,3 +337,20 @@ er an.
 |---|---|---|
 | `g2c export` (Kommandozeile) schrieb immer 20 fps ins SI_Scene, die Oberfläche die Rate aus der animation.cfg | eine so exportierte Datei, ohne `-framespeed` gegrabbt, lief mit falscher Geschwindigkeit | `sceneRateFor` in tests.cpp |
 | Ein-Frame-Sequenzen wurden als zwei Frames exportiert (Carcass-Zwang) | die neu gebaute animation.cfg hatte 2 statt 1 Frame | "Ein-Frame-Sequenzen", `testOneFrameBuild` |
+
+## Oktober 2026: Review der neuen Oberfläche
+
+Ein eigener Prüfdurchgang über den neuen Oberflächen-Code. Keine Absturzfehler,
+aber diese Logikfehler, jeder mit Regressionstest, der mit dem alten Fehler
+nachweislich anschlägt:
+
+| Fehler | Folge | Test |
+|---|---|---|
+| "Speichern unter" ließ die Rückgängig-Historie unter dem alten Namen liegen | die neue Datei hatte keine Historie; das Original, wieder geöffnet, bekam die fremde | Treiber 16d |
+| Größen aus einer .pk3 wurden ungeprüft reserviert | eine kaputte oder ZIP64-.pk3 reservierte 4 GB, die Ausnahme beendete das Programm | gui_tests "Assets" |
+| Die automatische Prüfung ersetzte F7-Ergebnisse mit Framezahlen durch eine Prüfung ohne | Bereichsfehler verschwanden nach jeder Änderung, "geprüft" wurde grün | (läuft mit "Framezahlen lesen" nicht mehr automatisch) |
+| Rückgängig ließ den Sequenzdialog offen | er zeigte danach auf eine andere Sequenz | Treiber 16d |
+| Tippen direkt nach Rückgängig wurde in den vorigen Schritt gemischt | Strg+Y verwarf das Getippte | Treiber 16d |
+| Der Filter "Probleme" las nur gültige Ergebnisse | bei jeder Änderung war die Tabelle bis zur nächsten Prüfung leer | gui_tests "Problemfilter" |
+| Drahtgitter auf texturierten Flächen mit gebundener Modelltextur | Linien verfärbt oder unsichtbar | (Sichtprüfung) |
+| Render-Reset über die alte Konstante (-8) | mit IMGUI_DISABLE_OBSOLETE_FUNCTIONS ein Absturz | (nutzt jetzt die 1.92.8-Schnittstelle) |

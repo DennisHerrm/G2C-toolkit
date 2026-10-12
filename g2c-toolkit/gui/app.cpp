@@ -481,6 +481,8 @@ bool App::openCar(const std::string& path) {
             return true;
         }
     }
+    // A file opened anew starts without history (none of another tab's).
+    undo_.erase(path);
 
     Document d;
     d.path = path;
@@ -2886,7 +2888,9 @@ void drawDropLine(bool below, float k) {
 
 // Same rule as when drawing: the name or the file contains the filter text.
 bool App::rowHasIssue(const Document& d, std::size_t i) const {
-    if (!d.validated || i >= d.script.grabs.size()) return false;
+    // The last results, even while an edit has made them stale: the
+    // "Issues" filter used to empty the table on every keystroke.
+    if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
     for (const auto& is : d.validation.issues) {
@@ -4236,11 +4240,15 @@ void App::trackUndo() {
         }
         if (d.rev == u.baseRev) continue;
         const bool typing = ImGui::IsAnyItemActive() && now - u.lastPush < 1.0 && !u.undo.empty();
-        if (!typing && car::writeScript(u.base) != car::writeScript(d.script)) {
-            u.undo.push_back(std::move(u.base));
-            if (u.undo.size() > 100) u.undo.erase(u.undo.begin());
+        if (car::writeScript(u.base) != car::writeScript(d.script)) {
+            if (!typing) {
+                u.undo.push_back(std::move(u.base));
+                if (u.undo.size() > 100) u.undo.erase(u.undo.begin());
+                u.lastPush = now;
+            }
+            // Any real change ends what could be redone - also one merged
+            // into the previous step while typing.
             u.redo.clear();
-            u.lastPush = now;
         }
         u.base = d.script;
         u.baseRev = d.rev;
@@ -4270,7 +4278,11 @@ bool App::undo() {
     d.syncSelection();
     u.base = d.script;
     u.baseRev = d.rev;
+    u.lastPush = 0.0;
     editCellRow_ = -1;
+    // The sequence dialog holds a row number - after the swap it would edit
+    // another sequence.
+    closeEditorOf(static_cast<std::size_t>(active_));
     log(LogLine::Kind::Info, trf(S::LogUndone, u.undo.size()));
     return true;
 }
@@ -4286,7 +4298,9 @@ bool App::redo() {
     d.syncSelection();
     u.base = d.script;
     u.baseRev = d.rev;
+    u.lastPush = 0.0;
     editCellRow_ = -1;
+    closeEditorOf(static_cast<std::size_t>(active_));
     log(LogLine::Kind::Info, tr(S::LogRedone));
     return true;
 }
@@ -4566,7 +4580,12 @@ void App::drawPreviewPanel() {
             iconText(ICON_WARNING, kIconWarn,
                      trf(S::PvGlmOther, previewGlm_.mesh.animName.c_str(), ex.gla.skeleton.name.c_str()).c_str());
 
-        refreshPreviewTextures();
+        try {
+            refreshPreviewTextures();
+        } catch (const std::exception& e) {
+            // A broken archive or image: no textures, but the program stays.
+            log(LogLine::Kind::Bad, e.what());
+        }
         if (pvShowMesh_) {
             // Where the images come from, and which skin.
             ImGui::AlignTextToFramePadding();
@@ -4688,9 +4707,14 @@ void App::drawPreviewPanel() {
                 dl->PrimReserve(3, 3);
                 for (int c = 0; c < 3; ++c)
                     dl->PrimVtx(ImVec2(origin.x + t.x[c], origin.y + t.y[c]), ImVec2(t.u[c], t.v[c]), tint);
-                if (pvWireframe_)
+                if (pvWireframe_) {
+                    // Lines sample ImGui's own atlas: draw them without the
+                    // model texture bound, then bind it again.
+                    dl->PopTexture();
                     dl->AddTriangle(ImVec2(origin.x + t.x[0], origin.y + t.y[0]), ImVec2(origin.x + t.x[1], origin.y + t.y[1]),
                                     ImVec2(origin.x + t.x[2], origin.y + t.y[2]), IM_COL32(20, 22, 28, 160), 1.0f);
+                    dl->PushTexture(ImTextureRef(static_cast<ImTextureID>(tex)));
+                }
                 continue;
             }
             // Untextured: back to ImGui's own texture (its white pixel).
@@ -4710,7 +4734,9 @@ void App::drawPreviewPanel() {
             if (pvWireframe_) dl->AddTriangle(a, b, c, IM_COL32(20, 22, 28, 160), 1.0f);
         }
         if (bound) dl->PopTexture();
-        if (wrap) dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+        if (wrap)
+            if (const ImDrawCallback reset = ImGui::GetPlatformIO().DrawCallback_ResetRenderState)
+                dl->AddCallback(reset, nullptr);
         dl->PopClipRect();
     }
     if (!world.empty() && (pvShowSkeleton_ || !meshShown)) {
@@ -5750,6 +5776,13 @@ bool App::saveDocumentAs(std::size_t index, const std::string& path) {
     // The tab now belongs to the new file. Its output folder goes with it -
     // a copy is usually made to build somewhere else, and that folder is
     // chosen anew; keeping the old one would overwrite the original's GLA.
+    // The undo history goes along with the tab - it used to stay behind under
+    // the old name and attach itself to that file when it was opened again.
+    if (auto node = undo_.extract(d.path)) {
+        node.key() = path;
+        undo_.erase(path);
+        undo_.insert(std::move(node));
+    }
     d.path = path;
     d.title = fs::path(path).filename().string();
     d.dirty = false;
@@ -6439,7 +6472,10 @@ void App::draw() {
             lastRevSeen_ = d.rev;
             lastEditSeen_ = now;
         }
-        if (!d.validated && d.loadError.empty() && now - lastEditSeen_ > 0.8 && !ImGui::IsAnyItemActive())
+        // Only when it checks what F7 checks: with "read frame counts" the
+        // quick pass would replace F7's frame-range errors by a clean result.
+        if (!d.validated && !settings_.readFrameCounts && d.loadError.empty() && now - lastEditSeen_ > 0.8 &&
+            !ImGui::IsAnyItemActive())
             validateDocument(static_cast<std::size_t>(active_), true);
     }
 

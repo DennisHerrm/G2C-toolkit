@@ -125,6 +125,16 @@ void AssetFs::addPk3(const std::string& path) {
         const std::uint16_t commentLen = u16(&d[pos + 32]);
         e.localOffset = u32(&d[pos + 42]);
         if (pos + 46 + nameLen > d.size()) break;
+        // Sizes are trusted for nothing: ZIP64 markers (0xFFFFFFFF), data
+        // beyond the end of the file, or an unpacked size beyond any texture
+        // a game uses would allocate gigabytes before the read fails.
+        constexpr std::uint32_t kMaxEntry = 256u * 1024u * 1024u;
+        const bool sane = e.packedSize != 0xFFFFFFFFu && e.size != 0xFFFFFFFFu && e.size <= kMaxEntry &&
+                          static_cast<std::uint64_t>(e.localOffset) + 30u + e.packedSize <= fileSize;
+        if (!sane) {
+            pos += 46u + nameLen + extraLen + commentLen;
+            continue;
+        }
         const std::string name(reinterpret_cast<const char*>(&d[pos + 46]), nameLen);
         if (!name.empty() && name.back() != '/') entries.emplace(gamePathKey(name), e);
         pos += 46u + nameLen + extraLen + commentLen;
