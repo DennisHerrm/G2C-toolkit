@@ -165,6 +165,8 @@ std::optional<xsi::AnimFile> AnimCache::load(const std::string& sourcePath) {
         if (n.parent < -1 || n.parent >= static_cast<std::int32_t>(idx)) return std::nullopt;
         n.hasSrt = r.u32() != 0;
         for (auto& v : n.srt) v = r.f32();
+        n.hasBasePose = r.u32() != 0;
+        for (auto& v : n.basePose) v = r.f32();
 
         const std::uint32_t chanCount = r.u32();
         if (!r.ok() || chanCount > 64) return std::nullopt;
@@ -225,6 +227,8 @@ void AnimCache::store(const std::string& sourcePath, const xsi::AnimFile& anim) 
         b.i32(n.parent);
         b.u32(n.hasSrt ? 1u : 0u);
         for (float v : n.srt) b.f32(v);
+        b.u32(n.hasBasePose ? 1u : 0u);
+        for (float v : n.basePose) b.f32(v);
         b.u32(static_cast<std::uint32_t>(n.channels.size()));
         for (const auto& [name, keys] : n.channels) {
             putStr(name);

@@ -3832,13 +3832,255 @@ Nur geaenderte Zeilen werden umgeschrieben, Zeilenendkommentare bleiben.
 Neue Zeilen kommen dahin, wo Raven sie hat: nach den Grabs, vor
 `$aseanimgrabfinalize`.
 
-Was g2c davon selbst auswertet: Scale, Origin, `-makeskel`, `-makeskin`.
-`$keepmotion` braucht g2c nicht (die Wurzelbewegung wird immer wie in Ravens
-GLA uebernommen), die PCJ-Liste braucht nur Carcass beim Erzeugen eines neuen
-Skeletts, und `-losedupverts`/`-smooth` setzt derzeit nur Carcass um. Der
-Dialog sagt das jeweils dazu.
+Was g2c davon auswertet: alles (seit Abschnitt 72). `$keepmotion` und die
+PCJ-Liste wirken beim Neubau des Skeletts, `-losedupverts`/`-smooth` beim
+Mesh. Der Dialog sagt das jeweils dazu.
 
 ### Nur animation.cfg
 
 Laeuft den vollen Bau, schreibt aber nur die animation.cfg - die GLA bleibt
 unangetastet. Geprueft: die Datei ist byte-gleich mit der aus dem vollen Bau.
+
+
+## 72. Was Carcass konnte - und wo es in g2c steht
+
+Abgeglichen im Oktober 2026 mit Carcass v2.2: jede Option der Kommandozeile
+und jeder Skriptbefehl, ermittelt aus der Exe (Disassemblierung) und mit gut
+300 Testlaeufen an Kopien. Die Mitschriften liegen ausserhalb des Projekts
+(`re/misc`, `re/mesh`, `re/skel`, `re/mdr`, `re/md3`); was daraus folgt, steht
+hier. Ziel: g2c kann alles, was Carcass konnte, ohne Carcass' Fehler, und
+Carcass und Assimilate werden nicht mehr gebraucht.
+
+### Was Carcass baut und was g2c daraus macht
+
+| Carcass | g2c |
+|---|---|
+| Animationen (`$aseanimgrab`) -> GLA, `.frames` | gleich; dazu animation.cfg (die schrieb Assimilate) |
+| Mesh (`$aseanimconvertmdx_noask <root>`) -> GLM | **bytegleich** zu Carcass (23 von 27 Testfaellen, die anderen 4 sind behobene Fehler, unten) |
+| Modell-Skript: `$aseanimgrab_gla` -> nur GLM, `<car>_default.skin` | gleich; vorher konnte g2c das gar nicht |
+| neues Skelett aus den Quellen (ohne vorhandene GLA) | gleich (24 Testfaelle, Bindeposen bis 6,6e-7); vorher brauchte g2c immer eine Referenz-GLA |
+| `$aseanimconvertmdx` ohne `_noask`: GLM aus 3ds-Max-ASE (`.ASK`) | gleich (GLM und GLA identisch zu Carcass) |
+| `$aseconvert` / `$aseanimconvert`: MDR aus ASE | gleich in Geometrie, Gewichten, Dreiecken; Matrizen auf 0,0001 |
+| `-smooth`, `-losedupverts` | gleich (mit `-carcass` bytegleich, sonst ohne Carcass' Glaett-Fehler) |
+| LODs (`<name>_1` ... `_9`) | gleich |
+| `<car>_info.txt` | gleich, bis auf eine falsche Statistik (unten) |
+| `-dump` | `g2c dump` bzw. `g2c -dump`, Ausgabe bytegleich |
+| `-recursive`, `-filelist`, Aktualitaetspruefung, `-forcebuild` | `g2c carcass ...` bzw. direkt `g2c -recursive` |
+| `-framestep`, `-skew90`, `-origin`, `$bonehiercap`/`.bonecap`, `-deltavecs`, `$pcj`/`-flatten`, `$aseanimref_gla`, `$basedir`, `$include`, Kommentare `;` `#` `/* */` | alles umgesetzt |
+| Toene am Ende, `-silent`, `-keypress`, `-verbose`, `-nooutput` | im Carcass-Modus vorhanden |
+| `-nocarpet` (Zwischenspeicher in `C:\ravenlocal\CARPET`) | `-nocache`; g2cs Cache liegt neben der .car und waechst nicht unbegrenzt |
+
+Was Carcass nicht kann, kann g2c auch nicht nachbauen: **MD3** schreibt
+Carcass v2.2 nie (der Code ist da, wird aber nie mit Daten versorgt), und der
+**Spielermodus** `-playerparms` (head/upper/lower.mdr) bricht bei jeder Eingabe
+ab - er verlangt `tag_*`-Objekte und lehnt sie im selben Lauf als "altes
+Format" ab. g2c meldet beides mit dieser Begruendung.
+
+### Ausgaben waehlen
+
+Carcass schrieb immer alles. In g2c laesst sich jede Datei abschalten:
+
+- Oberflaeche: Einstellungen > Ausgabe (GLA, animation.cfg, .frames,
+  _info.txt, GLM, .skin)
+- Kommandozeile: `-only gla,cfg`, einzeln `-nogla -nocfg -noframes -noglm
+  -noskin -noinfo`, alles aus mit `-nooutput`
+
+Der Skin entsteht wie bei Carcass nur mit `-makeskin`; dann stehen die
+Texturen in `<car>_default.skin` und die GLM hat leere Shader-Namen.
+
+### Wohin geschrieben wird
+
+Wie Carcass: die GLA (mit animation.cfg und .frames) nach Assetwurzel +
+`-makeskel`, GLM, Skin und _info.txt neben die .car, benannt nach der .car.
+Anders als Carcass legt g2c fehlende Ordner an und sichert ueberschriebene
+GLA/animation.cfg als `.bak`. Mit `-o`/`-outdir` bzw. dem Ausgabeordner der
+Oberflaeche geht alles dorthin.
+
+### Das Skelett
+
+Carcass baut das Skelett **nicht** aus root.xsi. Die Bones kommen aus den
+Animationsdateien, in der Reihenfolge, in der sie zuerst auftauchen; root.xsi
+entscheidet nur, welche bleiben (die mit Gewichten, dazu `_always_`-Bones,
+Motion mit `$keepmotion`, Bone 0). `$pcj`-Eintraege VOR den Grabs haengen
+Bones an den naechsten PCJ-Vorfahren - daher "ltibia unter lfemurYZ" in
+Ravens GLA. Hinter den Grabs (Ravens Anordnung) wirken sie nicht.
+
+g2c baut so ein Skelett, wenn es noch keine GLA gibt, wenn das Skript
+`$aseanimref_gla` enthaelt, oder mit "Skelett neu aus den Quellen bauen"
+(`-newskel`). Gibt es eine GLA mit denselben Bones, bleibt deren Reihenfolge -
+eine GLM speichert Bone-**Nummern**, jedes Modell fuer die alte GLA bliebe
+sonst nicht mehr benutzbar. Ohne den Haken bleibt eine vorhandene GLA das
+Skelett, wie bisher.
+
+### Carcass-Fehler, die g2c nicht uebernimmt
+
+Die vollstaendige Liste steht in `docs/BUGS.md` ("Oktober 2026: Carcass
+v2.2 vollstaendig"). Die wichtigsten, weil man sie sonst fuer Absicht halten
+koennte:
+
+- **Glaetten** (`-smooth`): Carcass addiert auch entgegengesetzte Normalen
+  (doppelseitige Flaechen werden schwarz) und die der unsichtbaren Tags.
+  g2c nur gleichseitige, ohne Tags. `-carcass` stellt das alte Verhalten her.
+- **Gewichte**: rundet das groesste Gewicht auf 0, schrieb Carcass "vier
+  Gewichte, alle null".
+- **Tags** mit zwei gleich langen Kanten: Carcass nahm die Richtung des
+  vorigen Tags.
+- **`-framestep`**: Carcass halbierte die Frames, nicht aber die
+  Geschwindigkeit - alles lief doppelt so schnell. g2c teilt Speed, Loop und
+  `-additional` mit, `_skip`-Namen schon ab Schritt 2 (Carcass: ab 3, bei 2
+  ueberschrieb es die normalen Dateien).
+- **MDR**: Carcass' komprimierte Frames liest kein Spiel; g2c schreibt sie
+  unkomprimiert. Datei nach der `.ask` benannt statt immer `test.mdr`.
+- **Groesse/Klein** der Bone-Namen: eine zweite Datei mit `LHAND` haengte bei
+  Carcass still die Finger um. g2c behandelt die Namen ohne Unterschied.
+
+### Gefunden und behoben in g2c selbst
+
+Beim Abgleich fielen Fehler in g2c auf, jeder mit Regressionstest:
+
+- Eine GLM zeigte auf die Referenz-GLA statt auf die eigene aus `-makeskel` -
+  im Spiel haette das Modell das falsche Skelett benutzt.
+- Der Skin hiess `<name>.skin` statt `<car>_default.skin`; das Spiel findet
+  nur den zweiten.
+- `face_always_` in den Dateien gegen `face` in der GLA: der Bone wurde nie
+  animiert, und Gewichte auf ihm fielen im Mesh weg.
+- `build` ohne `-o` schrieb in den aktuellen Ordner.
+- Die Oberflaeche baute vor jedem Bau einmal komplett zur Probe - nur um
+  fehlende Dateien zu finden. Jetzt werden nur die Pfade geprueft.
+- Eine .car ohne Zeilenumbruch am Ende bekam beim Speichern einen.
+
+### Geprueft
+
+- Unit-Tests 591/591, Oberflaechen-Treiber 207/207 (85 ohne Daten).
+- Alle 55 echten .car-Dateien kommen byte-gleich vom Speichern zurueck
+  (`G2C_CAR_CORPUS=<liste> g2_tests`).
+- Dein `_humanoid` (2061 Grabs): GLA ohne Abweichung ueber der
+  Quantisierungsgrenze, animation.cfg bytegleich, GLM jetzt mit Carcass'
+  Vertexzahl. Bau 8,5 s, mit Cache 2,4 s. Carcass baut diesen Humanoid gar
+  nicht (Abbruch an einer Bindepose und an einer Translation von -520).
+
+---
+
+## 73. Nur neue XSI einfuegen
+
+Neben den XSI-Knoepfen in der Werkzeugleiste steht das Haekchen **Nur neue
+XSI**. Es ist von Haus aus gesetzt - dieselbe Datei zweimal einzufuegen ist
+praktisch immer ein Versehen. Absichtliche Doppelte (dieselbe Datei mit
+anderem Framebereich) entstehen ueber Kopieren/Einfuegen oder den
+Sequenzdialog und sind davon nicht betroffen. Ist es gesetzt, uebergehen alle Wege zum Einfuegen (XSI hinzufuegen,
+XSI-Ordner, ... zu allen, Ziehen ins Fenster) jede .xsi, die das Skript
+schon enthaelt. Man waehlt also einfach den ganzen Ordner, und nur die
+neuen Dateien kommen dazu.
+
+"Schon enthalten" heisst: dieselbe Datei, so aufgeloest wie beim Bauen
+(`$basedir`, Assetwurzel, Ordner der .car, fehlende Endung `.xsi`).
+Gross-/Kleinschreibung spielt keine Rolle. Auch zweimal dieselbe Datei in
+einem Rutsch (ueberlappende Ordner) kommt nur einmal hinein. Bei "zu allen"
+bekommt jedes Skript das, was ihm selbst fehlt.
+
+Im Log steht, wie viele uebersprungen wurden. Das Haekchen wird gespeichert.
+
+Geprueft mit deinem `_humanoid.car`: Der Ordner `__original_anim` brachte
+genau die 44 Dateien, die noch nicht drinstanden. Ein zweiter Durchlauf
+brachte keine mehr.
+
+---
+
+## 74. Framespeed mit Komma
+
+`-framespeed 16.5` (und der Speed in `-additional`) darf jetzt Nachkommastellen
+haben. Das Spiel liest die Zahl in der animation.cfg mit `atof`, und
+handbearbeitete Configs nutzen das - im Movie-Duels-Humanoid etwa
+`BOTH_FORCELONGLEAP_ATTACK2` mit 16.5. Carcass las nur ganze Zahlen (`atoi`)
+und schrieb 16.
+
+- .car lesen und speichern, Bau, animation.cfg: 16.5 bleibt 16.5. Ganze Zahlen
+  werden weiter ohne Nachkommastellen geschrieben ("20", nicht "20.0").
+- GLA -> XSI: eine 16.5 aus der animation.cfg landet als `-framespeed 16.5` in
+  der erzeugten .car.
+- Oberflaeche: Speed-Spalte, Sequenzdialog, "Framespeed setzen" und die
+  Teilbereiche nehmen Kommazahlen.
+
+Carcass kann eine .car mit Kommazahl-Speed nicht mehr richtig lesen (es
+schneidet ab) - g2c ersetzt Carcass, darum ist das gewollt.
+
+Dabei behoben, jeweils mit Regressionstest:
+
+- Der Sequenzdialog zeigte einen Rueckwaerts-Speed (-20) als Vorgabe 30 an;
+  ein Klick auf "+" machte daraus 31, die Sequenz lief vorwaerts.
+- `-framestep` machte aus einem Rueckwaerts-Speed 1 statt der Haelfte
+  (-20 wurde 1 statt -10).
+
+---
+
+## 75. Neue Oberfläche
+
+Alle drei Modi wurden aufgeräumt; die Knöpfe an der linken Kante tragen jetzt
+einen Untertitel, und g2c merkt sich den zuletzt benutzten Modus.
+
+### GLA -> XSI
+
+Links vier nummerierte Schritte: **GLA öffnen**, **Sequenzen wählen**,
+**Zielordner**, **Exportieren**. Ein erledigter Schritt wird grün. Unter den
+Export-Knöpfen steht, was noch fehlt ("Zuerst einen Zielordner wählen").
+Rechts die Liste der Sequenzen; ein Doppelklick zeigt eine Sequenz in der
+Vorschau. Ohne GLA steht rechts eine Seite mit einem großen "GLA öffnen" -
+eine .gla lässt sich auch einfach ins Fenster ziehen.
+
+### Vorschau
+
+Links die Sequenzliste mit Filter, rechts die Ansicht mit Zeitleiste.
+Tasten: Leertaste spielt/hält an, Pfeil links/rechts geht einen Frame,
+Pfeil hoch/runter wechselt die Sequenz.
+
+**GLM laden** zeigt ein Modell, das sich mit der Animation bewegt - mit
+Texturen wie im Spiel: Skin -> Shader -> Bild, aus losen Dateien (neben dem
+Modell und unter der Assetwurzel) und aus den .pk3 des Spiels. Die
+Steam-Installation wird gefunden; welche (z. B. "GameData Movie Duels"),
+wählt man unter "Texturen". Der Skin ist umschaltbar (model_default,
+model_red ...). Skelett und Drahtgitter lassen sich zuschalten. Eine .glm ins
+Fenster ziehen öffnet sie in der Vorschau.
+
+### XSI -> GLA
+
+- Ohne Skript eine Startseite: Assetwurzel, Skript öffnen, Bauen - mit den
+  zuletzt geöffneten Dateien.
+- Werkzeugleiste: "XSI hinzufügen" ist ein Menü (Dateien, Ordner, zu allen);
+  "Einstellungen" rechts blendet die Einstellungsspalte ein und aus. Ist sie
+  aus, zeigt eine Zeile über den Tabs den Zustand der Pfade.
+- "Schreibt:" neben dem Ausgabeordner schaltet die Ausgaben direkt um.
+- Schnellfilter über der Tabelle: Probleme, Ohne Enum, Rückwärts, Mit Teilen.
+- Loop und Speed per Doppelklick direkt in der Zelle ändern; leer = Standard.
+  Rückwärts-Speeds sind violett. Die Quellspalte zeigt den Dateinamen.
+- Nach einer Änderung prüft g2c das Skript kurz darauf von selbst.
+- Das Protokoll unten ist eingeklappt eine Zeile; es klappt bei Fehlern und
+  nach "Prüfen" mit Meldungen von selbst auf.
+- Hinweise unten rechts nach Bauen, Export und Speichern - mit
+  "Ordner öffnen".
+
+### Überall
+
+- **Rückgängig / Wiederholen**: Strg+Z / Strg+Y (Menü "Bearbeiten" und die
+  Pfeile in der Werkzeugleiste), je Skript bis 100 Schritte.
+- **Befehlssuche**: Strg+K, ein paar Buchstaben tippen, Enter - Aktionen,
+  Sequenzen des offenen Skripts und Tabs.
+- Fortschritt beim Bauen auch im Taskleisten-Symbol.
+- Echte Umlaute in allen deutschen Texten.
+- Dear ImGui 1.92.8 (vorher 1.92.1; die Backends waren sogar noch älter).
+
+---
+
+## 76. Ein-Frame-Sequenzen bleiben ein Frame
+
+GLA -> XSI schreibt eine Sequenz mit einem Frame jetzt als genau einen Frame.
+Bisher wurde sie verdoppelt, weil Carcass Ein-Frame-Dateien ablehnt; die neu
+gebaute animation.cfg sagte dann 2 statt 1, und jeder Timer, den das Spiel aus
+der Länge ableitet, verdoppelte sich. g2c liest Ein-Frame-Dateien.
+
+Wer die Dateien doch Carcass geben will: in der Oberfläche "Wie Carcass
+runden und glätten" einschalten, auf der Kommandozeile `g2c export ... -carcass`.
+
+Deine 39 Ein-Frame-Animationen in `__new_anim/multiplayer` sind neu
+exportiert (die alten liegen in
+`C:\jka_animations\g2c_backups\multiplayer_2frames_2026-10-12`); nach dem nächsten Bauen stimmen alle 177
+MP-Sequenzen in Frames, Loop und Speed mit dem Original überein.

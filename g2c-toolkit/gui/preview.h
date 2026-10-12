@@ -78,6 +78,26 @@ std::vector<BoneLine> buildBoneLines(const MdxaFile& gla, const std::vector<Mat3
 // at 20 frames per second should run at 20 even at 144 Hz. Negative rates
 // mean backwards - this occurs in Raven's animation.cfg, e.g. for
 // BOTH_UNCROUCH1 at -20.
+// One triangle of the skinned model, already on screen.
+struct MeshTriangle {
+    float x[3]{}, y[3]{};
+    float u[3]{}, v[3]{};   // texture coordinates
+    int   surface = -1;     // LOD 0 surface the triangle belongs to
+    float depth = 0.0f;   // mean depth, for drawing back to front
+    float shade = 1.0f;   // 0..1, facing the camera = 1
+};
+
+// Skins LOD 0 of a GLM with the world poses of one frame and projects it:
+// every vertex is the weighted sum of its bones' (world * inverse bind pose)
+// transforms - what the engine does. Tag surfaces and surfaces flagged "off"
+// are left out. Sorted far to near, so drawing in order hides what is behind
+// (painter's algorithm - no depth buffer needed for a preview).
+// hidden: per LOD 0 surface, set = left out (a skin's "*off").
+std::vector<MeshTriangle> buildMeshTriangles(const Mesh& mesh, const MdxaFile& gla,
+                                             const std::vector<Mat3x4>& world,
+                                             const PreviewCamera& cam, float viewW, float viewH,
+                                             const std::vector<char>* hidden = nullptr);
+
 struct Playback {
     int   frame = 0;
     float accumulator = 0.0f;
@@ -86,6 +106,6 @@ struct Playback {
 };
 
 // dt in seconds, fps from animation.cfg (may be negative).
-void advancePlayback(Playback& pb, float dt, int fps, int frameCount);
+void advancePlayback(Playback& pb, float dt, double fps, int frameCount);
 
 }  // namespace g2::gui

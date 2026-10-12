@@ -21,6 +21,7 @@
 #include <shlobj.h>
 #include <tchar.h>
 #include <windows.h>
+#include <shobjidl.h>
 #include <winhttp.h>
 
 #include <filesystem>
@@ -517,6 +518,23 @@ void buildFonts(ImGuiIO& io, float dpi, g2::gui::Lang lang) {
 
 // --- DirectX ---------------------------------------------------------------
 
+// Repeating, mipmapped sampler for the preview's textures. ImGui's own
+// sampler clamps; models tile their textures.
+ID3D11SamplerState* g_wrapSampler = nullptr;
+
+void wrapSamplerCallback(const ImDrawList*, const ImDrawCmd*) {
+    if (!g_device || !g_context) return;
+    if (!g_wrapSampler) {
+        D3D11_SAMPLER_DESC sd{};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        sd.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        if (FAILED(g_device->CreateSamplerState(&sd, &g_wrapSampler))) return;
+    }
+    g_context->PSSetSamplers(0, 1, &g_wrapSampler);
+}
+
 bool createRenderTarget() {
     ID3D11Texture2D* back = nullptr;
     if (FAILED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&back))) || !back) return false;
@@ -796,6 +814,15 @@ bool looksLikeCommand(const char* a) {
                                   "-v",    "--version"};
     for (const char* c : kCmds)
         if (std::strcmp(a, c) == 0) return true;
+    // Carcass's command line: "g2c carcass ...", "g2c dump x.glm" or the
+    // options straight away, as carcass.exe took them ("g2c -recursive").
+    if (std::strcmp(a, "carcass") == 0 || std::strcmp(a, "dump") == 0) return true;
+    static const char* kCarcass[] = {"-recursive", "-forcebuild", "-nostrips", "-writedir", "-nocarpet",
+                                     "-flatten", "-keypress", "-silent", "-verbose", "-nocompress",
+                                     "-nooutput", "-smooth", "-losedupverts", "-ignorebasedeviations",
+                                     "-filelist", "-dump", "-framestep", "-makeskin", "-origin"};
+    for (const char* c : kCarcass)
+        if (_stricmp(a, c) == 0) return true;
     return false;
 }
 
@@ -1174,7 +1201,7 @@ int cmdUpdate(const Args& args) {
         std::printf("%s\n", g2::gui::describeUpdateError(st).c_str());
         return 1;
     }
-    std::printf("Verfuegbar  : %s\n", upd::displayName(st.release, channel).c_str());
+    std::printf("Verfügbar  : %s\n", upd::displayName(st.release, channel).c_str());
     if (st.phase == upd::Phase::UpToDate) {
         std::printf("g2c ist aktuell.\n");
         return 0;
@@ -1203,7 +1230,7 @@ int cmdUpdate(const Args& args) {
         return 1;
     }
     if (!st.detail.empty()) std::printf("Hinweis: %s\n", st.detail.c_str());
-    std::printf("Installiert. Der naechste Start verwendet %s.\n",
+    std::printf("Installiert. Der nächste Start verwendet %s.\n",
                 upd::displayName(st.release, channel).c_str());
     return 0;
 }
@@ -1312,7 +1339,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     const int  h = MulDiv(950, static_cast<int>(dpiRaw), 96);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"g2c \x2014 Ghoul2 Toolkit", WS_OVERLAPPEDWINDOW,
                               100, 100, w, h, nullptr, nullptr, inst, nullptr);
-    startupLog("DirectX-Geraet erzeugen");
+    startupLog("DirectX-Gerät erzeugen");
     if (!createDevice(hwnd)) {
         destroyDevice();
         UnregisterClassW(wc.lpszClassName, inst);
@@ -1327,12 +1354,12 @@ int wWinMainGuarded(HINSTANCE inst) {
                      L"g2c konnte die Grafikausgabe nicht starten.\n\n"
                      L"Fehlercode: 0x%08X\n\n"
                      L"Weder die Grafikkarte noch der Software-Rasterisierer (WARP) "
-                     L"liessen sich verwenden.\n\n"
-                     L"Moegliche Ursachen:\n"
+                     L"ließen sich verwenden.\n\n"
+                     L"Mögliche Ursachen:\n"
                      L"  - Grafiktreiber fehlt oder ist veraltet\n"
-                     L"  - Windows-Fassung aelter als 10\n"
+                     L"  - Windows-Fassung älter als 10\n"
                      L"  - Remotedesktop ohne Grafikweiterleitung\n\n"
-                     L"Die Kommandozeile funktioniert unabhaengig davon:\n"
+                     L"Die Kommandozeile funktioniert unabhängig davon:\n"
                      L"  g2c build ... / g2c export ... / g2c about\n\n"
                      L"Protokoll: %s",
                      static_cast<unsigned>(g_deviceError), startupLogPath().c_str());
@@ -1367,7 +1394,7 @@ int wWinMainGuarded(HINSTANCE inst) {
     // someone else's machine - a damaged or replaced segoeui.ttf can't be
     // ruled out. This switch skips them entirely.
     if (args.hasNoFont()) {
-        startupLog("Schriften ueberspringen (-nofont)");
+        startupLog("Schriften überspringen (-nofont)");
         io.Fonts->Clear();
         io.Fonts->AddFontDefault();
         io.Fonts->Build();
@@ -1403,6 +1430,39 @@ int wWinMainGuarded(HINSTANCE inst) {
         ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + w + L"\"").c_str(),
                       nullptr, SW_SHOWNORMAL);
     };
+    // Preview textures: uploaded with mipmaps, so a large image drawn small
+    // does not shimmer; released before the device (see the end of main).
+    plat.createTexture = [](int w, int h, const std::uint8_t* rgba) -> std::uint64_t {
+        if (!g_device || !g_context || w <= 0 || h <= 0) return 0;
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = static_cast<UINT>(w);
+        desc.Height = static_cast<UINT>(h);
+        desc.MipLevels = 0;   // full chain
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        ID3D11Texture2D* tex = nullptr;
+        if (FAILED(g_device->CreateTexture2D(&desc, nullptr, &tex)) || !tex) return 0;
+        g_context->UpdateSubresource(tex, 0, nullptr, rgba, static_cast<UINT>(w) * 4u, 0);
+        D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+        view.Format = desc.Format;
+        view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        view.Texture2D.MipLevels = static_cast<UINT>(-1);
+        ID3D11ShaderResourceView* srv = nullptr;
+        const HRESULT hr = g_device->CreateShaderResourceView(tex, &view, &srv);
+        tex->Release();
+        if (FAILED(hr) || !srv) return 0;
+        g_context->GenerateMips(srv);
+        return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(srv));
+    };
+    plat.destroyTexture = [](std::uint64_t id) {
+        if (id && g_device)
+            reinterpret_cast<ID3D11ShaderResourceView*>(static_cast<std::uintptr_t>(id))->Release();
+    };
+    plat.wrapSampler = reinterpret_cast<void*>(&wrapSamplerCallback);
     plat.network.get = httpGet;
     plat.network.download = httpDownload;
     plat.exePath = exePath();
@@ -1515,6 +1575,33 @@ int wWinMainGuarded(HINSTANCE inst) {
 
         app.draw();
 
+        // Build progress on the taskbar button, visible with the window in
+        // the background. Only changes are sent.
+        {
+            static ITaskbarList3* taskbar = nullptr;
+            static bool tried = false;
+            static int lastShown = -2;
+            if (!tried) {
+                tried = true;
+                if (FAILED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&taskbar))) ||
+                    !taskbar || FAILED(taskbar->HrInit())) {
+                    if (taskbar) taskbar->Release();
+                    taskbar = nullptr;
+                }
+            }
+            const float p = app.buildProgress();
+            const int now = p < 0.0f ? -1 : static_cast<int>(p * 1000.0f);
+            if (taskbar && now != lastShown) {
+                if (now < 0) {
+                    taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
+                } else {
+                    taskbar->SetProgressState(hwnd, TBPF_NORMAL);
+                    taskbar->SetProgressValue(hwnd, static_cast<ULONGLONG>(now), 1000);
+                }
+                lastShown = now;
+            }
+        }
+
         // Window close button with unsaved changes: the UI has asked, and
         // the answer was "save" or "discard".
         if (app.quitApproved()) running = false;
@@ -1541,7 +1628,7 @@ int wWinMainGuarded(HINSTANCE inst) {
         // that EVERY further call fails - without a check the user sees a
         // white window and then a crash.
         if (firstFrame) {
-            startupLog("erstes Bild gezeichnet - ab hier laeuft alles");
+            startupLog("erstes Bild gezeichnet - ab hier läuft alles");
             firstFrame = false;
         }
         const HRESULT pr = g_swapChain->Present(1, 0);   // vsync
@@ -1552,11 +1639,11 @@ int wWinMainGuarded(HINSTANCE inst) {
                                                               : pr;
             wchar_t text[512];
             _snwprintf_s(text, _TRUNCATE,
-                         L"Der Grafiktreiber wurde zurueckgesetzt und g2c muss beendet "
+                         L"Der Grafiktreiber wurde zurückgesetzt und g2c muss beendet "
                          L"werden.\n\nCode: 0x%08X\n\n"
-                         L"Ungespeicherte Aenderungen an den Skripten gehen verloren.\n"
-                         L"Haeufigste Ursache ist ein Treiberupdate im laufenden Betrieb "
-                         L"oder ein haengender Grafiktreiber.",
+                         L"Ungespeicherte Änderungen an den Skripten gehen verloren.\n"
+                         L"Häufigste Ursache ist ein Treiberupdate im laufenden Betrieb "
+                         L"oder ein hängender Grafiktreiber.",
                          static_cast<unsigned>(reason));
             MessageBoxW(hwnd, text, L"g2c", MB_OK | MB_ICONERROR);
             break;
@@ -1565,6 +1652,12 @@ int wWinMainGuarded(HINSTANCE inst) {
 
     g_app = nullptr;
     g_relaunch = app.restartRequested();
+    // Textures belong to the device that is destroyed below.
+    app.releaseGpuResources();
+    if (g_wrapSampler) {
+        g_wrapSampler->Release();
+        g_wrapSampler = nullptr;
+    }
     saveWindowPlacement(hwnd);
 
     ImGui_ImplDX11_Shutdown();

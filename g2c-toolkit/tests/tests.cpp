@@ -14,6 +14,10 @@
 #include "g2/readfile.h"
 #include "g2/gladiff.h"
 #include "g2/xsi_mesh.h"
+#include "g2/sidefiles.h"
+#include "g2/ase.h"
+#include "g2/skelbuild.h"
+#include "g2/carjob.h"
 
 #include <cmath>
 #include <algorithm>
@@ -78,14 +82,14 @@ void watchdogMain() {
         const int secs = static_cast<int>(duration_cast<seconds>(steady_clock::now() - start).count());
         if (secs >= 10 && secs != lastReport && secs % 5 == 0) {
             lastReport = secs;
-            std::printf("\n  [!] laeuft seit %d s in \"%s\", Schritt \"%s\"\n", secs,
+            std::printf("\n  [!] läuft seit %d s in \"%s\", Schritt \"%s\"\n", secs,
                         g_currentTest.load(), g_currentStep.load());
             std::fflush(stdout);
         }
         if (secs >= 60) {
             std::printf("\n"
                         "============================================================\n"
-                        " ABBRUCH: der Lauf haengt.\n"
+                        " ABBRUCH: der Lauf hängt.\n"
                         "============================================================\n"
                         "  Test    : %s\n"
                         "  Schritt : %s\n"
@@ -271,8 +275,8 @@ void testMdxaRoundTrip() {
     }
 
     const g2::MdxaWriteResult w = g2::writeMdxa(skel, frames);
-    std::printf("  Dateigroesse            : %zu Bytes\n", w.data.size());
-    std::printf("  Pool-Eintraege          : %zu von %zu (%.1f%% dedupliziert)\n",
+    std::printf("  Dateigröße            : %zu Bytes\n", w.data.size());
+    std::printf("  Pool-Einträge          : %zu von %zu (%.1f%% dedupliziert)\n",
                 w.poolEntries, w.poolEntriesBeforeDedupe, w.dedupeRatio() * 100.0);
     std::printf("  Kompressionsstatistik   : %s\n", w.stats.summary().c_str());
 
@@ -397,8 +401,8 @@ void testDedupe() {
     const auto a = g2::writeMdxa(skel, frames, on);
     const auto b = g2::writeMdxa(skel, frames, off);
 
-    std::printf("  mit Dedupe   : %zu Pool-Eintraege, %zu Bytes\n", a.poolEntries, a.data.size());
-    std::printf("  ohne Dedupe  : %zu Pool-Eintraege, %zu Bytes\n", b.poolEntries, b.data.size());
+    std::printf("  mit Dedupe   : %zu Pool-Einträge, %zu Bytes\n", a.poolEntries, a.data.size());
+    std::printf("  ohne Dedupe  : %zu Pool-Einträge, %zu Bytes\n", b.poolEntries, b.data.size());
     std::printf("  Ersparnis    : %.1f%%\n", 100.0 * (1.0 - double(a.data.size()) / b.data.size()));
 
     check(a.poolEntries == 1, "identische Posen fallen auf einen Pool-Eintrag zusammen");
@@ -406,7 +410,7 @@ void testDedupe() {
     check(a.data.size() < b.data.size(), "Dedupe verkleinert die Datei");
 
     const auto f = g2::readMdxa(a.data);
-    check(f.numFrames == nFrames, "deduplizierte Datei laesst sich lesen");
+    check(f.numFrames == nFrames, "deduplizierte Datei lässt sich lesen");
 }
 
 void testSkeletonValidation() {
@@ -424,7 +428,7 @@ void testSkeletonValidation() {
     bad.bones[1].parent = 99;
     check(!bad.validate().empty(), "ungueltiger Parent-Index wird erkannt");
 
-    check(makeSkeleton(5).validate().empty(), "sauberes Skelett passiert die Pruefung");
+    check(makeSkeleton(5).validate().empty(), "sauberes Skelett passiert die Prüfung");
 }
 
 void testMdxmWrite() {
@@ -458,7 +462,7 @@ void testMdxmWrite() {
     mesh.lods.push_back(g2::LOD{{surf}});
 
     const auto w = g2::writeMdxm(mesh);
-    std::printf("  Dateigroesse         : %zu Bytes\n", w.data.size());
+    std::printf("  Dateigröße         : %zu Bytes\n", w.data.size());
     std::printf("  max. Bone-Referenzen : %zu von %d\n", w.stats.maxBoneRefsUsed,
                 g2::fmt::kMaxBoneRefsPerSurface);
 
@@ -476,7 +480,7 @@ void testMdxmWrite() {
     check(rd32(140) == 6, "numBones ist 6");
     check(rd32(144) == 1, "numLODs ist 1");
     check(rd32(152) == 1, "numSurfaces ist 1");
-    check(static_cast<std::size_t>(rd32(160)) == w.data.size(), "ofsEnd entspricht der Dateigroesse");
+    check(static_cast<std::size_t>(rd32(160)) == w.data.size(), "ofsEnd entspricht der Dateigröße");
 
     // Check the vertex weight packing
     const std::int32_t ofsLODs = rd32(148);
@@ -497,7 +501,7 @@ void testMdxmWrite() {
     // sits directly after the table.
     check(lodSurfOfs == 1 * 4, "LOD-Surface-Offset ist relativ zur Offsettabelle");
     check(rd32(surfStart + 8) == -static_cast<std::int32_t>(surfStart),
-          "ofsHeader zeigt korrekt zum Dateianfang zurueck");
+          "ofsHeader zeigt korrekt zum Dateianfang zurück");
 
     const int raw0 = g2::fmt::getVertBoneWeightRaw(mv, 0);
     checkNear(raw0 * g2::fmt::kBoneWeightReciprocal, 0.7, 0.002, "Gewicht 0 dekodiert zu 0.7");
@@ -612,7 +616,7 @@ void testMdxmLimits() {
     s2.vertices.push_back(v);
     s2.triangles.push_back({{0, 1, 2}});
     bad.lods.push_back(g2::LOD{{s2}});
-    check(!bad.validate().empty(), "Dreiecksindex ausserhalb der Vertexliste wird erkannt");
+    check(!bad.validate().empty(), "Dreiecksindex außerhalb der Vertexliste wird erkannt");
 }
 
 void testXsiParser() {
@@ -800,7 +804,7 @@ SI_Model MDL-root {
     if (iMoving >= 0) {
         // The FCurve wins in its channel, SRT stays in the others.
         const g2::Mat3x4 m = srtAnim.localMatrix(iMoving, 2);
-        checkNear(m.m[0][3], 60.0, 1e-4, "FCurve ueberschreibt den SRT-Kanal");
+        checkNear(m.m[0][3], 60.0, 1e-4, "FCurve überschreibt den SRT-Kanal");
         checkNear(m.m[1][3], 2.0, 1e-4, "nicht animierter Kanal behaelt den SRT-Wert");
         checkNear(m.m[2][3], 3.0, 1e-4, "ebenso der dritte");
     }
@@ -1018,7 +1022,7 @@ void testCarBuild() {
     check(br.totalFrames() == 19, "5 + 8 + 6 = 19 Frames aneinandergehaengt");
     check(br.sequences.size() == 4, "drei Grabs plus ein -additional");
 
-    check(br.sequences[0].name == "FIRST", "Name aus dem Dateinamen, gross");
+    check(br.sequences[0].name == "FIRST", "Name aus dem Dateinamen, groß");
     check(br.sequences[0].targetFrame == 0, "erste Sequenz beginnt bei 0");
     check(br.sequences[0].frameCount == 5, "erste Sequenz hat 5 Frames");
     check(br.sequences[0].frameSpeed == 20, "-framespeed uebernommen");
@@ -1063,7 +1067,7 @@ void testCarBuild() {
 
     // Generate animation.cfg and check it back.
     const std::string cfg = g2::car::writeAnimationCfg(br.sequences, "test");
-    check(cfg.find("EXTRA_SEQ") != std::string::npos, "animation.cfg enthaelt die Zusatzsequenz");
+    check(cfg.find("EXTRA_SEQ") != std::string::npos, "animation.cfg enthält die Zusatzsequenz");
     check(cfg.find("\r\n") != std::string::npos, "animation.cfg nutzt CRLF");
 
     { std::error_code ec; fs::remove_all(root, ec); }
@@ -1142,7 +1146,7 @@ void testAnimCache() {
     check(cache.sizeOnDisk() > 0, "Cache belegt Platz");
     step("Cache leeren");
     const std::size_t removed = cache.clear();
-    check(removed > 0, "Leeren entfernt Eintraege");
+    check(removed > 0, "Leeren entfernt Einträge");
     check(cache.sizeOnDisk() == 0, "danach ist der Cache leer");
 
     // A disabled cache must not create anything.
@@ -1151,7 +1155,7 @@ void testAnimCache() {
     const auto a4 = off.loadOrParse(src.string());
     check(a4.nodes.size() == a1.nodes.size(), "funktioniert auch ohne Cache");
 
-    std::printf("  Eintrag mit %zu Knoten geschrieben und unveraendert zurueckgelesen\n",
+    std::printf("  Eintrag mit %zu Knoten geschrieben und unverändert zurueckgelesen\n",
                 a2.nodes.size());
     step("aufraeumen");
     { std::error_code ec; fs::remove_all(root, ec); }
@@ -1180,7 +1184,7 @@ typedef enum //# animNumber_e
 #endif
 )";
     const auto t = g2::anim::parseEnumHeader(src, "test.h");
-    check(t.size() == 6, "sechs Eintraege gelesen");
+    check(t.size() == 6, "sechs Einträge gelesen");
     check(t.contains("FACE_TALK0"), "Eintrag mit Komma");
     check(t.contains("BOTH_STAND1"), "Eintrag OHNE Komma wird erkannt");
     check(t.contains("BOTH_STAND1IDLE1"), "zweiter Eintrag ohne Komma");
@@ -1189,7 +1193,7 @@ typedef enum //# animNumber_e
     check(t.indexOf("FACE_TALK0") == 0, "Reihenfolge bleibt erhalten");
     check(t.indexOf("BOTH_STAND1") == 2, "Index nach den beiden ersten");
     check(t.indexOf("gibtsnicht") == -1, "unbekannter Name liefert -1");
-    std::printf("  %zu Eintraege, davon %d ohne Komma erkannt\n", t.size(), 2);
+    std::printf("  %zu Einträge, davon %d ohne Komma erkannt\n", t.size(), 2);
 }
 
 void testCarValidate() {
@@ -1201,7 +1205,7 @@ void testCarValidate() {
 
         const std::vector<unsigned char> data{1, 2, 3, 4, 5};
         g2::writeFileChecked((dir / "gut.bin").string(), data.data(), data.size());
-        check(fs::file_size(dir / "gut.bin") == 5, "Datei mit erwarteter Groesse geschrieben");
+        check(fs::file_size(dir / "gut.bin") == 5, "Datei mit erwarteter Größe geschrieben");
 
         g2::writeFileChecked((dir / "text.txt").string(), std::string("hallo\n"));
         check(fs::file_size(dir / "text.txt") == 6, "Text geschrieben");
@@ -1285,7 +1289,7 @@ void testCarValidate() {
     check(has(g2::car::Issue::Level::Error, "BOTH_STAND1"), "doppelter Sequenzname erkannt");
     check(has(g2::car::Issue::Level::Warning, "BOTH_UNBEKANNT"),
           "unbekanntes Enum ist eine WARNUNG, kein Fehler");
-    check(has(g2::car::Issue::Level::Error, "Loopframe"), "Loopframe ausserhalb erkannt");
+    check(has(g2::car::Issue::Level::Error, "Loopframe"), "Loopframe außerhalb erkannt");
     check(has(g2::car::Issue::Level::Info, "keine Sequenz"),
           "Gegenrichtung gemeldet: Enum ohne Sequenz");
 
@@ -2013,7 +2017,7 @@ void testXsiExport() {
         bool add2 = false;
         for (const auto& is : vr2.issues)
             if (is.message.find("BOTH_WALK1 steht") != std::string::npos) add2 = true;
-        check(add2, "auch -additional-Namen werden geprueft");
+        check(add2, "auch -additional-Namen werden geprüft");
 
         { std::error_code rmEc; std::filesystem::remove_all(dd, rmEc); }
     }
@@ -2066,7 +2070,7 @@ void testXsiExport() {
             // Without -enum the name is derived from the file name.
             check(br.missing[1].sequence == "AUCHWEG", "Sequenzname aus dem Dateinamen");
             check(br.missing[0].line == 2, "Zeile in der .car mitgeliefert");
-            check(br.missing[1].line == 3, "auch fuer die zweite");
+            check(br.missing[1].line == 3, "auch für die zweite");
             check(br.missing[0].file == "models/x/weg.xsi", "Pfad wie in der .car");
         }
         // The old list must still be filled.
@@ -2117,7 +2121,7 @@ void testXsiExport() {
                 th);
             long sum = 0;
             for (const long v : perWorker) sum += v;
-            check(sum == 49995000L, "Summe ueber getrennte Zaehler stimmt");
+            check(sum == 49995000L, "Summe über getrennte Zaehler stimmt");
         }
 
         // 4) An exception reaches the caller and takes nothing down with it.
@@ -2141,7 +2145,7 @@ void testXsiExport() {
         check((g2::parallelFor(1, [](std::size_t) {}, 8), true), "ein Element, acht Threads");
     }
 
-    step("Auskunft ueber die Laufzeit");
+    step("Auskunft über die Laufzeit");
     {
         // Whether the program starts on someone else's machine should be
         // answerable without external tools.
@@ -2210,7 +2214,7 @@ void testXsiExport() {
         // Calling it twice must not duplicate anything.
         g2::car::addGrabFrame(leer);
         const std::string zwei = g2::car::writeScript(leer);
-        check(zwei == mit, "zweiter Aufruf aendert nichts");
+        check(zwei == mit, "zweiter Aufruf ändert nichts");
 
         // And reading it back in must return the grab.
         const auto zurueck = g2::car::parse(mit, "test.car");
@@ -2307,7 +2311,7 @@ void testXsiExport() {
         check(g2::xsiexp::residualMotion(gla, {"x", 0, 1}) == 0.0f, "ein Frame: nichts zu messen");
         check(g2::xsiexp::residualMotion(gla, {"x", -5, 10}) == 0.0f, "negativer Start abgewiesen");
         check(g2::xsiexp::residualMotion(gla, {"x", 0, frames + 99}) == 0.0f,
-              "Bereich ausserhalb abgewiesen");
+              "Bereich außerhalb abgewiesen");
     }
 
     step("Templatenamen mit Leerzeichen");
@@ -2378,8 +2382,8 @@ void testXsiExport() {
         check(g5.skeleton.name != sk.name, "und nicht der der Vorlage");
 
         // Bones and frames are unaffected by this.
-        check(g5.numFrames == frames, "Framezahl unveraendert");
-        check(g5.skeleton.bones.size() == sk.bones.size(), "Bonezahl unveraendert");
+        check(g5.numFrames == frames, "Framezahl unverändert");
+        check(g5.skeleton.bones.size() == sk.bones.size(), "Bonezahl unverändert");
     }
 
     step("dotXSI-Fassung 3.0 und 3.5");
@@ -2447,11 +2451,34 @@ void testXsiExport() {
         // Accordingly, Raven's own 58 single-frame sequences are all
         // -additional sub-ranges of longer files.
         //
-        // That's why the frame is doubled: two identical frames, the
-        // animation unchanged, and Carcass can read the file.
-        const std::string one = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eo);
+        // By default it stays ONE frame (g2c reads it, the count in the
+        // animation.cfg stays 1). For Carcass it is doubled: two identical
+        // frames, the animation unchanged.
+        {
+            const std::string single = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eo);
+            check(single.find("0,\n  0,\n") != std::string::npos, "REGRESSION Standard: Framebereich 0..0 (Fehler: 0..1)");
+            const std::filesystem::path sd = std::filesystem::temp_directory_path() / uniqueTestDir("onefr1");
+            std::filesystem::create_directories(sd);
+            { std::ofstream o(sd / "s.xsi", std::ios::binary); o << single; }
+            const auto sa = g2::xsi::loadAnimation(g2::xsi::parseFile((sd / "s.xsi").string()), (sd / "s.xsi").string());
+            check(sa.firstFrame == 0 && sa.lastFrame == 0, "ein Frame in der Datei");
+            g2::xsi::EvalOptions sv;
+            sv.scale = sk.scale;
+            const auto sr = g2::xsi::evaluate(sk, sa, sv);
+            check(sr.frames.frameCount() == 1, "ein Frame ausgewertet - wie im Original");
+            double sd0 = 0.0;
+            for (int b = 0; b < nb; ++b)
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        sd0 = std::max(sd0, static_cast<double>(std::fabs(sr.frames.at(0, b).m[r][c] - gla.boneMatrix(3, b).m[r][c])));
+            check(sd0 < 2e-3, "der eine Frame entspricht dem Original (" + std::to_string(sd0) + ")");
+            { std::error_code rmEc; std::filesystem::remove_all(sd, rmEc); }
+        }
+        auto eoCarcass = eo;
+        eoCarcass.doubleSingleFrame = true;
+        const std::string one = g2::xsiexp::exportSequence(gla, {"einzel", 3, 1}, eoCarcass);
         check(one.find("0,\n  1,\n") != std::string::npos,
-              "Framebereich 0..1 statt 0..0");
+              "für Carcass: Framebereich 0..1 statt 0..0");
 
         // Both frames must have the same content.
         const std::filesystem::path od = std::filesystem::temp_directory_path() /
@@ -2475,14 +2502,26 @@ void testXsiExport() {
                 for (int c = 0; c < 4; ++c)
                     diff = std::max(diff, static_cast<double>(std::fabs(A.m[r][c] - B2.m[r][c])));
         }
-        check(diff < 1e-5, "beide Frames identisch - die Animation aendert sich nicht");
+        check(diff < 1e-5, "beide Frames identisch - die Animation ändert sich nicht");
 
         // Multi-frame sequences stay unchanged.
         const std::string many = g2::xsiexp::exportSequence(gla, {"mehr", 0, frames}, eo);
         check(many.find("0,\n  " + std::to_string(frames - 1) + ",\n") != std::string::npos,
-              "mehrframige Sequenz unveraendert");
+              "mehrframige Sequenz unverändert");
 
         { std::error_code rmEc; std::filesystem::remove_all(od, rmEc); }
+    }
+
+    step("Bildrate der exportierten Datei");
+    {
+        check(g2::xsiexp::sceneRateFor(30) == 30 && g2::xsiexp::sceneRateFor(10) == 10,
+              "Rate aus der animation.cfg (30, 10)");
+        check(g2::xsiexp::sceneRateFor(-15) == 15, "rückwärts: Betrag (-15 -> 15)");
+        check(g2::xsiexp::sceneRateFor(0) == 20, "unbekannt: 20");
+        g2::xsiexp::ExportOptions ro = eo;
+        ro.fps = g2::xsiexp::sceneRateFor(30);
+        const std::string t = g2::xsiexp::exportSequence(gla, {"rate", 0, 3}, ro);
+        check(t.find("  2,\n  30,\n}") != std::string::npos, "SI_Scene trägt 30");
     }
 
     step("BASEPOSE-Block");
@@ -2519,7 +2558,7 @@ void testXsiExport() {
         // model_root, mesh_root and skeleton_root. Of those the GLA only knows
         // model_root, so for us the difference is exactly one.
         check(nBase == nSrt - 1, "genau ein SRT mehr als BASEPOSE");
-        check(nBase == sk.bones.size() - 1, "fuer alle ausser der Wurzel");
+        check(nBase == sk.bones.size() - 1, "für alle ausser der Wurzel");
         check(txt3.find("BASEPOSE-" + sk.bones[0].name) == std::string::npos,
               "die Wurzel hat keinen BASEPOSE-Block");
 
@@ -2640,7 +2679,7 @@ void testXsiExport() {
         }
         std::cout << "  groesster Unterschied Ruhelage <-> Bindepose: " << worstRest
                   << (worstBone.empty() ? "" : " bei " + worstBone) << "\n";
-        check(worstRest < 0.01, "SI_Transform traegt die Bindepose, nicht Frame 0");
+        check(worstRest < 0.01, "SI_Transform trägt die Bindepose, nicht Frame 0");
 
         { std::error_code rmEc; std::filesystem::remove_all(rp, rmEc); }
     }
@@ -2690,7 +2729,7 @@ void testRobustness() {
             "$aseanimconvertmdx_noask models/r -makeskin -makeskel models/players/x/x -origin 0 0 24\r\n"
             "// Ende\r\n";
         g2::car::Script sc = g2::car::parse(src);
-        check(g2::car::writeScript(sc) == src, "unveraendert gespeichert: zeichengleich");
+        check(g2::car::writeScript(sc) == src, "unverändert gespeichert: zeichengleich");
 
         // Now modify: the lines are regenerated and must still mean the
         // same thing.
@@ -2822,7 +2861,7 @@ void testRobustness() {
         g2::car::BuildResult br;
         try { br = g2::car::build(sc, ks, (dir / "t.car").string(), bo); }
         catch (const std::exception&) { threw = true; }
-        check(!threw && br.sequences.size() == 1, "mit -skipmissing: gebaut, Luecke gemeldet");
+        check(!threw && br.sequences.size() == 1, "mit -skipmissing: gebaut, Lücke gemeldet");
         std::error_code ec;
         fs::remove_all(dir, ec);
     }
@@ -2853,7 +2892,7 @@ void testModelSettings() {
     check(m.keepMotion, "$keepmotion gelesen");
     check((m.pcj == std::vector<std::string>{"$flatten", "upper_lumbar", "cranium"}), "PCJ-Liste in Reihenfolge, $flatten dabei");
 
-    section("Unveraendert anwenden aendert keine Zeile");
+    section("Unveraendert anwenden ändert keine Zeile");
     applyModelSettings(s, m);
     check(writeScript(s) == src, "Datei byte-gleich");
 
@@ -2870,10 +2909,10 @@ void testModelSettings() {
         check(modelSettingsOf(parse(out)) == n, "wieder gelesen gleich");
         std::string expect = src;
         expect.replace(expect.find("$scale 0.64"), 11, "$scale 0.5");
-        check(out == expect, "nur diese Zeile geaendert");
+        check(out == expect, "nur diese Zeile geändert");
     }
 
-    section("$keepmotion entfernen, Kommentar darueber bleibt");
+    section("$keepmotion entfernen, Kommentar darüber bleibt");
     {
         Script t = parse(src);
         ModelSettings n = modelSettingsOf(t);
@@ -2881,7 +2920,7 @@ void testModelSettings() {
         applyModelSettings(t, n);
         const std::string out = writeScript(t);
         check(out.find("$keepmotion") == std::string::npos, "Zeile weg");
-        check(out.find("// Bewegung\r\n$pcj $flatten") != std::string::npos, "Kommentar wandert zur naechsten Zeile");
+        check(out.find("// Bewegung\r\n$pcj $flatten") != std::string::npos, "Kommentar wandert zur nächsten Zeile");
         check(!t.keepMotion, "Bauwert mitgezogen");
     }
 
@@ -2952,7 +2991,7 @@ void testReviewBinary() {
     {
         g2::CompressStats st;
         const float back = g2::unsquashXlatComponent(g2::squashXlatComponent(-511.5f, g2::Rounding::Nearest, st));
-        checkNear(back, -511.5, 1.0 / 64.0, "-511.5 kommt als -511.5 zurueck (vorher -511)");
+        checkNear(back, -511.5, 1.0 / 64.0, "-511.5 kommt als -511.5 zurück (vorher -511)");
         check(st.xlatClamped == 0, "und gilt nicht als geklemmt");
         const float lo = g2::unsquashXlatComponent(g2::squashXlatComponent(-512.0f, g2::Rounding::Nearest, st));
         checkNear(lo, -512.0, 1e-6, "-512 ist darstellbar");
@@ -3004,7 +3043,7 @@ void testReviewBinary() {
             g2::Quat q = g2::matrixToQuat(clean);
             if (q.w < 0) { q.w = -q.w; q.x = -q.x; q.y = -q.y; q.z = -q.z; }
             const g2::Mat3x4 viaQuat = g2::uncompressBone(a);
-            checkNear(angleOf(viaQuat), angleOf(clean), 0.05, "saubere Drehung unveraendert");
+            checkNear(angleOf(viaQuat), angleOf(clean), 0.05, "saubere Drehung unverändert");
             check(st.nonUnitQuat == 0, "saubere Drehung nicht gezaehlt");
         }
     }
@@ -3108,7 +3147,7 @@ void testReviewXsi() {
         try {
             g2::xsi::loadAnimation(g2::xsi::parse(curve("LINEAR", 1, 5, "0, 0, 10, 90,")));
         } catch (const std::exception& e) {
-            threw = std::string(e.what()).find("beschaedigt") != std::string::npos;
+            threw = std::string(e.what()).find("beschädigt") != std::string::npos;
         }
         check(threw, "abgeschnittene Kurve: Fehler statt still stehender Bone");
         threw = false;
@@ -3179,7 +3218,7 @@ void testReviewXsi() {
             const auto& sf = color.mesh.lods[0].surfaces[0];
             uvOk = sf.vertices.size() == 3 && sf.vertices[0].uv[0] == 1.0f && sf.vertices[0].uv[1] == 1.0f;
         }
-        check(uvOk, "COLOR-Block uebersprungen, UVs aus dem richtigen Block (vorher Farbindizes als UV)");
+        check(uvOk, "COLOR-Block übersprungen, UVs aus dem richtigen Block (vorher Farbindizes als UV)");
 
         bool noCrash = true;
         g2::xsi::MeshImportResult cut;
@@ -3196,7 +3235,7 @@ void testReviewXsi() {
               "fehlender UV-Block: Warnung, die heile Liste bleibt (vorher Lesen hinter dem Ende)");
     }
 
-    section("REGRESSION: Surface ueber der Grenze des Spiels");
+    section("REGRESSION: Surface über der Grenze des Spiels");
     {
         // 1002 separate vertices in one surface: Jedi Academy refuses the model.
         std::string src = "xsi 0300txt 0032\nSI_Model MDL-mesh_root {\n  SI_Model MDL-big {\n    SI_Mesh MSH-big {\n"
@@ -3210,8 +3249,8 @@ void testReviewXsi() {
         mo.scale = 1.0f;
         const auto r = g2::xsi::importMesh(g2::xsi::parse(src), mo);
         bool warned = false;
-        for (const auto& w : r.stats.warnings) warned = warned || w.find("hoechstens 1000") != std::string::npos;
-        check(warned, "1002 Vertices in einer Surface: Warnung (vorher still geschrieben, Spiel laedt nicht)");
+        for (const auto& w : r.stats.warnings) warned = warned || w.find("höchstens 1000") != std::string::npos;
+        check(warned, "1002 Vertices in einer Surface: Warnung (vorher still geschrieben, Spiel lädt nicht)");
     }
 }
 
@@ -3243,7 +3282,7 @@ void testReviewScript() {
               "Leerzeile davor ist Layout, kein Kommentar der Animation");
     }
 
-    section("REGRESSION: Kommentar ueber $aseanimgrabfinalize bleibt dort");
+    section("REGRESSION: Kommentar über $aseanimgrabfinalize bleibt dort");
     {
         check(same("$aseanimgrabinit\r\n$aseanimgrab a.xsi\r\n$scale 0.64\r\n$pcj cranium\r\n"
                    "// Ende\r\n$aseanimgrabfinalize\r\n"),
@@ -3278,7 +3317,7 @@ void testReviewScript() {
         check(sc2.grabs[0].trailingComment == "// echt", "echter Zeilenkommentar weiter erkannt");
     }
 
-    section("REGRESSION: Zahlen ausserhalb des Bereichs");
+    section("REGRESSION: Zahlen außerhalb des Bereichs");
     {
         for (const char* bad : {"-loop nan", "-loop 1e10", "-framespeed inf", "-additional 0 1e12 -1 20 X"}) {
             bool threw = false;
@@ -3312,20 +3351,20 @@ void testReviewScript() {
               "eigene Zeilen: nur cranium, kein $keepmotion (das steht im include)");
         check(t.pcjFlatten && t.keepMotion && t.pcjBones.size() == 2, "Bau sieht alles, include eingeschlossen");
         applyModelSettings(t, own);
-        check(writeScript(t) == mainSrc, "unveraendert angewendet: Datei bytegleich (vorher $flatten verdoppelt)");
+        check(writeScript(t) == mainSrc, "unverändert angewendet: Datei bytegleich (vorher $flatten verdoppelt)");
 
         // Remove the own entry: its comment must not get lost.
         own.pcj.clear();
         applyModelSettings(t, own);
         const std::string out = writeScript(t);
         check(out.find("$pcj cranium") == std::string::npos && out.find("// Ruecken") != std::string::npos,
-              "eigener Eintrag weg, Kommentar darueber bleibt (vorher verschluckt)");
+              "eigener Eintrag weg, Kommentar darüber bleibt (vorher verschluckt)");
         check(t.pcjFlatten && t.pcjBones.size() == 1 && t.keepMotion, "Bauwerte = was in den Dateien steht");
         std::error_code ec;
         fs::remove_all(d, ec);
     }
 
-    section("REGRESSION: Kommentar ueber geloeschtem $keepmotion vor dem ersten Grab");
+    section("REGRESSION: Kommentar über geloeschtem $keepmotion vor dem ersten Grab");
     {
         Script t = parse("$aseanimgrabinit\r\n$scale 0.64\r\n// Wurzel behalten\r\n$keepmotion\r\n"
                          "$aseanimgrab a.xsi\r\n$aseanimgrabfinalize\r\n");
@@ -3345,10 +3384,10 @@ void testReviewScript() {
         std::size_t dupe = 0;
         for (const auto& is : r.issues)
             if (is.sequence == "BOTH_A1") ++dupe;
-        check(dupe == 1, "eine Meldung fuer BOTH_A1 (vorher zwei, Fehlerzahl doppelt): " + std::to_string(dupe));
+        check(dupe == 1, "eine Meldung für BOTH_A1 (vorher zwei, Fehlerzahl doppelt): " + std::to_string(dupe));
     }
 
-    section("REGRESSION: -additional ausserhalb der Datei wird beim Bauen gemeldet");
+    section("REGRESSION: -additional außerhalb der Datei wird beim Bauen gemeldet");
     {
         namespace fs = std::filesystem;
         const fs::path d = fs::temp_directory_path() / uniqueTestDir("addrange");
@@ -3378,6 +3417,8 @@ void testReviewScript() {
         fs::remove_all(d, ec);
     }
 }
+
+#include "tests_carcass.inc"
 
 int main() {
     // Unbuffered output. Otherwise, on a hang or crash you can't tell where it
@@ -3439,6 +3480,16 @@ int main() {
     run("testReviewBinary", testReviewBinary);
     run("testReviewXsi", testReviewXsi);
     run("testReviewScript", testReviewScript);
+    run("testGlmRead", testGlmRead);
+    run("testCarcassScriptSyntax", testCarcassScriptSyntax);
+    run("testSkeletonBuild", testSkeletonBuild);
+    run("testFrameStepAndOutputs", testFrameStepAndOutputs);
+    run("testFractionalSpeed", testFractionalSpeed);
+    run("testOneFrameBuild", testOneFrameBuild);
+    run("testGlmWeightsLikeCarcass", testGlmWeightsLikeCarcass);
+    run("testMeshLikeCarcass", testMeshLikeCarcass);
+    run("testAseAndMdr", testAseAndMdr);
+    run("testCarCorpus", testCarCorpus);
 
 
     g_currentTest.store("(fertig)");

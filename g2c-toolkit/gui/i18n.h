@@ -30,14 +30,16 @@ enum class S {
 
     // Toolbar
     BtnSave, BtnSaveAll, BtnBuild, BtnBuildAll, BtnValidate,
-    BtnOpenFolder, BtnAddXsi, BtnAddXsiFolder, BtnAddXsiFolderAll, BtnAddXsiAll,
+    BtnOpenFolder, BtnAddXsi, BtnAddXsiFolder, BtnAddXsiFolderAll, BtnAddXsiAll, OnlyNewXsi, OnlyNewXsiTooltip,
     BtnCancel,
 
     // Settings
     SecPaths, SecOutput, SecProcessing,
     AssetRoot, ReferenceGla, EnumTable,
     OutputPerScript, AssignDefaultOutputs, AssignTooltip,
-    WriteFrames, WriteMesh, WriteSkin,
+    WriteFrames, WriteMesh, WriteSkin, WriteGla, WriteCfg, WriteInfo, OutputsTooltip,
+    SkinTooltip, LogModelScript, LogFileWritten, NewSkeleton, NewSkeletonTooltip, FrameStep,
+    FrameStepTooltip, LogNewSkeleton,
     UseCache, CacheTooltip, CarcassMode, CarcassTooltip,
     ReadFrameCounts, ReadFrameCountsTooltip, CoresInUse,
     ReferenceGlaTooltip,
@@ -102,7 +104,7 @@ enum class S {
     LogNoRefGla, LogMeshSourceMissing, LogScriptNotWritable, LogBuilt,
     LogFrameCounts, LogFramesNotFound, LogValidation, LogAllCores,
     LogOpened, LogGlaOpened, LogFramesLoaded, LogDeleted, LogMoved, LogSeqsRead,
-    LogNoOutputAt, LogUnreadable, LogAddedFiles,
+    LogNoOutputAt, LogUnreadable, LogAddedFiles, LogSkippedExisting,
 
     // Copy and paste
     Copy, Cut, PasteBefore, PasteAfter, PasteEnd, ClipEmpty, Copied, Pasted, ClipHint,
@@ -146,6 +148,11 @@ enum class S {
     LogNoDependents, LogDependents, LogGlmMissing, LogModViewMissing, LogModViewStarted,
     PickerAll, PickerOther, PickerHideUsed, PickerUsedHint,
     TipSpeedDefault,
+    StepGla, StepSelect, StepTarget, StepExport, ExSelCount, SelectAll, SelectNone, ExSelectHint, ExCompareHead, ExNeedGla, ExNeedTarget, ExNeedSelection, ExNeedCfg, DropGlaHint, ExOtherGla, PvEmptyHint, PvPrevFrame, PvNextFrame, PvKeys, PvInfo, PvLoopNone, ModeBuildSub, ModeExtractSub, ModePreviewSub, ExShowInPreview, ExFormat,
+    PvLoadGlm, PvShowMesh, PvShowSkeleton, PvWireframe, PvGlmHint, PvGlmInfo, PvGlmOther, PvRemoveGlm, LogGlmLoaded, LogGlmFailed, DlgTitleGlm,
+    PvTextures, PvTexOff, PvSkin, PvTexMissing, PvTexSourceTip,
+    WelcomeTitle, WelcomeRoot, WelcomeRootHint, WelcomeOpen, WelcomeOpenHint, WelcomeBuild, WelcomeBuildHint, PathRootChip, PathRefChip, PathRefAuto, PathChipTip, WritesLabel, OutputChipTip, BottomIssues, BottomToggleTip, ToastBuilt, ToastBuildErrors, ToastCancelled, ToastShowLog, ToastOpenFolder, ToastSaved, ToastDismiss, AddXsiMenuFiles, AddXsiMenuFolder, AddXsiMenuFilesAll, AddXsiMenuFolderAll, SettingsToggleTip,
+    ChipAll, ChipProblems, ChipNoEnum, ChipBackwards, ChipParts, ChipTip, CellEditTip, BackwardsTip, MenuEdit, Undo, Redo, Palette, PaletteHint, PaletteNone, PaletteSeq, PaletteTab, PaletteMode, LogUndone, LogRedone,
 
     Count
 };
