@@ -502,8 +502,8 @@ public:
 
     // Append all .xsi files of a folder - recursively, sorted.
     std::size_t addXsiFolder(const std::string& folder, bool toAll);
-    // Keys of every .xsi the script grabs (resolved like the build does);
-    // used by Settings::onlyNewXsi.
+    // File names (lower case, without ".xsi") of every .xsi the script grabs,
+    // whatever their folder; used by Settings::onlyNewXsi.
     std::set<std::string> grabbedXsiKeys(const Document& d) const;
 
     // Frame count of a source file, if already known. -1 = not read yet,
@@ -580,6 +580,23 @@ public:
     // Takes a script out of the project and closes its tab.
     bool removeFromProject(const std::string& script);
     const std::deque<std::string>& recentProjects() const { return recentProjects_; }
+
+    // --- Replace paths (Edit menu) -------------------------------------------
+    //
+    // After a folder was renamed, every $aseanimgrab still names the old one.
+    // This swaps a part of the source paths in one go; case and the direction
+    // of the slashes don't matter. Returns the rows changed.
+    std::size_t replaceInPaths(std::size_t doc, const std::string& find, const std::string& replaceWith);
+    struct PathReplaceStats {
+        std::size_t matched = 0;      // rows whose path contains it
+        std::size_t foundAfter = 0;   // of those, found on disk afterwards
+    };
+    PathReplaceStats previewPathReplace(std::size_t doc, const std::string& find,
+                                        const std::string& replaceWith) const;
+    void openPathReplaceDialog() {
+        pathDlgOpen_ = true;
+        pathPreviewKey_.clear();
+    }
 
     // Assimilate's "Write Config Data": the full build, but only
     // animation.cfg is written - GLA, .frames and mesh stay untouched.
@@ -765,6 +782,15 @@ private:
 
     void drawCloseDialog();
     void drawSpeedDialog();
+    void drawPathReplaceDialog();
+    bool             pathDlgOpen_ = false;
+    char             pathFind_[260] = {};
+    char             pathRepl_[260] = {};
+    bool             pathAll_ = false;
+    // The preview looks every file up on disk: only redone when something
+    // it depends on changed.
+    std::string      pathPreviewKey_;
+    PathReplaceStats pathPreview_;
     // Another modal is up: wait. Two modals at once each closed the other
     // every frame, and neither ever became visible.
     bool otherModalOpen(const char* mine) const;

@@ -399,3 +399,9 @@ Prozesstest mit einer portablen Kopie), alle 12 schlugen an; erst dann behoben.
 | Erste Assetwurzel leerte den Framezahl-Speicher nicht | alle Zeilen blieben "fehlt" bis zum Neustart | Treiber 16g R10 |
 | "Abhängige bauen" setzte Ausgabeordner bei allen Tabs | ein späteres "Alle bauen" schrieb unbeteiligte Skripte nach g2c_out | gui_tests R11 |
 | Kommentare an der letzten Zeile verschoben | landeten hinter statt vor den anderen bzw. sprangen über sie | gui_tests R12, Treiber 16g R12 |
+
+## Oktober 2026: "Nur neue XSI" nach Dateiname
+
+| Fehler | Folge | Test |
+|---|---|---|
+| "Nur neue XSI" verglich Pfade, nicht Dateinamen | nach dem Umbenennen eines Ordners stand jede Animation unter anderem Pfad in der .car - der ganze Ordner (z. B. Anakin) kam ein zweites Mal hinein, mit doppelten Sequenznamen | gui_tests "Nur neue XSI: gleicher Dateiname aus anderem Ordner" (vorher 5 Fehler) |

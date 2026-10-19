@@ -53,12 +53,12 @@ constexpr Entry kTable[] = {
     {S::BtnAddXsiAll, "XSI zu allen", "XSI to all", "XSI 到全部", "XSI を全体へ"},
     {S::OnlyNewXsi, "Nur neue XSI", "Only new XSI", "仅新的 XSI", "新しい XSI のみ"},
     {S::OnlyNewXsiTooltip,
-     "Beim Hinzufügen (Dateien, Ordner, Ziehen) werden .xsi übersprungen, die das Skript schon enthält.\n"
-     "So kann man einfach den ganzen Ordner wählen - nur die neuen kommen dazu.",
-     "When adding (files, folders, drag and drop), .xsi files the script already contains are skipped.\n"
-     "Just pick the whole folder - only the new ones are added.",
-     "添加（文件、文件夹、拖放）时跳过脚本中已有的 .xsi。\n直接选择整个文件夹即可 - 只添加新的。",
-     "追加時（ファイル、フォルダー、ドラッグ）にスクリプトに既にある .xsi をスキップします。\n"
+     "Beim Hinzufügen (Dateien, Ordner, Ziehen) werden .xsi übersprungen, deren Dateiname schon im Skript steht -\n"
+     "egal in welchem Ordner. So kann man einfach den ganzen Ordner wählen - nur die neuen kommen dazu.",
+     "When adding (files, folders, drag and drop), .xsi files whose file name the script already has are skipped -\n"
+     "whatever their folder. Just pick the whole folder - only the new ones are added.",
+     "添加（文件、文件夹、拖放）时跳过文件名已在脚本中的 .xsi - 无论在哪个文件夹。\n直接选择整个文件夹即可 - 只添加新的。",
+     "追加時（ファイル、フォルダー、ドラッグ）にファイル名が既にスクリプトにある .xsi をスキップします（フォルダーは問いません）。\n"
      "フォルダー全体を選ぶだけで、新しいものだけが追加されます。"},
     {S::BtnCancel, "Abbrechen", "Cancel", "取消", "中止"},
     {S::SecPaths, "Pfade", "Paths", "路径", "パス"},
@@ -502,9 +502,9 @@ constexpr Entry kTable[] = {
     {S::LogAddedFiles, "%zu Datei(en) zu %zu Skript(en) hinzugefügt",
      "%zu file(s) added to %zu script(s)", "已将 %zu 个文件添加到 %zu 个脚本",
      "%zu 件のファイルを %zu 件のスクリプトに追加しました"},
-    {S::LogSkippedExisting, "%zu .xsi übersprungen - stehen schon in der .car",
-     "%zu .xsi skipped - already in the .car", "跳过 %zu 个 .xsi - 已在 .car 中",
-     "%zu 件の .xsi をスキップ - すでに .car にあります"},
+    {S::LogSkippedExisting, "%zu .xsi übersprungen - Dateiname steht schon in der .car",
+     "%zu .xsi skipped - file name already in the .car", "跳过 %zu 个 .xsi - 文件名已在 .car 中",
+     "%zu 件の .xsi をスキップ - ファイル名がすでに .car にあります"},
     {S::Copy, "Kopieren", "Copy", "复制", "コピー"},
     {S::Cut, "Ausschneiden", "Cut", "剪切", "切り取り"},
     {S::PasteBefore, "%zu hier einfügen (davor)", "Paste %zu here (before)", "在此前粘贴 %zu 项",
@@ -1413,6 +1413,29 @@ constexpr Entry kTable[] = {
      "0 不是有效速度（倒放：负数）", "0 は速度になりません（逆再生: 負の値）"},
     {S::ShutdownBlocked, "g2c: ungespeicherte Änderungen", "g2c: unsaved changes", "g2c：有未保存的更改",
      "g2c: 未保存の変更があります"},
+    {S::ReplacePaths, "Pfade ersetzen...", "Replace paths...", "替换路径...", "パスを置換..."},
+    {S::ReplacePathsTitle, "Pfade ersetzen", "Replace paths", "替换路径", "パスを置換"},
+    {S::ReplacePathsHint,
+     "Für umbenannte Ordner: ersetzt einen Teil der XSI-Pfade aller Zeilen, z. B. models/players/__new_anim/ "
+     "durch models/players/__new_anim new/. Groß-/Kleinschreibung und / oder \\ spielen keine Rolle. "
+     "Rückgängig mit Strg+Z.",
+     "For renamed folders: replaces part of every row's XSI path, e.g. models/players/__new_anim/ "
+     "with models/players/__new_anim new/. Case and / or \\ don't matter. Undo with Ctrl+Z.",
+     "用于重命名的文件夹：替换所有行 XSI 路径中的一部分，例如把 models/players/__new_anim/ "
+     "换成 models/players/__new_anim new/。大小写和 / 或 \\ 均无关。可用 Ctrl+Z 撤销。",
+     "名前を変えたフォルダー用: 全行の XSI パスの一部を置換します。例: models/players/__new_anim/ を "
+     "models/players/__new_anim new/ に。大文字小文字や / と \\ の違いは問いません。Ctrl+Z で元に戻せます。"},
+    {S::ReplaceFind, "Suchen", "Find", "查找", "検索"},
+    {S::ReplaceWith, "Ersetzen durch", "Replace with", "替换为", "置換後"},
+    {S::ReplaceAllScripts, "In allen offenen Skripten", "In all open scripts", "在所有打开的脚本中",
+     "開いているすべてのスクリプトで"},
+    {S::ReplacePreview, "%zu Zeile(n) betroffen - danach gefunden: %zu, fehlen: %zu",
+     "%zu row(s) affected - found afterwards: %zu, missing: %zu",
+     "影响 %zu 行 - 替换后找到：%zu，缺失：%zu",
+     "%zu 行が対象 - 置換後に見つかる: %zu、見つからない: %zu"},
+    {S::ReplaceApply, "Ersetzen", "Replace", "替换", "置換"},
+    {S::LogPathsReplaced, "%zu Pfad(e) in %zu Skript(en) ersetzt", "%zu path(s) replaced in %zu script(s)",
+     "已替换 %zu 个路径（%zu 个脚本）", "%zu 件のパスを置換しました（スクリプト %zu 件）"},
 };
 
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(S::Count),
