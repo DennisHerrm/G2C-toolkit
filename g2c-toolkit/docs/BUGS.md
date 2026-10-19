@@ -354,3 +354,48 @@ nachweislich anschlägt:
 | Der Filter "Probleme" las nur gültige Ergebnisse | bei jeder Änderung war die Tabelle bis zur nächsten Prüfung leer | gui_tests "Problemfilter" |
 | Drahtgitter auf texturierten Flächen mit gebundener Modelltextur | Linien verfärbt oder unsichtbar | (Sichtprüfung) |
 | Render-Reset über die alte Konstante (-8) | mit IMGUI_DISABLE_OBSOLETE_FUNCTIONS ein Absturz | (nutzt jetzt die 1.92.8-Schnittstelle) |
+
+## Oktober 2026: Tabs, Filter, Ordner
+
+Gemeldet: mit vielen offenen Skripten einen Ordner gewählt, es kam nichts
+dazu und die Ansicht sprang in einen anderen Tab. Dazu eine Suche nach
+ähnlichen Fehlern. Jeder Fehler wurde zuerst mit Treiberschritt 16f gegen den
+alten Code nachgewiesen (10 von 10 schlugen an), erst dann behoben.
+
+| Fehler | Folge | Test |
+|---|---|---|
+| "Ordner öffnen" aktivierte schon offene .car aus dem Ordner | Sprung in deren Tab, keine XSI eingefügt (die Meldung) | 16f B1 |
+| Ein Suchfilter versteckte eben hinzugefügte Zeilen | sah aus, als wäre nichts hinzugekommen | 16f B2a |
+| Der Suchfilter galt in allen Tabs | im anderen Tab war die Tabelle leer | 16f B2b |
+| Einfügen in ein unlesbares Skript | Zeilen landeten in einem Tab, der nicht gespeichert werden kann | 16f B3 |
+| Geänderten Tab per Mittelklick schließen, dann "Nein" | Ansicht sprang in einen anderen Tab | 16f B5 |
+| "Speichern unter" | Ansicht sprang in einen anderen Tab | 16f B6 |
+| Dieselbe .car in anderer Schreibweise | zweiter Tab derselben Datei | 16f B7 |
+| Zellbearbeitung + Tabwechsel von außen | getippter Wert landete im anderen Skript | 16f B8 |
+| Mehrere XSI-Ordner: Zusammenfassung | zählte Skripte statt Dateien | 16f B10 |
+| Abgelegte Datei während "Löschen?" | das Löschen traf danach eine andere Zeile | 16f B11 |
+
+Zwei weitere Verdachtsfälle (alte Klicks nach langem Laden, Sprungziel aus
+dem Protokoll ohne Bezug zum Skript) ließen sich nicht nachstellen und
+blieben unverändert.
+
+## Oktober 2026: zweite Durchsicht
+
+Eine zweite Code-Durchsicht. Jeder Fund wurde zuerst gegen den alten Code
+nachgewiesen (gui_tests "R1".."R12", Treiber 16g, und für das Abmelden ein
+Prozesstest mit einer portablen Kopie), alle 12 schlugen an; erst dann behoben.
+
+| Fehler | Folge | Test |
+|---|---|---|
+| Bauen/Prüfen in der Oberfläche ohne `$include`-Dateien | Sequenzen aus dem Include fehlten in GLA und animation.cfg | gui_tests R1 |
+| Referenz-GLA vom ersten geöffneten Skript übernommen und gespeichert | jedes weitere Skript wurde mit dessen Skelett gebaut (z. B. `_humanoid_sbd`, 43 Knochen, mit dem 53-Knochen-Skelett von `_humanoid`) | gui_tests R2 |
+| Hinzugefügte/eingefügte Zeilen mit alter Zeilennummer | falsche Zeile als fehlerhaft markiert; `$aseanimref_gla`/`$pcj` beim Bauen falsch eingeordnet | gui_tests R3 |
+| "Leeren" beim Ausgabeordner nicht gemerkt | nach Neuöffnen war der alte Ordner wieder da und wurde überschrieben | gui_tests R4 |
+| Abmelden/Neustart von Windows | ungespeicherte Änderungen ohne Rückfrage weg, Tabs und Einstellungen nicht gespeichert | Prozesstest (WM_QUERYENDSESSION/WM_ENDSESSION) |
+| Speed 0 im Speed-Dialog, Sequenzdialog und bei Teilen | `-framespeed 0` landete in .car und animation.cfg | Treiber 16g R6 |
+| Vom Filter versteckte Zeilen blieben ausgewählt | "2 ausgewählte löschen" löschte auch eine unsichtbare Zeile | Treiber 16g R7 |
+| "In ModView öffnen" suchte `<-makeskel>.glm` bzw. `out.glm` | ModView fand die gebaute `<Name der .car>.glm` nicht | gui_tests R8 |
+| Tabwechsel per Maus ohne Zurücksetzen | Umschalt+Klick wählte ab der Zeile des vorigen Tabs; Framezahlen nicht neu geprüft | Treiber 16g R9 |
+| Erste Assetwurzel leerte den Framezahl-Speicher nicht | alle Zeilen blieben "fehlt" bis zum Neustart | Treiber 16g R10 |
+| "Abhängige bauen" setzte Ausgabeordner bei allen Tabs | ein späteres "Alle bauen" schrieb unbeteiligte Skripte nach g2c_out | gui_tests R11 |
+| Kommentare an der letzten Zeile verschoben | landeten hinter statt vor den anderen bzw. sprangen über sie | gui_tests R12, Treiber 16g R12 |
