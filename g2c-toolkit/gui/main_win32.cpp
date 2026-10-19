@@ -709,6 +709,28 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             else if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
             return 0;
 
+        case WM_QUERYENDSESSION:
+            // Windows logs off or restarts (also for an update). With unsaved
+            // scripts say no and ask, as on closing - Windows shows the
+            // reason and lets the user decide. They used to be lost silently.
+            if (g_app && g_app->hasUnsavedChanges()) {
+                ShutdownBlockReasonCreate(hwnd, toWide(g2::gui::tr(g2::gui::S::ShutdownBlocked)).c_str());
+                if (!g_app->requestQuit() && IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+                return FALSE;
+            }
+            return TRUE;
+
+        case WM_ENDSESSION:
+            // The session really ends: the process is gone right after this,
+            // without ~App. Write now what it would have written - tabs,
+            // output folders, the project, the layout.
+            if (wp && g_app) {
+                g_app->saveSessionState();
+                if (ImGui::GetCurrentContext() && ImGui::GetIO().IniFilename)
+                    ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
+            }
+            return 0;
+
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -1430,6 +1452,7 @@ int wWinMainGuarded(HINSTANCE inst) {
         ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + w + L"\"").c_str(),
                       nullptr, SW_SHOWNORMAL);
     };
+    plat.setTitle = [hwnd](const std::string& title) { SetWindowTextW(hwnd, toWide(title).c_str()); };
     // Preview textures: uploaded with mipmaps, so a large image drawn small
     // does not shimmer; released before the device (see the end of main).
     plat.createTexture = [](int w, int h, const std::uint8_t* rgba) -> std::uint64_t {

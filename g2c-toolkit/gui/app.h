@@ -53,6 +53,8 @@ struct Platform {
     std::function<std::vector<std::string>(const char* title, const std::string& startDir)>
         pickFolders;
     std::function<void(const std::string& path)> revealInExplorer;
+    // Window title (the open project shows in it). Missing = left alone.
+    std::function<void(const std::string& title)> setTitle;
 
     // Save dialog: a name that does not have to exist yet. Empty = cancelled.
     // If the function is missing, the UI falls back to openFiles (only
@@ -95,6 +97,16 @@ struct Platform {
     std::function<bool(const std::string& exe, const std::string& arg)> launch;
 };
 
+// A project: scripts that belong together and open together - like a Visual
+// Studio solution. It lives in a small text file (.g2cproj) wherever the user
+// puts it; paths below that file's folder are stored relative to it, so a
+// project moves along with its data.
+struct Project {
+    std::string              path;      // the .g2cproj; empty = no project open
+    std::string              name;      // file name without extension
+    std::vector<std::string> scripts;   // in the order they were added
+};
+
 // One open script - one tab.
 struct Document {
     std::string  path;
@@ -122,6 +134,12 @@ struct Document {
     // the result that only the last one survives. A setting that destroys data
     // in most cases does not belong in the program.
     std::string outputDir;
+
+    // Search text and quick filter of the table (0 all, 1 issues, 2 no enum,
+    // 3 backwards, 4 with parts). Per tab: one shared filter emptied the
+    // table of every other script.
+    char filter[128] = {0};
+    int  rowFilter = 0;
 
     void syncSelection() { selected.assign(script.grabs.size(), 0); }
 };
@@ -262,7 +280,8 @@ public:
     std::size_t openFolder(const std::string& root);   // returns the number of hits
     // Several folders at once (dialog, dropping). If they hold .car files of
     // different names, the user picks which names to open; with one name
-    // they open right away. Returns the number of .car files found.
+    // they open right away. Scripts already open are skipped and the view
+    // stays where it is. Returns the number of new .car files found.
     std::size_t openFolders(const std::vector<std::string>& roots);
     bool        carPickPending() const { return !carPick_.paths.empty(); }
     // Opens the found files whose (lower-case) name is in `names`.
@@ -364,7 +383,9 @@ public:
     // Tests only: set the active tab without drawing the UI.
     void setActiveForTest(int i) { active_ = i; }
     // Tests only: the table's quick filter and whether a row would be shown.
-    void setRowFilterForTest(int f) { rowFilter_ = f; }
+    void setRowFilterForTest(int f) {
+        if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) docs_[static_cast<std::size_t>(active_)].rowFilter = f;
+    }
     bool rowShownForTest(std::size_t doc, std::size_t row) const {
         return doc < docs_.size() && rowVisible(docs_[doc], row);
     }
@@ -536,6 +557,30 @@ public:
     // Most recently opened scripts, newest first.
     const std::deque<std::string>& recentFiles() const { return recent_; }
 
+    // --- Projects -----------------------------------------------------------
+    //
+    // While a project is open, every script opened or created belongs to it.
+    // Closing a tab keeps the script in the project; the project remembers
+    // which tabs were open and brings exactly those back.
+    const Project& project() const { return project_; }
+    // Windows ends the session (logoff, update restart): unsaved scripts say
+    // no, and what ~App would write is written now - the process is killed
+    // right after, without the destructor.
+    bool hasUnsavedChanges() const;
+    void saveSessionState();
+    // New project from the tabs open now. Refuses a file that exists.
+    bool newProject(const std::string& file);
+    // Closes the tabs open now and opens the project's. With unsaved changes
+    // the usual question comes first and the switch waits for the answer.
+    // false if the file is no project.
+    bool openProject(const std::string& file);
+    // Closes the project with its tabs (asking about unsaved changes first).
+    void closeProject();
+    bool saveProject();
+    // Takes a script out of the project and closes its tab.
+    bool removeFromProject(const std::string& script);
+    const std::deque<std::string>& recentProjects() const { return recentProjects_; }
+
     // Assimilate's "Write Config Data": the full build, but only
     // animation.cfg is written - GLA, .frames and mesh stay untouched.
     void writeConfigOnly(bool allTabs) { startBuild(allTabs, true); }
@@ -676,9 +721,6 @@ private:
     void drawGlaEmptyState(bool forPreview);
     float emptyStateHeight_ = 0.0f;
 
-    // Quick filter of the sequence table: 0 all, 1 issues, 2 no enum,
-    // 3 backwards, 4 with parts.
-    int   rowFilter_ = 0;
     bool  rowHasIssue(const Document& d, std::size_t i) const;
     // Loop/speed edited in place: row, column (0 loop, 1 speed), text.
     int   editCellRow_ = -1;
@@ -728,6 +770,15 @@ private:
     bool otherModalOpen(const char* mine) const;
     void resetRowState();
     void openPathsNow(const std::vector<std::string>& paths);
+    // Index of the tab holding this file, whatever the spelling; -1 if none.
+    int  docIndexOf(const std::string& path) const;
+    // Several folders through addXsiFolder, with one summary.
+    std::size_t addXsiFolders(const std::vector<std::string>& dirs, bool toAll);
+    // "Open script folder" found nothing new: offer its .xsi for the script
+    // on screen.
+    void offerFolderXsi(const std::vector<std::string>& roots);
+    // Files the last addXsiFiles put into at least one script.
+    std::size_t lastAddedFiles_ = 0;
     void drawUpdateBanner();
     void drawUpdateSettings();
     void drawOverwriteDialog();
@@ -908,7 +959,6 @@ private:
     bool        pendingDeleteIsCut_ = false;
     bool                 styleApplied_ = false;
     bool                 fontsDirty_ = false;
-    char                 filter_[128] = {0};
     BuildJob             job_;
 
     // Selected message -> jump into the table.
@@ -1035,6 +1085,32 @@ private:
     int                      savedActive_ = 0;
     std::string              savedActivePath_;   // the active tab, by path
 
+    // The open project, the ones used last (newest first) and the one open at
+    // the last exit.
+    Project                  project_;
+    std::deque<std::string>  recentProjects_;
+    std::string              savedProject_;
+    bool                     showProjectPanel_ = true;
+    // A project switch waiting for the "unsaved changes" question: the
+    // project to open next, or empty for "just close".
+    std::optional<std::string> afterClose_;
+    // Whether the project's files exist - checked once a second, not on every
+    // frame.
+    std::vector<char>        projectExists_;
+    double                   projectExistsAt_ = -1.0;
+
+    void switchProject(const std::string& next);
+    void finishProjectSwitch(const std::string& next);
+    bool loadProjectNow(const std::string& file);
+    bool inProject(const std::string& script) const;
+    void addToProject(const std::string& script);
+    void addRecentProject(const std::string& file);
+    void updateTitle();
+    void newProjectDialog();
+    void openProjectDialog();
+    void drawProjectPanel();
+    bool projectPanelVisible() const { return !project_.path.empty() && showProjectPanel_; }
+
     // --- Frame counts in the background -----------------------------------
     //
     // Reading 1289 files in the foreground would freeze the window for
@@ -1054,6 +1130,7 @@ private:
     std::atomic<bool>           frameWorkerStop_{false};
     std::thread                 frameWorker_;
     std::string                 frameWorkerBaseDir_;
+    bool                        frameWorkerBaseSeen_ = false;
 
     void startFrameWorker(const Document& d);
     void stopFrameWorker();
