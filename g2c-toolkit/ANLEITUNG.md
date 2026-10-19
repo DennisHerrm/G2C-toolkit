@@ -3972,17 +3972,21 @@ XSI-Ordner, ... zu allen, Ziehen ins Fenster) jede .xsi, die das Skript
 schon enthaelt. Man waehlt also einfach den ganzen Ordner, und nur die
 neuen Dateien kommen dazu.
 
-"Schon enthalten" heisst: dieselbe Datei, so aufgeloest wie beim Bauen
-(`$basedir`, Assetwurzel, Ordner der .car, fehlende Endung `.xsi`).
-Gross-/Kleinschreibung spielt keine Rolle. Auch zweimal dieselbe Datei in
-einem Rutsch (ueberlappende Ordner) kommt nur einmal hinein. Bei "zu allen"
-bekommt jedes Skript das, was ihm selbst fehlt.
+"Schon enthalten" heisst: **derselbe Dateiname**, egal in welchem Ordner
+(seit 1.3.1; vorher zaehlte der Pfad). Steht `both_walk2_ani.xsi` irgendwo
+im Skript, wird jede `both_walk2_ani.xsi` uebersprungen - auch wenn die .car
+sie unter einem Ordner nennt, der inzwischen umbenannt ist. Gleicher
+Dateiname waere ohnehin dieselbe Sequenz in der animation.cfg.
+Gross-/Kleinschreibung und die Endung `.xsi` spielen keine Rolle. Auch
+derselbe Name zweimal in einem Rutsch (zwei Ordner) kommt nur einmal hinein.
+Bei "zu allen" bekommt jedes Skript das, was ihm selbst fehlt.
 
 Im Log steht, wie viele uebersprungen wurden. Das Haekchen wird gespeichert.
 
-Geprueft mit deinem `_humanoid.car`: Der Ordner `__original_anim` brachte
-genau die 44 Dateien, die noch nicht drinstanden. Ein zweiter Durchlauf
-brachte keine mehr.
+Geprueft mit deinem `_humanoid.car`: Der Ordner `__original_anim` bringt
+genau die Dateien, deren Name noch nicht drinsteht (33; nach der alten
+Pfad-Regel waren es 44 - 11 davon standen unter anderem Ordner schon drin).
+Ein zweiter Durchlauf bringt keine mehr.
 
 ---
 
@@ -4217,3 +4221,31 @@ Alle zwölf wurden erst mit einem Test nachgewiesen, dann behoben (Liste in
 - Tabwechsel per Maus, Framezahlen nach dem ersten Setzen der Assetwurzel und
   das Verschieben von Kommentaren an der letzten Zeile verhalten sich jetzt
   wie erwartet.
+
+---
+
+## 81. Pfade ersetzen (nach dem Umbenennen eines Ordners)
+
+Wird ein Ordner umbenannt, nennt jede `$aseanimgrab`-Zeile noch den alten
+Namen. Die Zeilen stehen dann auf "fehlt" - oder, schlimmer, unter dem alten
+Namen liegt inzwischen ein anderer Ordner mit gleichnamigen Dateien, und der
+Bau nimmt still die falschen.
+
+**Bearbeiten > Pfade ersetzen...** (auch über Strg+K):
+
+- **Suchen:** ein Teil des Pfads, z. B. `models/players/__new_anim/`
+- **Ersetzen durch:** z. B. `models/players/__new_anim new/`
+- Groß-/Kleinschreibung und `/` oder `\` spielen keine Rolle.
+- Darunter steht vorher, wie viele Zeilen betroffen sind und wie viele
+  Dateien danach gefunden werden - grün, wenn alle da sind.
+- "In allen offenen Skripten" macht es für alle Tabs auf einmal.
+- Rückgängig mit Strg+Z; gespeichert wird erst mit Speichern.
+
+Dein Fall (Stand 19.10.): In `__new_anim new\_humanoid\_humanoid.car`
+zeigen alle 2241 Zeilen auf `models/players/__new_anim/`. Mit den Werten
+oben findet g2c danach alle 2241 im Ordner `__new_anim new`. Vorher
+lagen 676 davon nur dort ("fehlt"), und 125 hätte der Bau aus dem neuen
+`__new_anim` in einer anderen Fassung genommen.
+
+Leerzeichen im Ordnernamen sind kein Problem: g2c setzt solche Pfade beim
+Speichern in Anführungszeichen.

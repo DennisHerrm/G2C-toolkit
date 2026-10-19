@@ -160,6 +160,8 @@ enum class S {
     ProjMissing, ProjEmptyHint, WelcomeProjects, WelcomeProjectsHint, LogProjectCreated, LogProjectOpened,
     LogProjectMissing, LogProjectClosed, LogProjectExists, LogProjectBad, LogProjectRemoved, PaletteProject,
     LogRefGlaNowAuto, SpeedZero, ShutdownBlocked,
+    ReplacePaths, ReplacePathsTitle, ReplacePathsHint, ReplaceFind, ReplaceWith, ReplaceAllScripts, ReplacePreview,
+    ReplaceApply, LogPathsReplaced,
 
     Count
 };

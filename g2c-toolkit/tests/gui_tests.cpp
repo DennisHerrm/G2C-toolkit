@@ -2102,6 +2102,99 @@ int main(){
     fs::remove_all(fx);
   }
 
+  // Reported 2026-10-19: "Only new XSI" added the Anakin walks again - the
+  // .car named them under a folder that had been renamed since, and the check
+  // compared paths. It goes by the file name alone (case does not matter).
+  {
+    namespace fs = std::filesystem;
+    const fs::path nx = fs::temp_directory_path() / "g2c_onlynew_name";
+    fs::remove_all(nx);
+    const auto put = [](const fs::path& f, const std::string& text) {
+      fs::create_directories(f.parent_path());
+      std::ofstream(f, std::ios::binary) << text;
+    };
+    const fs::path car = nx / "h" / "_humanoid.car";
+    put(car, "$aseanimgrabinit\n"
+             "$aseanimgrab models/players/__alt/_humanoid_ani/both_walk2_ani.xsi -loop 0 -framespeed 20\n"
+             "$aseanimgrab models/players/__alt/_humanoid_ani/BOTH_RUN2_ANI.XSI\n"
+             "$aseanimgrabfinalize\n");
+    for (const char* f : {"neu/both_walk2_ani.xsi", "neu/both_run2_ani.xsi", "neu/both_wirklich_neu.xsi",
+                          "neu2/BOTH_WIRKLICH_NEU.xsi"})
+      put(nx / f, "xsi 0300txt 0032\n");
+    g2::gui::Platform p;
+    g2::gui::App a(std::move(p));
+    while (!a.documents().empty()) a.closeDocument(0);
+    const bool oldOnlyNew = a.settings().onlyNewXsi;
+    a.settings().onlyNewXsi = true;
+    a.openCar(car.string());
+    const auto names = [&] {
+      std::vector<std::string> v;
+      for (const auto& g : a.documents()[0].script.grabs) v.push_back(g.derivedName());
+      return v;
+    };
+    a.addXsiFolder((nx / "neu").string(), false);
+    a.addXsiFolder((nx / "neu2").string(), false);
+    const auto v = names();
+    const auto count = [&](const char* n) { return std::count(v.begin(), v.end(), std::string(n)); };
+    ck(count("BOTH_WALK2_ANI") == 1, "Nur neue XSI: gleicher Dateiname aus anderem Ordner wird nicht nochmal eingefügt");
+    ck(count("BOTH_RUN2_ANI") == 1, "Nur neue XSI: Groß-/Kleinschreibung des Dateinamens egal");
+    ck(count("BOTH_WIRKLICH_NEU") == 1, "Nur neue XSI: wirklich neue Datei kommt genau einmal (auch aus zwei Ordnern)");
+    ck(v.size() == 3, "Nur neue XSI: insgesamt nur eine Zeile dazu");
+
+    // Switched off, everything comes in - as before.
+    a.settings().onlyNewXsi = false;
+    a.addXsiFiles({(nx / "neu" / "both_walk2_ani.xsi").string()}, false);
+    ck(names().size() == 4, "ohne Nur neue XSI: wird eingefügt");
+    a.settings().onlyNewXsi = oldOnlyNew;
+    while (!a.documents().empty()) a.closeDocument(0);
+    fs::remove_all(nx);
+  }
+
+  // Edit > Replace paths: after a folder was renamed.
+  {
+    namespace fs = std::filesystem;
+    const fs::path rp = fs::temp_directory_path() / "g2c_replace";
+    fs::remove_all(rp);
+    const auto put = [](const fs::path& f, const std::string& text) {
+      fs::create_directories(f.parent_path());
+      std::ofstream(f, std::ios::binary) << text;
+    };
+    const fs::path base = rp / "base";
+    put(base / "models" / "players" / "__alt neu" / "a" / "x.xsi", "xsi 0300txt 0032\n");
+    put(base / "models" / "players" / "__alt neu" / "b" / "y.xsi", "xsi 0300txt 0032\n");
+    const fs::path car = base / "models" / "players" / "h" / "h.car";
+    put(car, "$aseanimgrabinit\n"
+             "$aseanimgrab models/players/__alt/a/x.xsi -framespeed 20\n"
+             "$aseanimgrab Models\\Players\\__ALT\\b\\y.xsi\n"
+             "$aseanimgrab models/players/__alt/a/fehlt.xsi\n"
+             "$aseanimgrab models/other/z.xsi\n"
+             "$aseanimgrabfinalize\n");
+    g2::gui::Platform p;
+    g2::gui::App a(std::move(p));
+    while (!a.documents().empty()) a.closeDocument(0);
+    const std::string oldBase = a.settings().baseDir;
+    a.settings().baseDir = base.string();
+    a.openCar(car.string());
+    const auto pv = a.previewPathReplace(0, "models/players/__alt/", "models/players/__alt neu/");
+    ck(pv.matched == 3 && pv.foundAfter == 2, "Pfade ersetzen: Vorschau 3 betroffen, 2 danach gefunden");
+    ck(a.replaceInPaths(0, "models/players/__alt/", "models/players/__alt neu/") == 3,
+       "Pfade ersetzen: 3 Zeilen (Groß-/Kleinschreibung und \\ egal)");
+    const auto& G = a.documents()[0].script.grabs;
+    ck(G[0].file == "models/players/__alt neu/a/x.xsi" && G[1].file.find("__alt neu/") != std::string::npos &&
+           G[3].file == "models/other/z.xsi" && G[0].frameSpeed && *G[0].frameSpeed == 20,
+       "Pfade ersetzen: nur der Teil, der Rest der Zeile bleibt");
+    ck(a.documents()[0].dirty, "Pfade ersetzen: Skript geändert");
+    a.saveDocument(0);
+    const auto back = g2::car::parseFile(car.string());
+    ck(back.grabs.size() == 4 && back.grabs[0].file == "models/players/__alt neu/a/x.xsi",
+       "Pfade ersetzen: Pfad mit Leerzeichen übersteht Speichern und Lesen");
+    ck(a.replaceInPaths(0, "gibt/es/nicht", "x") == 0 && a.previewPathReplace(0, "", "x").matched == 0,
+       "Pfade ersetzen: nichts gefunden, nichts geändert");
+    a.settings().baseDir = oldBase;
+    while (!a.documents().empty()) a.closeDocument(0);
+    fs::remove_all(rp);
+  }
+
   // Projects: scripts that open together, like a Visual Studio solution.
   {
     namespace fs = std::filesystem;
