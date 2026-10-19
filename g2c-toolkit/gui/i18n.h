@@ -154,6 +154,12 @@ enum class S {
     WelcomeTitle, WelcomeRoot, WelcomeRootHint, WelcomeOpen, WelcomeOpenHint, WelcomeBuild, WelcomeBuildHint, PathRootChip, PathRefChip, PathRefAuto, PathChipTip, WritesLabel, OutputChipTip, BottomIssues, BottomToggleTip, ToastBuilt, ToastBuildErrors, ToastCancelled, ToastShowLog, ToastOpenFolder, ToastSaved, ToastDismiss, AddXsiMenuFiles, AddXsiMenuFolder, AddXsiMenuFilesAll, AddXsiMenuFolderAll, SettingsToggleTip,
     ChipAll, ChipProblems, ChipNoEnum, ChipBackwards, ChipParts, ChipTip, CellEditTip, BackwardsTip, MenuEdit, Undo, Redo, Palette, PaletteHint, PaletteNone, PaletteSeq, PaletteTab, PaletteMode, LogUndone, LogRedone,
     CarPickTitle, CarPickHead, CarPickOpen,
+    LogCarsAlreadyOpen, ToastFolderXsi, ToastAddXsiTo, LogFilterCleared, LogUnreadableNoAdd,
+    NewProject, OpenProject, CloseProject, RecentProjects, ProjectPanel, DlgTitleNewProject, DlgTitleOpenProject,
+    ProjAddScripts, ProjAddFolder, ProjAddTip, ProjOpenAll, ProjScripts, ProjOpenItem, ProjRemove, ProjReveal,
+    ProjMissing, ProjEmptyHint, WelcomeProjects, WelcomeProjectsHint, LogProjectCreated, LogProjectOpened,
+    LogProjectMissing, LogProjectClosed, LogProjectExists, LogProjectBad, LogProjectRemoved, PaletteProject,
+    LogRefGlaNowAuto, SpeedZero, ShutdownBlocked,
 
     Count
 };
