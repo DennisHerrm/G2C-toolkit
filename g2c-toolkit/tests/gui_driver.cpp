@@ -662,7 +662,25 @@ int main(int argc, char** argv) {
         nextFolder.erase(nextFolder.begin());
         return f;
     };
+    // Several folders at once (Ctrl/Shift in the real dialog); otherwise the
+    // single answer from nextFolder, so the one-folder tests stay as they are.
+    std::vector<std::vector<std::string>> nextFolders;
+    plat.pickFolders = [&](const char* title, const std::string&) {
+        dialogTitles.emplace_back(title ? title : "");
+        if (onPickFolder) onPickFolder();
+        if (!nextFolders.empty()) {
+            auto f = nextFolders.front();
+            nextFolders.erase(nextFolders.begin());
+            return f;
+        }
+        if (nextFolder.empty()) return std::vector<std::string>{};
+        std::vector<std::string> one{nextFolder.front()};
+        nextFolder.erase(nextFolder.begin());
+        return one;
+    };
     plat.revealInExplorer = [&](const std::string& p) { revealed.push_back(p); };
+    std::string windowTitle;
+    plat.setTitle = [&](const std::string& t) { windowTitle = t; };
     std::vector<std::pair<std::string, std::string>> launched;
     plat.launch = [&](const std::string& exe, const std::string& arg) {
         launched.emplace_back(exe, arg);
@@ -2468,6 +2486,464 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
+    // Reported 2026-10-19: with many humanoids open, "Add XSI -> Folder" added
+    // nothing and the view jumped from the last tab to the second.
+    step("16e. Viele Tabs: XSI-Ordner landet im aktiven Tab");
+    guardedStep("VieleTabs", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        const fs::path many = work / "many";
+        const fs::path xd = work / "many_xsi";
+        for (int k = 0; k < 25; ++k) {
+            char dir[64], body[160];
+            std::snprintf(dir, sizeof(dir), "_humanoid_charakter_%02d", k);
+            std::snprintf(body, sizeof(body), "$aseanimgrabinit\n$aseanimgrab models/c/k%02d.xsi\n$aseanimgrabfinalize\n", k);
+            writeText(many / dir / "_humanoid.car", body);
+        }
+        for (const char* n : {"neu_a.xsi", "neu_b.xsi"}) writeText(xd / n, "xsi 0300txt 0032\n");
+        const std::size_t before = app->documents().size();
+        app->openFolders({many.string()});
+        D.frames(4);
+        check(app->documents().size() == before + 25, "25 Humanoids geöffnet");
+        const std::string lastPath = (many / "_humanoid_charakter_24" / "_humanoid.car").string();
+        int idx = -1;
+        for (std::size_t k = 0; k < app->documents().size(); ++k)
+            if (app->documents()[k].path == lastPath) idx = static_cast<int>(k);
+        // The user's way: another tab first, then the last one by clicking.
+        D.click(D.findTab("###" + (many / "_humanoid_charakter_01" / "_humanoid.car").string()));
+        D.frames(3);
+        D.click(D.findTab("###" + lastPath));
+        D.frames(3);
+        out("    (aktiv nach Klick auf den letzten Tab: %d, erwartet %d)\n", app->activeTab(), idx);
+        check(app->activeTab() == idx, "letzter Tab ist aktiv");
+        const std::size_t grabsBefore = idx >= 0 ? app->documents()[static_cast<std::size_t>(idx)].script.grabs.size() : 0;
+
+        nextFolder.push_back(xd.string());
+        D.click(D.findIconButton((std::string(tr(S::BtnAddXsi)) + "    ").c_str(), "##main"));
+        D.frames(2);
+        D.click(D.findEnds(tr(S::AddXsiMenuFolder)));
+        D.frames(4);
+        out("    (aktiv nach XSI-Ordner: %d)\n", app->activeTab());
+        check(app->activeTab() == idx, "REGRESSION aktiver Tab bleibt der letzte (Fehler: springt um)");
+        check(idx >= 0 && app->documents()[static_cast<std::size_t>(idx)].script.grabs.size() == grabsBefore + 2,
+              "REGRESSION die neuen XSI sind im letzten Tab angekommen");
+        std::size_t elsewhere = 0;
+        for (std::size_t k = 0; k < app->documents().size(); ++k)
+            if (static_cast<int>(k) != idx)
+                for (const auto& g : app->documents()[k].script.grabs)
+                    if (g.file.find("neu_") != std::string::npos) ++elsewhere;
+        check(elsewhere == 0, "kein anderer Tab hat sie bekommen");
+    });
+
+    // =====================================================================
+    // Reported or found 2026-10-19 - each check describes the CORRECT
+    // behaviour and was first run against the old code to prove the bug.
+    step("16f. Fehlernachweise: Tabs, Filter, Ordner");
+    guardedStep("Fehlernachweise", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        const fs::path bug = work / "bugs";
+        // "ani": a character folder with its .car AND loose .xsi next to it.
+        writeText(bug / "ani" / "_humanoid.car",
+                  "$aseanimgrabinit\n$aseanimgrab models/b/ani1.xsi -framespeed 20\n"
+                  "$aseanimgrab models/b/ani2.xsi -framespeed 20\n$aseanimgrabfinalize\n");
+        writeText(bug / "ani" / "neu1.xsi", "xsi 0300txt 0032\n");
+        writeText(bug / "ani" / "neu2.xsi", "xsi 0300txt 0032\n");
+        writeText(bug / "other" / "_humanoid.car",
+                  "$aseanimgrabinit\n$aseanimgrab models/b/oth1.xsi -framespeed 20\n"
+                  "$aseanimgrab models/b/oth2.xsi -framespeed 20\n$aseanimgrab models/b/root.xsi\n"
+                  "$aseanimgrabfinalize\n");
+        writeText(bug / "x1" / "a.xsi", "xsi 0300txt 0032\n");
+        writeText(bug / "x1" / "b.xsi", "xsi 0300txt 0032\n");
+        writeText(bug / "x2" / "c.xsi", "xsi 0300txt 0032\n");
+        writeText(bug / "y" / "neu3.xsi", "xsi 0300txt 0032\n");
+        const std::string aniPath = (bug / "ani" / "_humanoid.car").string();
+        const std::string othPath = (bug / "other" / "_humanoid.car").string();
+        app->openCar(aniPath);
+        app->openCar(othPath);
+        D.frames(3);
+        const auto indexOf = [&](const std::string& p) {
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (app->documents()[k].path == p) return static_cast<int>(k);
+            return -1;
+        };
+        const auto grabsOf = [&](const std::string& p) -> const std::vector<g2::car::GrabDirective>& {
+            return app->documents()[static_cast<std::size_t>(indexOf(p))].script.grabs;
+        };
+        const auto show = [&](const std::string& p) {
+            app->activate(indexOf(p));
+            D.frames(3);
+        };
+        // Empties the filter box of the tab on screen.
+        const auto filterBox = [&] { return D.findIf([](const Item& i) { return i.label == "##filter"; }); };
+        const auto clearFilter = [&] {
+            D.click(filterBox());
+            D.key(ImGuiKey_A, true);
+            D.key(ImGuiKey_Backspace);
+            D.key(ImGuiKey_Enter);
+            D.frames(2);
+        };
+
+        // B1 (the report): "Ordner öffnen" on a folder whose .car is already
+        // open jumped to that tab and added none of its .xsi.
+        show(othPath);
+        nextFolder.push_back((bug / "ani").string());
+        D.click(D.findIconButton(tr(S::BtnOpenFolder), "##main"));
+        D.frames(3);
+        out("    (B1: aktiv %d, erwartet other=%d, ani=%d)\n", app->activeTab(), indexOf(othPath), indexOf(aniPath));
+        check(app->activeTab() == indexOf(othPath),
+              "B1 Ordner mit schon offener .car: kein Sprung zu deren Tab");
+        // Its .xsi are offered for the script on screen - one click.
+        {
+            const std::string want =
+                trf(S::ToastAddXsiTo, app->documents()[static_cast<std::size_t>(indexOf(othPath))].title.c_str());
+            const Item* offer = D.find(want, "toast");
+            const std::size_t aniBefore = grabsOf(aniPath).size();
+            if (offer) D.click(offer);
+            D.frames(3);
+            std::size_t neu = 0;
+            for (const auto& g : grabsOf(othPath))
+                if (g.file.find("neu1.xsi") != std::string::npos || g.file.find("neu2.xsi") != std::string::npos) ++neu;
+            check(offer != nullptr && neu == 2 && app->activeTab() == indexOf(othPath) &&
+                      grabsOf(aniPath).size() == aniBefore,
+                  "B1 Angebot \"" + want + "\" fügt die 2 .xsi des Ordners ins aktive Skript ein");
+        }
+
+        // B2: a filter hides newly added rows - and is shared by all tabs.
+        show(othPath);
+        D.click(filterBox());
+        D.type("oth1");
+        D.key(ImGuiKey_Enter);
+        D.frames(2);
+        // First the other tab - before B2a, which clears the filter.
+        show(aniPath);
+        check(D.row("ANI1") != nullptr, "B2b Filter gilt nur im eigenen Tab (Fehler: im anderen Tab alles weg)");
+        show(othPath);
+        check(D.row("OTH1") != nullptr && D.row("OTH2") == nullptr, "B2b der eigene Tab behält seinen Filter");
+        app->addXsiFiles({(bug / "y" / "neu3.xsi").string()}, false);
+        D.frames(3);
+        check(D.row("NEU3") != nullptr, "B2a eben hinzugefügte Zeile ist sichtbar (Filter blendet sie aus)");
+        show(aniPath);
+        // No filter left for the following checks, in either tab.
+        clearFilter();
+        show(othPath);
+        clearFilter();
+
+        // B3: adding to a script that could not be read.
+        writeText(bug / "kaputt" / "k.car", "$aseanimgrabinit\n$aseanimgrab a.xsi -loop xyz\n$aseanimgrabfinalize\n");
+        const std::string badPath = (bug / "kaputt" / "k.car").string();
+        app->openCar(badPath);
+        D.frames(2);
+        show(badPath);
+        app->addXsiFiles({(bug / "ani" / "neu2.xsi").string()}, false);
+        D.frames(2);
+        check(indexOf(badPath) >= 0 && grabsOf(badPath).empty(),
+              "B3 in ein unlesbares Skript wird nichts eingefügt");
+
+        // B5: closing a changed tab with the middle button, then "Cancel".
+        show(othPath);
+        app->setFrameSpeed(static_cast<std::size_t>(indexOf(othPath)), {0}, 25.0);
+        D.frames(2);
+        D.click(D.findTab("###" + othPath), 2);
+        D.frames(3);
+        const bool askedClose = D.popupOpen();
+        D.click(D.find(tr(S::No), "closedlg"));
+        D.frames(4);
+        out("    (B5: Rückfrage %d, aktiv %d, erwartet %d)\n", askedClose ? 1 : 0, app->activeTab(), indexOf(othPath));
+        check(askedClose && indexOf(othPath) >= 0 && app->activeTab() == indexOf(othPath),
+              "B5 Schließen abgebrochen: der Tab bleibt der aktive");
+
+        // B6: "Save as" kept the tab but switched the view.
+        show(othPath);
+        const std::string othCopy = (bug / "other" / "kopie.car").string();
+        app->saveDocumentAs(static_cast<std::size_t>(indexOf(othPath)), othCopy);
+        D.frames(4);
+        out("    (B6: aktiv %d, erwartet %d)\n", app->activeTab(), indexOf(othCopy));
+        check(app->activeTab() == indexOf(othCopy), "B6 Speichern unter: der Tab bleibt der aktive");
+
+        // B7: the same file under another spelling opened twice.
+        {
+            const std::size_t n = app->documents().size();
+            std::string variant = aniPath;
+            std::transform(variant.begin(), variant.end(), variant.begin(),
+                           [](unsigned char c) { return static_cast<char>(c == '\\' ? '/' : std::tolower(c)); });
+            app->openCar(variant);
+            D.frames(2);
+            check(app->documents().size() == n, "B7 gleiche Datei in anderer Schreibweise öffnet keinen zweiten Tab");
+        }
+
+        // B8: a cell edit started in one tab, the tab switched by clicking,
+        // the typed value landed in the other script.
+        {
+            show(othCopy);
+            const Item* r = D.row("OTH2");
+            const Item* c = r ? D.findIf([&](const Item& i) {
+                return i.window.find("seqs") != std::string::npos && displayOf(i.label) == "20" &&
+                       i.bb.Min.y <= Driver::center(*r).y && i.bb.Max.y >= Driver::center(*r).y;
+            }) : nullptr;
+            if (c) {
+                const Item cell = *c;
+                D.doubleClick(&cell, false);
+                D.frames(2);
+            }
+            // Switched from OUTSIDE (a .car double-clicked in Explorer while
+            // g2c runs hands it over and activates its tab) - a click on a
+            // tab finishes the edit first and is fine.
+            app->activate(indexOf(aniPath));
+            D.frames(3);
+            D.type("99");
+            D.key(ImGuiKey_Enter);
+            D.frames(3);
+            bool leaked = false;
+            for (const auto& g : grabsOf(aniPath))
+                if (g.frameSpeed && *g.frameSpeed == 99) leaked = true;
+            out("    (B8: Zelle gefunden %d, Wert im anderen Skript gelandet %d)\n", c ? 1 : 0, leaked ? 1 : 0);
+            check(c != nullptr && !leaked, "B8 Zellbearbeitung landet nach Tabwechsel von außen nicht im anderen Skript");
+        }
+
+        // B10: two folders added: the summary counted scripts, not files.
+        {
+            show(aniPath);
+            nextFolders.push_back({(bug / "x1").string(), (bug / "x2").string()});
+            D.click(D.findIconButton((std::string(tr(S::BtnAddXsi)) + "    ").c_str(), "##main"));
+            D.frames(2);
+            D.click(D.findEnds(tr(S::AddXsiMenuFolder)));
+            D.frames(3);
+            char want[96];
+            std::snprintf(want, sizeof(want), tr(S::FoldersAdded), static_cast<std::size_t>(2), static_cast<std::size_t>(3));
+            for (const auto& l : app->logLines())
+                if (l.text.find("Ordner durchsucht") != std::string::npos) out("    (B10 Protokoll: %s)\n", l.text.c_str());
+            check(logHas(*app, want), std::string("B10 Zusammenfassung nennt 3 Dateien (\"") + want + "\")");
+        }
+
+        // B11: a dropped .xsi while "Delete root?" is open - the delete then
+        // hit another row.
+        {
+            show(othCopy);
+            const Item* rootRow = D.row("ROOT");
+            D.click(rootRow, 1);
+            D.frames(2);
+            D.click(D.findEnds(tr(S::DeleteSeq)));
+            D.frames(2);
+            const bool confirmOpen = D.popupOpen();
+            app->queueOpen({(bug / "x2" / "c.xsi").string()});
+            D.frames(3);
+            D.click(D.findEnds(tr(S::DeleteSeq), "confirmdel"));
+            D.frames(3);
+            bool hasRoot = false, hasC = false;
+            for (const auto& g : grabsOf(othCopy)) {
+                if (g2::gui::App::isRootGrab(g)) hasRoot = true;
+                if (g.file.find("c.xsi") != std::string::npos) hasC = true;
+            }
+            out("    (B11: Rückfrage %d, root noch da %d, c.xsi da %d)\n", confirmOpen ? 1 : 0, hasRoot ? 1 : 0, hasC ? 1 : 0);
+            check(confirmOpen && !hasRoot && hasC,
+                  "B11 Löschen nach Ablegen einer .xsi trifft die gewählte Zeile (root), nicht die neue");
+        }
+
+        // Leave nothing behind for the later steps: no filter, none of these tabs.
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        for (const std::string& p : {othCopy, aniPath, badPath}) {
+            if (indexOf(p) < 0) continue;
+            show(p);
+            clearFilter();
+        }
+        for (const std::string& p : {othCopy, aniPath, badPath, othPath})
+            while (indexOf(p) >= 0) app->closeDocument(static_cast<std::size_t>(indexOf(p)));
+        D.frames(2);
+    });
+
+    // =====================================================================
+    // Second code review, 2026-10-19 - each check describes the CORRECT
+    // behaviour and was first run against the old code to prove the bug.
+    step("16g. Fehlernachweise 2: Auswahl, Tabs, Speed, Framezahlen, Kommentare");
+    guardedStep("Fehlernachweise 2", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        auto& st = app->settings();
+        const std::string oldBase = st.baseDir;
+        const fs::path rv = work / "review2";
+        const auto five = [](const char* p) {
+            std::string s = "$aseanimgrabinit\n";
+            for (const char* n : {"ONE", "TWO", "THREE", "FOUR", "FIVE"})
+                s += std::string("$aseanimgrab r/") + n + ".xsi -enum " + p + n + "\n";
+            return s + "$aseanimgrabfinalize\n";
+        };
+        writeText(rv / "sel.car", five("WALK_"));
+        writeText(rv / "taba.car", five("A_"));
+        writeText(rv / "tabb.car", five("B_"));
+        const std::string selPath = (rv / "sel.car").string(), aPath = (rv / "taba.car").string(),
+                          bPath = (rv / "tabb.car").string();
+        for (const auto& p : {selPath, aPath, bPath}) app->openCar(p);
+        D.frames(3);
+        const auto indexOf = [&](const std::string& p) {
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (app->documents()[k].path == p) return static_cast<int>(k);
+            return -1;
+        };
+        const auto docOf = [&](const std::string& p) -> g2::gui::Document& {
+            return app->documents()[static_cast<std::size_t>(indexOf(p))];
+        };
+        const auto show = [&](const std::string& p) {
+            app->activate(indexOf(p));
+            D.frames(3);
+        };
+        const auto has = [&](const std::string& p, const std::string& name) {
+            for (const auto& g : docOf(p).script.grabs)
+                if (g.enumName && *g.enumName == name) return true;
+            return false;
+        };
+        const auto filterBox = [&] { return D.findIf([](const Item& i) { return i.label == "##filter"; }); };
+
+        // R7: rows hidden by the filter were deleted along with the visible ones.
+        {
+            show(selPath);
+            D.clickRow(D.row("WALK_ONE"));
+            D.clickRow(D.row("WALK_TWO"), true);
+            std::size_t sel = 0;
+            for (const char c : docOf(selPath).selected) sel += c ? 1 : 0;
+            check(sel == 2, "R7 Vorbedingung: zwei Zeilen gewählt");
+            D.click(filterBox());
+            D.type("one");
+            D.key(ImGuiKey_Enter);
+            D.frames(2);
+            check(D.row("WALK_ONE") && !D.row("WALK_TWO"), "R7 Vorbedingung: Filter versteckt WALK_TWO");
+            D.click(D.row("WALK_ONE"), 1);
+            D.frames(2);
+            char lbl[128];
+            std::snprintf(lbl, sizeof(lbl), tr(S::DeleteSelected), static_cast<std::size_t>(2));
+            const Item* del = D.findEnds(lbl);
+            if (!del) del = D.findEnds(tr(S::DeleteSeq));
+            D.click(del);
+            D.frames(2);
+            D.click(D.findEnds(tr(S::DeleteSeq), "confirmdel"));
+            D.frames(3);
+            check(!has(selPath, "WALK_ONE"), "R7 Vorbedingung: die sichtbare Zeile ist gelöscht");
+            check(has(selPath, "WALK_TWO"), "R7 eine vom Filter versteckte Zeile wird nicht mitgelöscht");
+            D.click(filterBox());
+            D.key(ImGuiKey_A, true);
+            D.key(ImGuiKey_Backspace);
+            D.key(ImGuiKey_Enter);
+            D.frames(2);
+        }
+
+        // R9: a tab clicked with the mouse kept the Shift anchor of the
+        // previous tab.
+        {
+            show(aPath);
+            D.clickRow(D.row("A_TWO"));
+            D.frames(2);
+            D.click(D.findTab("###" + bPath));
+            D.frames(3);
+            check(app->activeTab() == indexOf(bPath), "R9 Vorbedingung: Tab b per Maus aktiv");
+            D.clickRow(D.row("B_FIVE"), false, true);
+            std::size_t sel = 0;
+            for (const char c : docOf(bPath).selected) sel += c ? 1 : 0;
+            out("    (R9: in b gewählt %zu)\n", sel);
+            check(sel == 1, "R9 Umschalt+Klick im neuen Tab wählt nicht ab der Zeile des alten Tabs");
+        }
+
+        // R6: speed 0 could be set for several rows at once.
+        {
+            show(bPath);
+            D.click(D.row("B_ONE"), 1);
+            D.frames(2);
+            char lbl[128];
+            std::snprintf(lbl, sizeof(lbl), tr(S::SetSpeedRows), static_cast<std::size_t>(1));
+            D.click(D.findEnds(lbl));
+            D.frames(3);
+            const Item* field = D.findIf([](const Item& i) {
+                return i.label == "##speed" && i.window.find("speeddlg") != std::string::npos;
+            });
+            check(field != nullptr, "R6 Vorbedingung: Speed-Dialog offen");
+            D.click(field);
+            D.key(ImGuiKey_A, true);
+            D.type("0");
+            D.key(ImGuiKey_Enter);
+            D.frames(2);
+            D.click(D.find(tr(S::Apply), "speeddlg"));
+            D.frames(3);
+            for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+                D.escape();
+                D.frames(2);
+            }
+            const auto& g = docOf(bPath).script.grabs[0];
+            out("    (R6: framespeed %s)\n", g.frameSpeed ? std::to_string(*g.frameSpeed).c_str() : "-");
+            check(!(g.frameSpeed && *g.frameSpeed == 0.0), "R6 Speed 0 wird nicht übernommen");
+        }
+
+        // R10: frame counts stayed "missing" after the asset root was set for
+        // the first time.
+        {
+            const fs::path fb = rv / "fbase";
+            std::ostringstream x;
+            x << "xsi 0350txt 0032\nSI_Scene s {\n  \"FRAMES\",\n  1.000000,\n  7.000000,\n  20.000000,\n}\n"
+              << "SI_Model MDL-rig.root {\n  SI_Model MDL-rig.a {\n"
+              << "    SI_FCurve { \"rig.a\", \"ROTATION-Z\", \"LINEAR\", 1, 1, 7,\n";
+            for (int k = 1; k <= 7; ++k) x << "      " << k << "," << k << ",\n";
+            x << "    }\n  }\n}\n";
+            writeText(fb / "models" / "fanims" / "f1.xsi", x.str());
+            const fs::path fcar = rv / "fcar" / "f.car";
+            writeText(fcar, "$aseanimgrabinit\n$aseanimgrab models/fanims/f1.xsi -enum F_ONE\n$aseanimgrabfinalize\n");
+            st.baseDir.clear();
+            app->openCar(fcar.string());
+            show(fcar.string());
+            for (int k = 0; k < 500 && app->frameCountOf("models/fanims/f1.xsi") == -1; ++k) {
+                D.frames(1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            check(st.baseDir.empty() && app->frameCountOf("models/fanims/f1.xsi") == -2,
+                  "R10 Vorbedingung: ohne Assetwurzel fehlt die Datei");
+            st.baseDir = fb.string();
+            for (int k = 0; k < 300 && app->frameCountOf("models/fanims/f1.xsi") < 0; ++k) {
+                D.frames(1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            out("    (R10: Frames nach dem Setzen der Wurzel %d)\n", app->frameCountOf("models/fanims/f1.xsi"));
+            check(app->frameCountOf("models/fanims/f1.xsi") == 7, "R10 nach dem ersten Setzen der Assetwurzel werden die Frames gelesen");
+            st.baseDir = oldBase;
+        }
+
+        // R12: "Move up" on a comment after the last row jumped over the
+        // other trailing comments.
+        {
+            const fs::path cm = rv / "cm.car";
+            writeText(cm, "$aseanimgrabinit\n$aseanimgrab c1.xsi -enum CM_ONE\n// T1\n// T2\n$aseanimgrabfinalize\n");
+            app->openCar(cm.string());
+            show(cm.string());
+            auto& sc = docOf(cm.string()).script;
+            check(sc.trailingComments.size() == 2, "R12 Vorbedingung: zwei Kommentare hinter der letzten Zeile");
+            const Item* t2 = D.findIf([](const Item& i) { return i.label.rfind("// T2", 0) == 0; });
+            D.click(t2, 1);
+            D.frames(2);
+            D.click(D.findEnds(tr(S::MoveUp)));
+            D.frames(3);
+            check(sc.trailingComments.size() == 2 && sc.trailingComments[0] == "// T2" && sc.trailingComments[1] == "// T1",
+                  "R12 Kommentar hinter der letzten Zeile nach oben: tauscht mit T1");
+        }
+
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        st.baseDir = oldBase;
+        for (const std::string& p : {selPath, aPath, bPath, (rv / "fcar" / "f.car").string(), (rv / "cm.car").string()})
+            while (indexOf(p) >= 0) app->closeDocument(static_cast<std::size_t>(indexOf(p)));
+        D.frames(2);
+    });
+
+    // =====================================================================
     step("16c. Code-Review: Regressionen der Oberflaeche");
     guardedStep("Review", [&] {
         const fs::path rv = work / "review";
@@ -2709,6 +3185,88 @@ int main(int argc, char** argv) {
         check(logHas(*ub, "9.0.0") || logHas(*ub, "1.0.0"), "Neustart meldet das Update im Protokoll");
         check(!fs::exists(ud / "g2c.exe.old"), "alte Exe beim Neustart entfernt");
         ub.reset();
+    });
+
+    // =====================================================================
+    step("17b. Projekte wie in Visual Studio");
+    guardedStep("Projekte", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        while (!app->documents().empty()) app->closeDocument(0);
+        const fs::path pj = work / "projekt";
+        writeText(pj / "p1.car", "$aseanimgrabinit\n$aseanimgrab a.xsi\n$aseanimgrabfinalize\n");
+        writeText(pj / "p2.car", "$aseanimgrabinit\n$aseanimgrab b.xsi\n$aseanimgrabfinalize\n");
+        const std::string p1 = (pj / "p1.car").string(), p2 = (pj / "p2.car").string();
+        const std::string projFile = (pj / "mein_projekt.g2cproj").string();
+        app->openCar(p1);
+        app->openCar(p2);
+        D.frames(2);
+        const auto indexOf = [&](const std::string& p) {
+            for (std::size_t k = 0; k < app->documents().size(); ++k)
+                if (app->documents()[k].path == p) return static_cast<int>(k);
+            return -1;
+        };
+
+        nextFiles.push_back({projFile});
+        D.menu(tr(S::MenuFile), tr(S::NewProject));
+        D.frames(3);
+        check(app->project().scripts.size() == 2 && fs::exists(projFile), "Datei > Neues Projekt: Projekt aus den 2 Tabs");
+        check(windowTitle.find("mein_projekt") != std::string::npos, "Fenstertitel nennt das Projekt");
+        check(D.findEnds("p1.car", "project") && D.findEnds("p2.car", "project"),
+              "Projekt-Explorer rechts listet beide Skripte");
+
+        // Closed tab: still listed, one click opens it again.
+        app->closeDocument(static_cast<std::size_t>(indexOf(p2)));
+        D.frames(2);
+        const Item* e2 = D.findEnds("p2.car", "project");
+        check(e2 != nullptr && indexOf(p2) < 0, "geschlossener Tab bleibt im Projekt-Explorer");
+        if (e2) D.click(e2);
+        D.frames(3);
+        check(indexOf(p2) >= 0 && app->activeTab() == indexOf(p2), "Klick im Projekt-Explorer öffnet das Skript wieder");
+
+        // Right button: remove from the project.
+        D.click(D.findEnds("p2.car", "project"), 1);
+        D.frames(2);
+        D.click(D.findEnds(tr(S::ProjRemove)));
+        D.frames(3);
+        check(app->project().scripts.size() == 1 && indexOf(p2) < 0 && !D.findEnds("p2.car", "project"),
+              "Rechtsklick > Aus Projekt entfernen: weg aus Liste und Tabs");
+
+        // Close it: the start page offers it again.
+        D.menu(tr(S::MenuFile), tr(S::CloseProject));
+        D.frames(3);
+        check(app->project().path.empty() && app->documents().empty(), "Datei > Projekt schließen: Projekt und Tabs zu");
+        check(windowTitle.find("mein_projekt") == std::string::npos, "Fenstertitel ohne Projekt");
+        const Item* recentProj = D.find("mein_projekt", "docs");
+        check(recentProj != nullptr, "Startseite: zuletzt verwendetes Projekt");
+        if (recentProj) D.click(recentProj);
+        D.frames(3);
+        check(app->project().name == "mein_projekt" && app->documents().size() == 1 && indexOf(p1) >= 0,
+              "Klick auf der Startseite öffnet das Projekt mit seinem Tab");
+
+        // Switching with an unsaved change asks first; "Cancel" keeps everything.
+        writeText(pj / "zwei" / "p3.car", "$aseanimgrabinit\n$aseanimgrab c.xsi\n$aseanimgrabfinalize\n");
+        const std::string proj2 = (pj / "zwei" / "zwei.g2cproj").string();
+        writeText(proj2, "# g2c project\nscript=p3.car\nopen=p3.car\n");
+        app->setFrameSpeed(static_cast<std::size_t>(indexOf(p1)), {0}, 25.0);
+        nextFiles.push_back({proj2});
+        D.menu(tr(S::MenuFile), tr(S::OpenProject));
+        D.frames(3);
+        const bool asked = D.popupOpen();
+        D.click(D.find(tr(S::No), "closedlg"));
+        D.frames(3);
+        check(asked && app->project().name == "mein_projekt" && indexOf(p1) >= 0,
+              "Projekt wechseln mit ungespeicherter Änderung: Rückfrage, Abbrechen behält alles");
+        nextFiles.push_back({proj2});
+        D.menu(tr(S::MenuFile), tr(S::OpenProject));
+        D.frames(3);
+        D.click(D.find(tr(S::Discard), "closedlg"));
+        D.frames(3);
+        check(app->project().name == "zwei" && app->documents().size() == 1 && app->documents()[0].path.find("p3.car") != std::string::npos,
+              "Verwerfen: anderes Projekt mit seinem Tab offen");
     });
 
     // =====================================================================

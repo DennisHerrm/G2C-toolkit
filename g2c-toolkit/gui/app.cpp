@@ -60,11 +60,21 @@ void BuildJob::join() {
 App::App(Platform platform) : platform_(std::move(platform)) {
     loadSettings();
 
+    // The project open at the last exit comes back with its tabs; without
+    // one, the loose tabs of last time.
+    bool projectBack = false;
+    if (!savedProject_.empty()) {
+        std::error_code ec;
+        if (fs::exists(savedProject_, ec)) projectBack = loadProjectNow(savedProject_);
+        else log(LogLine::Kind::Warn, trf(S::LogNotFound, savedProject_.c_str()));
+    }
+
     // Restore the scripts that were open last time. Missing ones are silently
     // skipped - an avalanche of errors at startup would be more annoying than
     // the missing tab.
     std::size_t restored = 0;
     for (const auto& t : savedTabs_) {
+        if (projectBack) break;
         std::error_code ec;
         if (!fs::exists(t, ec)) continue;
         if (openCar(t)) ++restored;
@@ -80,9 +90,10 @@ App::App(Platform platform) : platform_(std::move(platform)) {
             want = savedActive_;
         if (want >= 0) activate(want);
         log(LogLine::Kind::Good, trf(S::LogRestored, restored));
-    } else {
+    } else if (!projectBack) {
         log(LogLine::Kind::Info, tr(S::LogReady));
     }
+    updateTitle();
 
     if (platform_.network.get) {
         updater_ = std::make_unique<update::Updater>(platform_.network, platform_.build,
@@ -115,6 +126,8 @@ void App::checkForUpdates(bool manual) {
 App::~App() {
     stopFrameWorker();
     job_.join();
+    // The tabs as they are now come back with the project next time.
+    if (!project_.path.empty()) saveProject();
     saveSettings();
 }
 
@@ -233,7 +246,8 @@ bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool 
                 // the separator could be attached to - that's what
                 // trailingComments is for.
                 von.erase(von.begin() + static_cast<long>(line));
-                d.script.trailingComments.push_back(text);
+                // Right below the last row, i.e. before what is there already.
+                d.script.trailingComments.insert(d.script.trailingComments.begin(), text);
             } else {
                 // At the end: move to the next grab, at its beginning.
                 von.erase(von.begin() + static_cast<long>(line));
@@ -326,6 +340,9 @@ void App::saveSettings() const {
     f << "partdetails=" << (settings_.partDetails ? 1 : 0) << "\n";
     if (!settings_.modelViewPath.empty()) f << "modelview=" << settings_.modelViewPath << "\n";
     for (const auto& r : recent_) f << "recent=" << r << "\n";
+    for (const auto& r : recentProjects_) f << "recentproj=" << r << "\n";
+    if (!project_.path.empty()) f << "project=" << project_.path << "\n";
+    f << "projpanel=" << (showProjectPanel_ ? 1 : 0) << "\n";
     f << "lang=" << settings_.language << "\n";
     f << "updates=" << (settings_.checkUpdates ? 1 : 0) << "\n";
     f << "updchannel=" << settings_.updateChannel << "\n";
@@ -348,8 +365,10 @@ void App::saveSettings() const {
     // their folder too; it used to be forgotten as soon as the tab closed.
     {
         std::map<std::string, std::string> outs = savedOutputs_;
-        for (const auto& d : docs_)
+        for (const auto& d : docs_) {
             if (!d.outputDir.empty()) outs[d.path] = d.outputDir;
+            else outs.erase(d.path);
+        }
         for (const auto& [script, folder] : outs)
             if (!folder.empty()) f << "outp=" << script << "|" << folder << "\n";
     }
@@ -386,7 +405,16 @@ void App::loadSettings() {
         const auto asBool = [&] { return val == "1"; };
 
         if (key == "basedir") settings_.baseDir = val;
-        else if (key == "refgla") settings_.referenceGla = val;
+        else if (key == "refgla") {
+            // Up to 1.2 g2c filled this in by itself from the first script
+            // opened, and every later build used that skeleton. Such a path
+            // is easy to tell: asset root with '\', -makeskel with '/'. A
+            // path chosen by hand stays.
+            if (val.find('/') != std::string::npos && val.find('\\') != std::string::npos)
+                log(LogLine::Kind::Info, trf(S::LogRefGlaNowAuto, val.c_str()));
+            else
+                settings_.referenceGla = val;
+        }
         else if (key == "enums") settings_.enumPath = val;
         else if (key == "gla") settings_.writeGla = asBool();
         else if (key == "cfg") settings_.writeCfg = asBool();
@@ -431,6 +459,9 @@ void App::loadSettings() {
         else if (key == "partdetails") settings_.partDetails = asBool();
         else if (key == "modelview") settings_.modelViewPath = val;
         else if (key == "recent") { if (recent_.size() < 12) recent_.push_back(val); }
+        else if (key == "recentproj") { if (recentProjects_.size() < 10) recentProjects_.push_back(val); }
+        else if (key == "project") savedProject_ = val;
+        else if (key == "projpanel") showProjectPanel_ = asBool();
         else if (key == "updates") settings_.checkUpdates = asBool();
         else if (key == "updchannel") {
             const int v = std::atoi(val.c_str());
@@ -475,13 +506,58 @@ void App::log(LogLine::Kind kind, std::string text) {
 
 // --- Documents -------------------------------------------------------------
 
-bool App::openCar(const std::string& path) {
-    for (std::size_t i = 0; i < docs_.size(); ++i) {
-        if (docs_[i].path == path) {
-            activate(static_cast<int>(i));
-            log(LogLine::Kind::Info, trf(S::LogAlreadyOpen, path.c_str()));
-            return true;
+// One key per file. Windows ignores case and takes both slashes, so
+// "C:/A/x.car" and "c:\a\X.CAR" are the same script - compared as plain
+// strings they opened a second tab, and the two overwrote each other.
+static std::string pathKey(const std::string& p) {
+    std::error_code ec;
+    fs::path c = fs::weakly_canonical(fs::path(p), ec);
+    if (ec || c.empty()) c = fs::path(p).lexically_normal();
+    std::string k = c.generic_string();
+    std::transform(k.begin(), k.end(), k.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return k;
+}
+
+// All .xsi of a tree, sorted - otherwise the order of the sequences depends
+// on how the file system returns them.
+static std::vector<std::string> collectXsi(const std::string& folder) {
+    std::vector<std::string> files;
+    std::error_code ec;
+    std::vector<fs::path> stack{fs::path(folder)};
+    while (!stack.empty()) {
+        const fs::path dir = stack.back();
+        stack.pop_back();
+        fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+        if (ec) continue;
+        for (const auto& e : it) {
+            std::error_code eec;
+            if (e.is_symlink(eec)) continue;
+            if (e.is_directory(eec) && !eec) { stack.push_back(e.path()); continue; }
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            if (ext == ".xsi") files.push_back(e.path().string());
         }
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+int App::docIndexOf(const std::string& path) const {
+    for (std::size_t i = 0; i < docs_.size(); ++i)
+        if (docs_[i].path == path) return static_cast<int>(i);
+    const std::string key = pathKey(path);
+    for (std::size_t i = 0; i < docs_.size(); ++i)
+        if (pathKey(docs_[i].path) == key) return static_cast<int>(i);
+    return -1;
+}
+
+bool App::openCar(const std::string& path) {
+    if (const int i = docIndexOf(path); i >= 0) {
+        activate(i);
+        log(LogLine::Kind::Info, trf(S::LogAlreadyOpen, docs_[static_cast<std::size_t>(i)].path.c_str()));
+        return true;
     }
     // A file opened anew starts without history (none of another tab's).
     undo_.erase(path);
@@ -500,6 +576,7 @@ bool App::openCar(const std::string& path) {
         log(LogLine::Kind::Bad, d.title + ": " + d.loadError);
         docs_.push_back(std::move(d));
         activate(static_cast<int>(docs_.size()) - 1);
+        if (!project_.path.empty()) addToProject(path);
         return false;
     }
     d.syncSelection();
@@ -514,15 +591,15 @@ bool App::openCar(const std::string& path) {
     // The command line has long done this on drag-and-drop; not doing it here
     // meant making the user search by hand for something the program already
     // knows.
-    if (settings_.baseDir.empty() || settings_.referenceGla.empty()) {
+    //
+    // The reference GLA is NOT taken over: each build finds its own from its
+    // -makeskel. Filled in from the first script, it was used for every other
+    // one - 25 humanoids built on the skeleton of the first.
+    if (settings_.baseDir.empty()) {
         const auto guess = car::guessPaths(d.script, path);
-        if (settings_.baseDir.empty() && !guess.baseDir.empty()) {
+        if (!guess.baseDir.empty()) {
             settings_.baseDir = guess.baseDir;
             log(LogLine::Kind::Good, trf(S::LogAssetRootFound, guess.baseDir.c_str()));
-        }
-        if (settings_.referenceGla.empty() && !guess.referenceGla.empty()) {
-            settings_.referenceGla = guess.referenceGla;
-            log(LogLine::Kind::Good, trf(S::LogRefGlaFound, guess.referenceGla.c_str()));
         }
     }
     log(LogLine::Kind::Good, trf(S::LogOpened, d.title.c_str(), d.script.grabs.size()));
@@ -530,6 +607,8 @@ bool App::openCar(const std::string& path) {
     docs_.push_back(std::move(d));
     activate(static_cast<int>(docs_.size()) - 1);
     refreshTabTitles();
+    // Part of the open project from now on (see Project).
+    if (!project_.path.empty()) addToProject(path);
     return true;
 }
 
@@ -1127,6 +1206,7 @@ bool App::openPath(const std::string& path) {
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (ext == ".car") return openCar(path);
+    if (ext == ".g2cproj") return openProject(path);
     if (ext == ".h") return loadEnums(path);
     if (ext == ".glm") {
         // A model is something to look at: always the preview.
@@ -1158,22 +1238,34 @@ static std::string carNameKey(const std::string& path) {
 }
 
 std::size_t App::openFolders(const std::vector<std::string>& roots) {
+    std::set<std::string> open;
+    for (const auto& d : docs_) open.insert(pathKey(d.path));
     std::vector<std::string> found;
     std::set<std::string> seen;
+    std::size_t alreadyOpen = 0;
     for (const auto& root : roots) {
         const auto hits = car::scanDirectory(root);
         log(LogLine::Kind::Info, trf(S::LogCarsUnder, hits.size(), root.c_str()));
         for (const auto& f : hits) {
             // The same file through overlapping folders counts once (Windows
             // ignores case).
-            std::error_code ec;
-            std::string key = fs::weakly_canonical(f.path, ec).string();
-            std::transform(key.begin(), key.end(), key.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (seen.insert(key).second) found.push_back(f.path);
+            const std::string key = pathKey(f.path);
+            if (!seen.insert(key).second) continue;
+            // Already in a tab: left alone, and so is the view. "Opening" it
+            // again jumped to that tab - with 25 scripts open, choosing a
+            // character's folder threw you out of the one you worked on.
+            if (open.count(key)) {
+                ++alreadyOpen;
+                continue;
+            }
+            found.push_back(f.path);
         }
     }
-    if (found.empty()) return 0;
+    if (alreadyOpen > 0) log(LogLine::Kind::Info, trf(S::LogCarsAlreadyOpen, alreadyOpen));
+    if (found.empty()) {
+        offerFolderXsi(roots);
+        return 0;
+    }
 
     std::map<std::string, std::size_t> counts;
     for (const auto& p : found) ++counts[carNameKey(p)];
@@ -1252,6 +1344,401 @@ std::size_t App::openFolder(const std::string& root) {
     return opened;
 }
 
+// --- Projects ----------------------------------------------------------------
+
+// First line of every project file: what makes a file a project.
+static constexpr const char* kProjectMagic = "# g2c project";
+
+namespace {
+// What a .g2cproj holds, paths made absolute.
+struct ProjectData {
+    std::vector<std::string>           scripts;
+    std::vector<std::string>           open;
+    std::string                        active;
+    std::string                        baseDir;
+    std::string                        refGla;
+    std::map<std::string, std::string> outputs;
+};
+}  // namespace
+
+// Below the project's folder relative, elsewhere absolute: a project next to
+// its data moves along with it, and one in "Documents" still finds scripts on
+// another drive. A ".." chain would break as soon as the file alone moves.
+static std::string projectRel(const fs::path& dir, const std::string& p) {
+    std::error_code ec;
+    const fs::path rel = fs::relative(p, dir, ec);
+    if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) return rel.string();
+    return p;
+}
+
+static std::string projectAbs(const fs::path& dir, const std::string& s) {
+    fs::path p(s);
+    if (p.is_relative()) p = dir / p;
+    return p.lexically_normal().string();
+}
+
+static bool readProjectFile(const std::string& file, ProjectData& out) {
+    std::ifstream f(file);
+    if (!f) return false;
+    std::error_code ec;
+    fs::path abs = fs::absolute(fs::path(file), ec);
+    if (ec) abs = fs::path(file);
+    const fs::path dir = abs.parent_path();
+    bool magic = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line == kProjectMagic) {
+            magic = true;
+            continue;
+        }
+        const std::size_t eq = line.find('=');
+        if (eq == std::string::npos || eq + 1 >= line.size()) continue;
+        const std::string key = line.substr(0, eq);
+        const std::string val = line.substr(eq + 1);
+        if (key == "script") out.scripts.push_back(projectAbs(dir, val));
+        else if (key == "open") out.open.push_back(projectAbs(dir, val));
+        else if (key == "active") out.active = projectAbs(dir, val);
+        else if (key == "basedir") out.baseDir = projectAbs(dir, val);
+        else if (key == "refgla") out.refGla = projectAbs(dir, val);
+        else if (key == "outp") {
+            // "<script>|<folder>" like in the settings: '|' can't occur in a
+            // Windows path.
+            const std::size_t bar = val.find('|');
+            if (bar != std::string::npos && bar + 1 < val.size())
+                out.outputs[projectAbs(dir, val.substr(0, bar))] = projectAbs(dir, val.substr(bar + 1));
+        }
+    }
+    return magic;
+}
+
+bool App::hasUnsavedChanges() const {
+    for (const auto& d : docs_)
+        if (d.dirty) return true;
+    return false;
+}
+
+void App::saveSessionState() {
+    if (!project_.path.empty()) saveProject();
+    saveSettings();
+}
+
+void App::updateTitle() {
+    if (!platform_.setTitle) return;
+    platform_.setTitle(project_.path.empty() ? std::string("g2c \xE2\x80\x94 Ghoul2 Toolkit")
+                                             : project_.name + " \xE2\x80\x94 g2c");
+}
+
+bool App::inProject(const std::string& script) const {
+    if (project_.path.empty()) return false;
+    for (const auto& s : project_.scripts)
+        if (s == script) return true;
+    const std::string key = pathKey(script);
+    for (const auto& s : project_.scripts)
+        if (pathKey(s) == key) return true;
+    return false;
+}
+
+void App::addToProject(const std::string& script) {
+    if (project_.path.empty() || inProject(script)) return;
+    project_.scripts.push_back(script);
+    projectExistsAt_ = -1.0;
+    saveProject();
+}
+
+void App::addRecentProject(const std::string& file) {
+    const std::string key = pathKey(file);
+    recentProjects_.erase(std::remove_if(recentProjects_.begin(), recentProjects_.end(),
+                                         [&](const std::string& r) { return pathKey(r) == key; }),
+                          recentProjects_.end());
+    recentProjects_.push_front(file);
+    while (recentProjects_.size() > 10) recentProjects_.pop_back();
+}
+
+bool App::saveProject() {
+    if (project_.path.empty()) return false;
+    const fs::path dir = fs::path(project_.path).parent_path();
+    std::ostringstream f;
+    f << kProjectMagic << "\n";
+    if (!settings_.baseDir.empty()) f << "basedir=" << projectRel(dir, settings_.baseDir) << "\n";
+    if (!settings_.referenceGla.empty()) f << "refgla=" << projectRel(dir, settings_.referenceGla) << "\n";
+    for (const auto& s : project_.scripts) f << "script=" << projectRel(dir, s) << "\n";
+    // The tabs in their order, and the one on screen.
+    for (const auto& d : docs_)
+        if (inProject(d.path)) f << "open=" << projectRel(dir, d.path) << "\n";
+    if (active_ >= 0 && active_ < static_cast<int>(docs_.size()) &&
+        inProject(docs_[static_cast<std::size_t>(active_)].path))
+        f << "active=" << projectRel(dir, docs_[static_cast<std::size_t>(active_)].path) << "\n";
+    // Output folders: of the open tab, else the remembered one. By the exact
+    // path - it is what was opened; docIndexOf would ask the file system for
+    // every closed script on every save.
+    for (const auto& s : project_.scripts) {
+        std::string out;
+        int k = -1;
+        for (std::size_t j = 0; j < docs_.size(); ++j)
+            if (docs_[j].path == s) k = static_cast<int>(j);
+        if (k >= 0) {
+            out = docs_[static_cast<std::size_t>(k)].outputDir;
+        } else if (const auto it = savedOutputs_.find(s); it != savedOutputs_.end()) {
+            out = it->second;
+        }
+        if (!out.empty()) f << "outp=" << projectRel(dir, s) << "|" << projectRel(dir, out) << "\n";
+    }
+    try {
+        writeFileChecked(project_.path, f.str());
+    } catch (const std::exception& e) {
+        log(LogLine::Kind::Bad, e.what());
+        return false;
+    }
+    return true;
+}
+
+bool App::newProject(const std::string& file) {
+    std::string target = file;
+    if (fs::path(target).extension().empty()) target += ".g2cproj";
+    std::error_code ec;
+    // Never over an existing file: it may well be another project.
+    if (fs::exists(target, ec)) {
+        log(LogLine::Kind::Bad, trf(S::LogProjectExists, target.c_str()));
+        return false;
+    }
+    // The project open so far keeps its state; its tabs stay open and make
+    // up the new one.
+    if (!project_.path.empty()) saveProject();
+    const Project before = project_;
+    Project p;
+    const fs::path abs = fs::absolute(fs::path(target), ec);
+    p.path = ec ? target : abs.string();
+    p.name = fs::path(target).stem().string();
+    for (const auto& d : docs_) p.scripts.push_back(d.path);
+    project_ = std::move(p);
+    projectExistsAt_ = -1.0;
+    if (!saveProject()) {
+        project_ = before;
+        return false;
+    }
+    addRecentProject(project_.path);
+    updateTitle();
+    log(LogLine::Kind::Good, trf(S::LogProjectCreated, project_.name.c_str(), project_.scripts.size()));
+    return true;
+}
+
+bool App::openProject(const std::string& file) {
+    ProjectData probe;
+    if (!readProjectFile(file, probe)) {
+        log(LogLine::Kind::Bad, trf(S::LogProjectBad, file.c_str()));
+        return false;
+    }
+    if (!project_.path.empty() && pathKey(project_.path) == pathKey(file)) {
+        log(LogLine::Kind::Info, trf(S::LogAlreadyOpen, project_.path.c_str()));
+        return true;
+    }
+    std::error_code ec;
+    const fs::path abs = fs::absolute(fs::path(file), ec);
+    switchProject(ec ? file : abs.string());
+    return true;
+}
+
+void App::closeProject() {
+    if (!project_.path.empty()) switchProject({});
+}
+
+// Like Visual Studio: the tabs of now go, the project's come. Unsaved changes
+// ask first; "Cancel" leaves everything as it was.
+void App::switchProject(const std::string& next) {
+    if (!project_.path.empty()) saveProject();
+    std::vector<std::size_t> all(docs_.size());
+    bool dirty = false;
+    for (std::size_t i = 0; i < docs_.size(); ++i) {
+        all[i] = i;
+        if (docs_[i].dirty) dirty = true;
+    }
+    if (dirty) {
+        afterClose_ = next;
+        requestClose(all);
+        return;
+    }
+    afterClose_.reset();
+    while (!docs_.empty()) closeDocument(docs_.size() - 1);
+    finishProjectSwitch(next);
+}
+
+void App::finishProjectSwitch(const std::string& next) {
+    if (!project_.path.empty()) log(LogLine::Kind::Info, trf(S::LogProjectClosed, project_.name.c_str()));
+    project_ = Project{};
+    projectExistsAt_ = -1.0;
+    if (next.empty() || !loadProjectNow(next)) updateTitle();
+}
+
+bool App::loadProjectNow(const std::string& file) {
+    ProjectData pd;
+    if (!readProjectFile(file, pd)) {
+        log(LogLine::Kind::Bad, trf(S::LogProjectBad, file.c_str()));
+        return false;
+    }
+    std::error_code ec;
+    const fs::path abs = fs::absolute(fs::path(file), ec);
+    project_.path = ec ? file : abs.string();
+    project_.name = fs::path(file).stem().string();
+    project_.scripts = pd.scripts;
+    projectExistsAt_ = -1.0;
+    // The project's paths win over those of the last session.
+    if (!pd.baseDir.empty()) settings_.baseDir = pd.baseDir;
+    if (!pd.refGla.empty()) settings_.referenceGla = pd.refGla;
+    for (const auto& [script, folder] : pd.outputs) savedOutputs_[script] = folder;
+
+    std::size_t missing = 0;
+    for (const auto& s : project_.scripts)
+        if (!fs::exists(s, ec)) ++missing;
+    std::size_t opened = 0;
+    for (const auto& s : pd.open)
+        if (fs::exists(s, ec) && openCar(s)) ++opened;
+    if (const int k = pd.active.empty() ? -1 : docIndexOf(pd.active); k >= 0) activate(k);
+
+    addRecentProject(project_.path);
+    updateTitle();
+    log(LogLine::Kind::Good, trf(S::LogProjectOpened, project_.name.c_str(), opened, project_.scripts.size()));
+    if (missing) log(LogLine::Kind::Warn, trf(S::LogProjectMissing, missing));
+    return true;
+}
+
+bool App::removeFromProject(const std::string& script) {
+    const std::string key = pathKey(script);
+    const auto it = std::find_if(project_.scripts.begin(), project_.scripts.end(),
+                                 [&](const std::string& s) { return s == script || pathKey(s) == key; });
+    if (it == project_.scripts.end()) return false;
+    project_.scripts.erase(it);
+    projectExistsAt_ = -1.0;
+    saveProject();
+    log(LogLine::Kind::Info, trf(S::LogProjectRemoved, fs::path(script).filename().string().c_str()));
+    if (const int k = docIndexOf(script); k >= 0) requestClose({static_cast<std::size_t>(k)});
+    return true;
+}
+
+void App::newProjectDialog() {
+    const std::string p =
+        askSaveFile("project", tr(S::DlgTitleNewProject), "g2c-Projekt (*.g2cproj)\0*.g2cproj\0", "g2cproj");
+    if (!p.empty()) newProject(p);
+}
+
+void App::openProjectDialog() {
+    const auto f = askFiles("project", tr(S::DlgTitleOpenProject),
+                            "g2c-Projekt (*.g2cproj)\0*.g2cproj\0Alle\0*.*\0", false);
+    if (!f.empty()) openProject(f.front());
+}
+
+// The scripts of the project, like Visual Studio's Solution Explorer: a click
+// brings one up (opening it if needed), the right button has the rest.
+void App::drawProjectPanel() {
+    ImGui::BeginChild("project", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.15f);
+    iconText(ICON_FOLDER, kIconAccent, project_.name.c_str());
+    ImGui::PopFont();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", project_.path.c_str());
+
+    const double now = nowSeconds();
+    if (projectExists_.size() != project_.scripts.size() || now - projectExistsAt_ > 1.0) {
+        projectExists_.assign(project_.scripts.size(), 0);
+        for (std::size_t i = 0; i < project_.scripts.size(); ++i) {
+            std::error_code ec;
+            projectExists_[i] = fs::exists(project_.scripts[i], ec) ? 1 : 0;
+        }
+        projectExistsAt_ = now;
+    }
+
+    // Labels like the tabs: the file name, or its folder where names repeat
+    // (25 x _humanoid.car). Sorted by name; the tab order stays the user's.
+    struct Row {
+        std::size_t i;
+        std::string label;
+        int         doc;
+    };
+    std::map<std::string, int> nameCount;
+    for (const auto& s : project_.scripts) nameCount[fs::path(s).filename().string()]++;
+    std::vector<Row> rows;
+    std::size_t openCount = 0;
+    for (std::size_t i = 0; i < project_.scripts.size(); ++i) {
+        const fs::path p(project_.scripts[i]);
+        const std::string file = p.filename().string();
+        const std::string parent = p.parent_path().filename().string();
+        Row r{i, nameCount[file] > 1 && !parent.empty() ? parent : file, -1};
+        // By the exact path: what the project holds is what was opened.
+        for (std::size_t k = 0; k < docs_.size(); ++k)
+            if (docs_[k].path == project_.scripts[i]) r.doc = static_cast<int>(k);
+        if (r.doc >= 0) ++openCount;
+        rows.push_back(std::move(r));
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        std::string x = a.label, y = b.label;
+        std::transform(x.begin(), x.end(), x.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        std::transform(y.begin(), y.end(), y.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return x < y;
+    });
+
+    ImGui::TextDisabled(tr(S::ProjScripts), project_.scripts.size(), openCount);
+    if (ImGui::SmallButton(withIcon(ICON_ADD, tr(S::ProjAddScripts)))) openScriptDialog();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ProjAddTip));
+    ImGui::SameLine();
+    if (ImGui::SmallButton(withIcon(ICON_FOLDER_OPEN, tr(S::ProjAddFolder)))) openFolderDialog();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ProjAddTip));
+    if (openCount < project_.scripts.size()) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(tr(S::ProjOpenAll)))
+            for (std::size_t i = 0; i < project_.scripts.size(); ++i)
+                if (projectExists_[i] && docIndexOf(project_.scripts[i]) < 0) openCar(project_.scripts[i]);
+    }
+    ImGui::Separator();
+    if (project_.scripts.empty()) hintText(tr(S::ProjEmptyHint));
+
+    // Acted on after the list: each of these changes it.
+    std::string toOpen, toClose, toRemove, toReveal;
+    for (const Row& r : rows) {
+        const std::string& s = project_.scripts[r.i];
+        const bool exists = projectExists_[r.i] != 0;
+        ImGui::PushID(static_cast<int>(r.i));
+        std::string label = r.label;
+        if (r.doc >= 0 && docs_[static_cast<std::size_t>(r.doc)].dirty) label += " *";
+        // Missing red, closed muted, open as usual.
+        const ImVec4 textCol = !exists      ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f)
+                               : r.doc < 0 ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)
+                                           : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        ImGui::PushStyleColor(ImGuiCol_Text, textCol);
+        const bool shown = r.doc >= 0 && r.doc == active_;
+        if (ImGui::Selectable(withIcon(ICON_DOCUMENT, label.c_str()), shown)) {
+            if (r.doc >= 0) {
+                mode_ = Mode::Build;
+                activate(r.doc);
+            } else if (exists) {
+                toOpen = s;
+            }
+        }
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", exists ? s.c_str() : trf(S::ProjMissing, s.c_str()).c_str());
+        if (ImGui::BeginPopupContextItem("ctx")) {
+            if (r.doc < 0) {
+                if (ImGui::MenuItem(tr(S::ProjOpenItem), nullptr, false, exists)) toOpen = s;
+            } else if (ImGui::MenuItem(tr(S::CloseTab))) {
+                toClose = s;
+            }
+            if (platform_.revealInExplorer && ImGui::MenuItem(tr(S::ProjReveal), nullptr, false, exists)) toReveal = s;
+            ImGui::Separator();
+            if (ImGui::MenuItem(withIcon(ICON_DELETE, tr(S::ProjRemove)))) toRemove = s;
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    if (!toOpen.empty()) {
+        mode_ = Mode::Build;
+        openCar(toOpen);
+    }
+    if (!toClose.empty())
+        if (const int k = docIndexOf(toClose); k >= 0) requestClose({static_cast<std::size_t>(k)});
+    if (!toReveal.empty()) platform_.revealInExplorer(toReveal);
+    if (!toRemove.empty()) removeFromProject(toRemove);
+}
+
 void App::closeDocument(std::size_t index) {
     resetRowState();
     if (index >= docs_.size()) return;
@@ -1260,6 +1747,7 @@ void App::closeDocument(std::size_t index) {
     // Its output folder outlives the tab: reopened later (or next session) it
     // is there again. It used to be forgotten as soon as the tab closed.
     if (!docs_[index].outputDir.empty()) savedOutputs_[path] = docs_[index].outputDir;
+    else savedOutputs_.erase(path);   // "Clear" counts: the old one must not come back
     // Close dialogs that refer to this script right along with it.
     if (editDocPath_ == path) {
         editOpen_ = false;
@@ -1337,7 +1825,14 @@ void App::drawSpeedDialog() {
         speedRows_.clear();
         ImGui::CloseCurrentPopup();
     };
+    // 0 is no speed: the game played such a sequence at a crawl.
+    ImGui::BeginDisabled(speedValue_ == 0.0);
     if (ImGui::Button(tr(S::Apply))) done(speedValue_);
+    ImGui::EndDisabled();
+    if (speedValue_ == 0.0) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", tr(S::SpeedZero));
+    }
     ImGui::SameLine();
     if (ImGui::Button(tr(S::SpeedAllFromXsi))) done(std::nullopt);
     ImGui::SameLine();
@@ -1374,6 +1869,7 @@ void App::drawCloseDialog() {
             // Saving failed: close nothing, the reason is in the log.
             quitRequested_ = false;
             restartRequested_ = false;
+            afterClose_.reset();
         } else if (quitRequested_) {
             quitApproved_ = true;
         } else {
@@ -1386,6 +1882,12 @@ void App::drawCloseDialog() {
         }
         pendingClose_.clear();
         ImGui::CloseCurrentPopup();
+        // A project switch waited for this answer.
+        if (ok && !quitRequested_ && afterClose_) {
+            const std::string next = *afterClose_;
+            afterClose_.reset();
+            finishProjectSwitch(next);
+        }
     };
 
     if (ImGui::Button(withIcon(ICON_SAVE, tr(S::Save)))) finish(true);
@@ -1396,6 +1898,7 @@ void App::drawCloseDialog() {
         pendingClose_.clear();
         quitRequested_ = false;
         restartRequested_ = false;
+        afterClose_.reset();
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -1454,6 +1957,7 @@ std::set<std::string> App::grabbedXsiKeys(const Document& d) const {
 }
 
 std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) {
+    lastAddedFiles_ = 0;
     if (docs_.empty() || files.empty()) return 0;
 
     // First check what's coming in.
@@ -1501,10 +2005,12 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
 
     std::vector<char> used(good.size(), 0);
     std::size_t skipped = 0;
+    bool filterCleared = false;
     // Returns how many lines went into the script.
     const auto appendTo = [&](Document& d) -> std::size_t {
         std::set<std::string> have;
         if (settings_.onlyNewXsi) have = grabbedXsiKeys(d);
+        const std::size_t first = d.script.grabs.size();
         std::size_t n = 0;
         for (std::size_t i = 0; i < good.size(); ++i) {
             car::GrabDirective g;
@@ -1526,6 +2032,18 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
             ++n;
         }
         if (n == 0) return 0;
+        // A filter that hides what just came in makes it look as if nothing
+        // came in at all.
+        if (d.filter[0] != '\0' || d.rowFilter != 0) {
+            bool hidden = false;
+            for (std::size_t i = first; i < d.script.grabs.size(); ++i)
+                if (!rowVisible(d, i)) hidden = true;
+            if (hidden) {
+                d.filter[0] = '\0';
+                d.rowFilter = 0;
+                filterCleared = true;
+            }
+        }
         touch(d);
         d.validated = false;
         d.syncSelection();
@@ -1541,6 +2059,13 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
             ++touched;
         }
     } else if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+        // A script that could not be read has no list to add to: the lines
+        // would be all the tab holds, and saving it is refused anyway.
+        const Document& d = docs_[static_cast<std::size_t>(active_)];
+        if (!d.loadError.empty()) {
+            log(LogLine::Kind::Warn, trf(S::LogUnreadableNoAdd, d.title.c_str()));
+            return 0;
+        }
         if (appendTo(docs_[static_cast<std::size_t>(active_)]) > 0) {
             keepRootLast(static_cast<std::size_t>(active_));
             touched = 1;
@@ -1548,8 +2073,10 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
     }
 
     const auto added = static_cast<std::size_t>(std::count(used.begin(), used.end(), 1));
+    lastAddedFiles_ = added;
     if (added > 0 || skipped == 0) log(LogLine::Kind::Good, trf(S::LogAddedFiles, added, touched));
     if (skipped > 0) log(LogLine::Kind::Info, trf(S::LogSkippedExisting, skipped));
+    if (filterCleared) log(LogLine::Kind::Info, tr(S::LogFilterCleared));
     return touched;
 }
 
@@ -1600,34 +2127,55 @@ std::size_t App::saveAllDocuments() {
 }
 
 std::size_t App::addXsiFolder(const std::string& folder, bool toAll) {
-    // Collect all .xsi of a tree, sorted - otherwise the order of the
-    // sequences depends on how the file system returns them.
-    std::vector<std::string> files;
-    std::error_code ec;
-    std::vector<fs::path> stack{fs::path(folder)};
-    while (!stack.empty()) {
-        const fs::path dir = stack.back();
-        stack.pop_back();
-        fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
-        if (ec) continue;
-        for (const auto& e : it) {
-            std::error_code eec;
-            if (e.is_symlink(eec)) continue;
-            if (e.is_directory(eec) && !eec) { stack.push_back(e.path()); continue; }
-            std::string ext = e.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            if (ext == ".xsi") files.push_back(e.path().string());
-        }
-    }
-    std::sort(files.begin(), files.end());
+    lastAddedFiles_ = 0;
+    const std::vector<std::string> files = collectXsi(folder);
     if (files.empty()) {
         log(LogLine::Kind::Warn, trf(S::LogNoXsiIn, folder.c_str()));
         return 0;
     }
     log(LogLine::Kind::Info, trf(S::LogXsiInFolder, files.size(), folder.c_str()));
     return addXsiFiles(files, toAll);
+}
+
+std::size_t App::addXsiFolders(const std::vector<std::string>& dirs, bool toAll) {
+    // Counted per file: addXsiFolder answers with the scripts it touched, and
+    // the summary used to print that number as "files".
+    std::size_t files = 0;
+    for (const auto& dir : dirs) {
+        addXsiFolder(dir, toAll);
+        files += lastAddedFiles_;
+    }
+    if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+    return files;
+}
+
+// The folder chosen to open scripts has no new one, but .xsi files. Most
+// likely they were meant for the script on screen - the button sits right
+// next to "Add XSI". Offered, not done: the folder may as well be the wrong
+// one.
+void App::offerFolderXsi(const std::vector<std::string>& roots) {
+    if (active_ < 0 || active_ >= static_cast<int>(docs_.size())) return;
+    const Document& d = docs_[static_cast<std::size_t>(active_)];
+    if (!d.loadError.empty()) return;
+    std::vector<std::string> withXsi;
+    std::size_t n = 0;
+    for (const auto& r : roots) {
+        const std::size_t k = collectXsi(r).size();
+        if (k == 0) continue;
+        withXsi.push_back(r);
+        n += k;
+    }
+    if (n == 0) return;
+    log(LogLine::Kind::Info, trf(S::ToastFolderXsi, n));
+    // By path: by the time of the click the tabs may have moved.
+    const std::string target = d.path;
+    toast(LogLine::Kind::Info, trf(S::ToastFolderXsi, n), trf(S::ToastAddXsiTo, d.title.c_str()),
+          [this, target, withXsi] {
+              const int k = docIndexOf(target);
+              if (k < 0) return;
+              activate(k);
+              addXsiFolders(withXsi, false);
+          });
 }
 
 // The relative path alone is not unique: a script resolves its files next to
@@ -1702,6 +2250,9 @@ void App::resetRowState() {
     editCommentGrab_ = -1;
     editCommentLine_ = -1;
     editTrailGrab_ = -1;
+    editCellRow_ = -1;
+    editCellCol_ = -1;
+    focusCellField_ = false;
     selAnchor_ = -1;
     rangeSelecting_ = false;
 }
@@ -1752,11 +2303,14 @@ void App::startFrameWorker(const Document& d) {
     // If the root was guessed wrong at first, "missing" showed everywhere -
     // and stayed that way until restart, even after it was corrected.
     // Switching tabs keeps everything: entries are per script folder.
-    if (!frameWorkerBaseDir_.empty() && frameWorkerBaseDir_ != settings_.baseDir) {
+    // That includes the first one: without a root everything was "missing",
+    // and setting it changed nothing.
+    if (frameWorkerBaseSeen_ && frameWorkerBaseDir_ != settings_.baseDir) {
         std::lock_guard<std::mutex> lock(frameMutex_);
         xsiInfo_.clear();
     }
     frameWorkerBaseDir_ = settings_.baseDir;
+    frameWorkerBaseSeen_ = true;
     const bool recheck = frameRecheck_;
     frameRecheck_ = false;
 
@@ -2087,10 +2641,45 @@ bool App::loadEnums(const std::string& path) {
     return true;
 }
 
+// The script as the build reads it: exactly what saving writes, read back
+// WITH its $include files. The table holds only the file's own lines (an edit
+// to an included one would be lost on saving), so a build from it left out
+// every included sequence. And rows added or pasted carry no or a foreign
+// line number - the build counts lines to place $aseanimref_gla and $pcj, and
+// the check names rows by them.
+static car::Script scriptAsBuilt(const Document& d) {
+    return car::parse(car::writeScript(d.script), d.path);
+}
+
 void App::validateDocument(std::size_t index, bool light) {
     if (index >= docs_.size()) return;
     Document& d = docs_[index];
     if (!d.loadError.empty()) return;
+
+    car::Script sc;
+    try {
+        sc = scriptAsBuilt(d);
+    } catch (const std::exception& e) {
+        // An $include that can't be read stops the build too.
+        d.validation = car::ValidateResult{};
+        car::Issue is;
+        is.level = car::Issue::Level::Error;
+        is.message = e.what();
+        d.validation.issues.push_back(std::move(is));
+        d.validation.errors = 1;
+        d.validated = true;
+        return;
+    }
+    // The table's rows get the line numbers of the file as it will be saved:
+    // the messages name those, and rowHasIssue finds its rows by them.
+    {
+        std::size_t k = 0;
+        for (const auto& g : sc.grabs) {
+            if (g.fromInclude >= 0) continue;
+            if (k < d.script.grabs.size()) d.script.grabs[k].line = g.line;
+            ++k;
+        }
+    }
 
     car::ValidateOptions vo;
     vo.baseDir = settings_.baseDir;
@@ -2101,7 +2690,7 @@ void App::validateDocument(std::size_t index, bool light) {
     if (settings_.useCache && !settings_.baseDir.empty())
         vo.cacheDir = (fs::path(settings_.baseDir) / "g2c_cache").string();
 
-    d.validation = car::validate(d.script, d.path, vo);
+    d.validation = car::validate(sc, d.path, vo);
     d.validated = true;
 }
 
@@ -2131,18 +2720,19 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
     try {
         if (d.outputDir.empty())
             throw std::runtime_error(tr(S::LogNoOutputDir));
+        const car::Script script = scriptAsBuilt(d);
 
         // Which skeleton. A model script ($aseanimgrab_gla) and a script with
         // $aseanimref_gla name their GLA themselves - that one wins over the
         // setting: a model's GLM must point to exactly the GLA it was made for.
-        const car::ScriptKind kind = car::scriptKind(d.script);
+        const car::ScriptKind kind = car::scriptKind(script);
         bool scriptNamesGla = kind == car::ScriptKind::Model;
-        for (const auto& stt : d.script.statements)
+        for (const auto& stt : script.statements)
             if (stt.cmd == car::Cmd::AseAnimRefGla) scriptNamesGla = true;
         // No reference at all: the skeleton is built from the sources, as
         // Carcass does (runJob says when that cannot work).
         std::string refPath = scriptNamesGla || st.newSkeleton ? std::string() : st.referenceGla;
-        if (refPath.empty() && !st.newSkeleton) refPath = car::scriptReferenceGla(d.script, st.baseDir, d.path);
+        if (refPath.empty() && !st.newSkeleton) refPath = car::scriptReferenceGla(script, st.baseDir, d.path);
         if (kind == car::ScriptKind::Model)
             log(LogLine::Kind::Info, trf(S::LogModelScript, d.title.c_str(), refPath.c_str()));
 
@@ -2162,11 +2752,11 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
         // file was expected. Only the paths are resolved - this used to be a
         // complete extra build, which doubled the time of every build.
         if (kind == car::ScriptKind::Animation) {
-            const auto missing = car::findMissingFiles(d.script, d.path, bo);
+            const auto missing = car::findMissingFiles(script, d.path, bo);
             if (!missing.empty() && !bo.skipMissing) {
                 char head[160];
                 std::snprintf(head, sizeof(head), tr(S::MissingHead), missing.size(),
-                              d.script.grabs.size());
+                              script.grabs.size());
                 log(LogLine::Kind::Bad, d.title + ": " + head);
                 if (!st.baseDir.empty())
                     log(LogLine::Kind::Bad,
@@ -2231,7 +2821,7 @@ void App::buildOne(const Document& d, const Settings& st, bool cfgOnly) {
             if (l == car::JobLog::Warn) log(LogLine::Kind::Warn, d.title + ": " + t);
         };
 
-        const car::JobResult r = car::runJob(d.script, d.path, jo);
+        const car::JobResult r = car::runJob(script, d.path, jo);
         if (r.skeletonBuilt) log(LogLine::Kind::Info, trf(S::LogNewSkeleton, d.title.c_str()));
 
         // Report duplicate names on BUILD too, not only on validation.
@@ -2478,6 +3068,21 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem(withIcon(ICON_FOLDER_OPEN, tr(S::OpenFolder)), "Ctrl+Shift+O"))
             openFolderDialog();
         ImGui::Separator();
+        if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::NewProject)))) newProjectDialog();
+        if (ImGui::MenuItem(withIcon(ICON_FOLDER_OPEN, tr(S::OpenProject)))) openProjectDialog();
+        if (ImGui::MenuItem(tr(S::CloseProject), nullptr, false, !project_.path.empty())) closeProject();
+        if (ImGui::BeginMenu(tr(S::RecentProjects), !recentProjects_.empty())) {
+            std::string pick;
+            for (const auto& r : recentProjects_) {
+                std::error_code ec;
+                if (ImGui::MenuItem(r.c_str(), nullptr, r == project_.path, fs::exists(r, ec))) pick = r;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(tr(S::RecentClear))) recentProjects_.clear();
+            ImGui::EndMenu();
+            if (!pick.empty()) openProject(pick);
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem(withIcon(ICON_SAVE, tr(S::Save)), "Ctrl+S", false, !docs_.empty()))
             saveDocument(static_cast<std::size_t>(active_));
         if (ImGui::MenuItem(withIcon(ICON_SAVE_ALL, tr(S::SaveAll)), "Ctrl+Shift+S", false, !docs_.empty()))
@@ -2562,6 +3167,7 @@ void App::drawMenuBar() {
         }
         ImGui::Separator();
         ImGui::MenuItem(withIcon(ICON_SETTINGS, tr(S::Settings)), nullptr, &showSettings_);
+        ImGui::MenuItem(withIcon(ICON_FOLDER, tr(S::ProjectPanel)), nullptr, &showProjectPanel_, !project_.path.empty());
         ImGui::MenuItem(tr(S::PartDetails), nullptr, &settings_.partDetails);
         ImGui::Separator();
         if (updater_ && ImGui::MenuItem(tr(S::UpdCheckNow), nullptr, false, !updater_->busy()))
@@ -2655,10 +3261,7 @@ void App::drawToolbar() {
                 (platform_.pickFolders || platform_.pickFolder)) {
                 // Several folders at once: for a model with animations from
                 // ten sources, clicking ten times is the actual work.
-                const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-                std::size_t files = 0;
-                for (const auto& d : dirs) files += addXsiFolder(d, false);
-                if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+                addXsiFolders(askFolders("xsifolder", tr(S::DlgTitleXsiFolder)), false);
             }
             ImGui::Separator();
             if (ImGui::MenuItem(withIcon(ICON_ADD, tr(S::AddXsiMenuFilesAll))) && platform_.openFiles) {
@@ -2667,10 +3270,7 @@ void App::drawToolbar() {
             }
             if (ImGui::MenuItem(withIcon(ICON_FOLDER, tr(S::AddXsiMenuFolderAll))) &&
                 (platform_.pickFolders || platform_.pickFolder)) {
-                const auto dirs = askFolders("xsifolder", tr(S::DlgTitleXsiFolder));
-                std::size_t files = 0;
-                for (const auto& d : dirs) files += addXsiFolder(d, true);
-                if (dirs.size() > 1) log(LogLine::Kind::Info, trf(S::FoldersAdded, dirs.size(), files));
+                addXsiFolders(askFolders("xsifolder", tr(S::DlgTitleXsiFolder)), true);
             }
             ImGui::EndPopup();
         }
@@ -3002,18 +3602,18 @@ bool App::rowHasIssue(const Document& d, std::size_t i) const {
 }
 
 bool App::rowVisible(const Document& d, std::size_t i) const {
-    if (filter_[0] == '\0' && rowFilter_ == 0) return true;
+    if (d.filter[0] == '\0' && d.rowFilter == 0) return true;
     if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
     // Split part names too, exactly like the table: rows shown only because
     // of a part were skipped by Shift-click and drag-select. Case does not
     // matter: "walk" finds BOTH_WALK1.
-    if (filter_[0] != '\0' && !containsNoCase(name, filter_) && !containsNoCase(g.file, filter_) &&
+    if (d.filter[0] != '\0' && !containsNoCase(name, d.filter) && !containsNoCase(g.file, d.filter) &&
         std::none_of(g.additional.begin(), g.additional.end(),
-                     [&](const auto& a) { return containsNoCase(a.name, filter_); }))
+                     [&](const auto& a) { return containsNoCase(a.name, d.filter); }))
         return false;
-    switch (rowFilter_) {
+    switch (d.rowFilter) {
         case 1: return rowHasIssue(d, i);
         case 2: return !enums_.empty() && !enums_.contains(name);
         case 3:
@@ -3071,7 +3671,11 @@ void App::drawSequenceTable(Document& d) {
     }
 
     ImGui::SetNextItemWidth(220 * settings_.dpiScale);
-    ImGui::InputTextWithHint("##filter", tr(S::FilterHint), filter_, sizeof(filter_));
+    // Its own ID per script: a tab brought up from outside while the box had
+    // the keyboard would otherwise take over the text being typed.
+    ImGui::PushID(d.path.c_str());
+    ImGui::InputTextWithHint("##filter", tr(S::FilterHint), d.filter, sizeof(d.filter));
+    ImGui::PopID();
     ImGui::SameLine();
     ImGui::TextDisabled(tr(S::GrabCount), d.script.grabs.size());
     {
@@ -3084,7 +3688,7 @@ void App::drawSequenceTable(Document& d) {
             ImGui::SameLine();
             if (ImGui::SmallButton(tr(S::CutSelection)))
                 std::fill(d.selected.begin(), d.selected.end(), char{0});
-        } else if (filter_[0] == '\0') {
+        } else if (d.filter[0] == '\0') {
             ImGui::SameLine();
             ImGui::TextDisabled("%s", tr(S::DragHint));
         }
@@ -3125,10 +3729,10 @@ void App::drawSequenceTable(Document& d) {
         }
         const S labels[5] = {S::ChipAll, S::ChipProblems, S::ChipNoEnum, S::ChipBackwards, S::ChipParts};
         for (int c = 0; c < 5; ++c) {
-            if (c > 0 && counts[c] == 0 && rowFilter_ != c) continue;   // nothing to filter
+            if (c > 0 && counts[c] == 0 && d.rowFilter != c) continue;   // nothing to filter
             char lbl[64];
             std::snprintf(lbl, sizeof(lbl), tr(labels[c]), counts[c]);
-            const bool on = rowFilter_ == c;
+            const bool on = d.rowFilter == c;
             if (on) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.40f, 0.62f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.47f, 0.72f, 1.0f));
@@ -3138,7 +3742,7 @@ void App::drawSequenceTable(Document& d) {
             ImGui::PopID();
             if (on) ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ChipTip));
-            if (hit) rowFilter_ = c;
+            if (hit) d.rowFilter = c;
             ImGui::SameLine();
         }
         ImGui::NewLine();
@@ -3177,8 +3781,14 @@ void App::drawSequenceTable(Document& d) {
     if (ImGui::TableGetHoveredColumn() == 4 && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr(S::TipSpeedColumn));
 
-    const bool hasFilter = filter_[0] != '\0' || rowFilter_ != 0;
+    const bool hasFilter = d.filter[0] != '\0' || d.rowFilter != 0;
     if (d.selected.size() != d.script.grabs.size()) d.syncSelection();
+    // What the filter hides is not selected: "Delete 2 selected" also deleted
+    // a row nobody could see. (Shift-click and dragging already only pick
+    // visible rows.)
+    if (hasFilter)
+        for (std::size_t i = 0; i < d.selected.size(); ++i)
+            if (d.selected[i] && !rowVisible(d, i)) d.selected[i] = 0;
     const std::vector<int> targets = targetFrames(d);
 
     for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
@@ -3866,10 +4476,15 @@ void App::drawSequenceTable(Document& d) {
 
         if (ImGui::BeginPopupContextItem("tctx")) {
             if (ImGui::MenuItem(tr(S::MoveUp)) && !d.script.grabs.empty()) {
-                // Back to the last grab.
-                d.script.grabs.back().commentsBefore.push_back(c);
-                d.script.trailingComments.erase(
-                    d.script.trailingComments.begin() + static_cast<long>(ti));
+                if (ti > 0) {
+                    // One line up: past the comment above it.
+                    std::swap(d.script.trailingComments[ti], d.script.trailingComments[ti - 1]);
+                } else {
+                    // The first one goes above the last row.
+                    const std::string text = c;
+                    d.script.trailingComments.erase(d.script.trailingComments.begin());
+                    d.script.grabs.back().commentsBefore.push_back(text);
+                }
                 touch(d);
             }
             if (ImGui::MenuItem(tr(S::DeleteSeq))) {
@@ -4011,11 +4626,24 @@ void App::drawTabs() {
         // overwrote active_ with it again in the same frame. Anyone who
         // double-clicked a .car that was in the 24th tab ended up in the first.
         const bool soll = static_cast<int>(i) == selectTab_;
-        if (ImGui::BeginTabItem(label.c_str(), &open,
-                                soll ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
+        ImGuiTabItemFlags tabFlags = soll ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        // A changed script asks before it closes. ImGui must not take the tab
+        // for gone and bring up a neighbour meanwhile - after "Cancel" the
+        // view had moved on. Unchanged tabs close at once and keep the
+        // default (with the flag, closing one in the background would first
+        // bring it to the front).
+        if (d.dirty) tabFlags |= ImGuiTabItemFlags_NoAssumedClosure;
+        if (ImGui::BeginTabItem(label.c_str(), &open, tabFlags)) {
             // While the selection is still pending, ImGui shows the old tab for
             // one frame. That one must not reset active_.
             if (selectTab_ < 0 || soll) {
+                // Clicked with the mouse: the same as activate() - the Shift
+                // anchor of the old tab selected rows in this one, and the
+                // frame counts were not checked again.
+                if (active_ != static_cast<int>(i)) {
+                    resetRowState();
+                    frameRecheck_ = true;
+                }
                 active_ = static_cast<int>(i);
                 selectTab_ = -1;
             }
@@ -4098,6 +4726,32 @@ void App::drawWelcome() {
 
     stepHeader(3, tr(S::WelcomeBuild), false);
     hintText(tr(S::WelcomeBuildHint));
+
+    // Projects, as on Visual Studio's start page.
+    ImGui::Spacing();
+    ImGui::SeparatorText(tr(S::WelcomeProjects));
+    if (iconButton(ICON_ADD, kIconInfo, tr(S::NewProject))) newProjectDialog();
+    ImGui::SameLine();
+    if (iconButton(ICON_FOLDER_OPEN, kIconAccent, tr(S::OpenProject))) openProjectDialog();
+    if (recentProjects_.empty()) {
+        hintText(tr(S::WelcomeProjectsHint));
+    } else {
+        std::string pick;
+        int shown = 0;
+        for (const auto& r : recentProjects_) {
+            if (shown++ >= 5) break;
+            std::error_code ec;
+            const bool there = fs::exists(r, ec);
+            ImGui::BeginDisabled(!there);
+            ImGui::PushID(r.c_str());
+            if (ImGui::Selectable(fs::path(r).stem().string().c_str())) pick = r;
+            ImGui::PopID();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", fs::path(r).parent_path().string().c_str());
+        }
+        if (!pick.empty()) openProject(pick);
+    }
 
     if (!recent_.empty()) {
         ImGui::Spacing();
@@ -4450,12 +5104,18 @@ void App::drawPalette() {
     add(tr(S::OpenScript), "Ctrl+O", [this] { openScriptDialog(); });
     add(tr(S::OpenFolder), "Ctrl+Shift+O", [this] { openFolderDialog(); });
     add(tr(S::NewCar), "Ctrl+N", [this] { newCarDialog(); });
+    add(tr(S::NewProject), "", [this] { newProjectDialog(); });
+    add(tr(S::OpenProject), "", [this] { openProjectDialog(); });
+    add(tr(S::CloseProject), "", [this] { closeProject(); }, !project_.path.empty());
+    for (const auto& r : recentProjects_)
+        if (r != project_.path)
+            add(std::string(tr(S::PaletteProject)) + ": " + fs::path(r).stem().string(), "", [this, r] { openProject(r); });
     add(std::string("XSI: ") + tr(S::AddXsiMenuFiles), "", [this] {
         const auto files = askFiles("xsi", tr(S::DlgTitleXsi), "dotXSI (*.xsi)\0*.xsi\0Alle\0*.*\0", true);
         if (!files.empty()) addXsiFiles(files, false);
     }, have);
     add(std::string("XSI: ") + tr(S::AddXsiMenuFolder), "", [this] {
-        for (const auto& dir : askFolders("xsifolder", tr(S::DlgTitleXsiFolder))) addXsiFolder(dir, false);
+        addXsiFolders(askFolders("xsifolder", tr(S::DlgTitleXsiFolder)), false);
     }, have);
     add(tr(S::Settings), "", [this] { showSettings_ = !showSettings_; mode_ = Mode::Build; });
     add(std::string(tr(S::PaletteMode)) + ": " + tr(S::ModeBuild), "", [this] { mode_ = Mode::Build; });
@@ -4483,8 +5143,11 @@ void App::drawPalette() {
             const std::string name = g.enumName ? *g.enumName : g.derivedName();
             add(std::string(tr(S::PaletteSeq)) + ": " + name, "", [this, r] {
                 mode_ = Mode::Build;
-                filter_[0] = '\0';
-                rowFilter_ = 0;
+                if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+                    Document& ad = docs_[static_cast<std::size_t>(active_)];
+                    ad.filter[0] = '\0';
+                    ad.rowFilter = 0;
+                }
                 jumpToRow_ = static_cast<int>(r);
             });
         }
@@ -5888,7 +6551,11 @@ bool App::saveDocumentAs(std::size_t index, const std::string& path) {
     d.outputDir.clear();
     if (editDocPath_ == path) editOpen_ = false;
     addRecent(path);
+    if (!project_.path.empty()) addToProject(path);
     refreshTabTitles();
+    // The tab's ID is its path: to ImGui the shown tab vanished and a new one
+    // appeared, so it showed a neighbour. Keep this one on screen.
+    if (active_ == static_cast<int>(index)) activate(active_);
     log(LogLine::Kind::Good, trf(S::LogSavedAs, path.c_str()));
     return true;
 }
@@ -5944,7 +6611,16 @@ std::size_t App::buildDependents(std::size_t docIndex) {
                 which.push_back(k);
         }
     }
-    assignDefaultOutputs(true);
+    // Only they get a folder - the other open tabs are none of this build's
+    // business (a later "Build all" wrote them where nobody had said).
+    std::size_t set = 0;
+    for (const std::size_t k : which) {
+        Document& dep = docs_[k];
+        if (!dep.outputDir.empty() || !dep.loadError.empty()) continue;
+        dep.outputDir = (fs::path(dep.path).parent_path() / "g2c_out").string();
+        ++set;
+    }
+    if (set) log(LogLine::Kind::Good, trf(S::LogOutputsSet, set));
     log(LogLine::Kind::Info, trf(S::LogDependents, which.size(), title.c_str()));
     startBuildIndices(which, false);
     return which.size();
@@ -5953,13 +6629,16 @@ std::size_t App::buildDependents(std::size_t docIndex) {
 bool App::openInModView(std::size_t docIndex) {
     if (docIndex >= docs_.size()) return false;
     const Document& d = docs_[docIndex];
-    std::string stem = "out";
-    if (d.script.convert && !d.script.convert->makeSkel.empty()) {
-        const std::string& ms = d.script.convert->makeSkel;
-        const std::size_t sl = ms.find_last_of("/\\");
-        stem = sl == std::string::npos ? ms : ms.substr(sl + 1);
-    }
-    const fs::path glm = fs::path(d.outputDir.empty() ? "." : d.outputDir) / (stem + ".glm");
+    // Named like the build names it: after the .car (and "_skip" with
+    // -framestep), not after -makeskel.
+    car::JobOptions jo;
+    jo.build.baseDir = settings_.baseDir;
+    jo.build.frameStep = std::max(1, settings_.frameStep);
+    jo.outputDir = d.outputDir;
+    const car::JobPlan plan = car::planJob(d.script, d.path, jo);
+    const fs::path glm = !plan.glmPath.empty()
+                             ? fs::path(plan.glmPath)
+                             : fs::path(d.outputDir.empty() ? "." : d.outputDir) / (fs::path(d.path).stem().string() + ".glm");
     std::error_code ec;
     if (d.outputDir.empty() || !fs::exists(glm, ec)) {
         log(LogLine::Kind::Warn, trf(S::LogGlmMissing, glm.string().c_str()));
@@ -6074,7 +6753,8 @@ void App::drawSequenceDialog(Document& d) {
         // replaced by the default here - and saved that way on any edit.
         if (speed == 0) speed = car::BuildOptions{}.defaultFrameSpeed;
         ImGui::SetNextItemWidth(120 * settings_.dpiScale);
-        if (ImGui::InputDouble(tr(S::DlgFrameSpeed), &speed, 1.0, 10.0, "%g")) {
+        // 0 is no speed (stepping down from 1 or typing 0): left as it was.
+        if (ImGui::InputDouble(tr(S::DlgFrameSpeed), &speed, 1.0, 10.0, "%g") && speed != 0.0) {
             g.frameSpeed = speed;
             touch(d);
         }
@@ -6138,7 +6818,11 @@ void App::drawSequenceDialog(Document& d) {
             intCol("##l", ad.loopFrame);
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::InputDouble("##p", &ad.frameSpeed, 0, 0, "%g")) { touch(d); d.validated = false; }
+            const double partSpeed = ad.frameSpeed;
+            if (ImGui::InputDouble("##p", &ad.frameSpeed, 0, 0, "%g")) {
+                if (ad.frameSpeed == 0.0) ad.frameSpeed = partSpeed;   // 0 is no speed
+                else { touch(d); d.validated = false; }
+            }
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton(iconsAvailable() ? ICON_DELETE : "X")) remove = static_cast<int>(a);
@@ -6400,7 +7084,10 @@ void App::handleShortcuts() {
 void App::draw() {
     if (!styleApplied_) applyStyle();
 
-    if (!pendingOpen_.empty()) {
+    // Dropped or handed-over files wait while a dialog or menu is up: they
+    // change the script under it, and "Delete <row>?" then deleted the row
+    // that had moved into its place.
+    if (!pendingOpen_.empty() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         std::vector<std::string> paths;
         paths.swap(pendingOpen_);
         openPathsNow(paths);
@@ -6462,9 +7149,15 @@ void App::draw() {
             if (mode_ == Mode::Build) {
                 drawSettingsPanel();
                 if (showSettings_) ImGui::SameLine();
-                ImGui::BeginChild("docs", ImVec2(0, 0));
+                // The project explorer on the right, where Visual Studio has it.
+                const float pw = projectPanelVisible() ? 270.0f * k : 0.0f;
+                ImGui::BeginChild("docs", ImVec2(pw > 0.0f ? -(pw + ImGui::GetStyle().ItemSpacing.x) : 0.0f, 0));
                 drawTabs();
                 ImGui::EndChild();
+                if (pw > 0.0f) {
+                    ImGui::SameLine();
+                    drawProjectPanel();
+                }
             } else if (mode_ == Mode::Extract) {
                 ImGui::BeginChild("extract", ImVec2(0, 0));
                 drawExtractPanel();

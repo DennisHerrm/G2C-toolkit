@@ -4089,7 +4089,8 @@ MP-Sequenzen in Frames, Loop und Speed mit dem Original überein.
 
 ## 77. Viele Ordner auf einmal öffnen
 
-"Ordner öffnen" (Werkzeugleiste, Strg+Umschalt+O, Startseite) nimmt jetzt
+"Skript-Ordner öffnen" (Werkzeugleiste, Strg+Umschalt+O, Startseite; bis
+1.2.0 hieß der Knopf "Ordner öffnen") nimmt jetzt
 mehrere Ordner auf einmal: im Dialog mit Strg oder Umschalt markieren, oder
 Strg+A für alle. Jeder Ordner wird mitsamt Unterordnern nach .car-Dateien
 durchsucht. Ordner lassen sich auch ins Fenster ziehen.
@@ -4104,3 +4105,115 @@ ein kleines Fenster, welche Namen geöffnet werden sollen:
 Die häufigste steht oben; "Alle" und "Keine" schalten alle um. Groß- und
 Kleinschreibung spielen keine Rolle, und ein Ordner, der doppelt gewählt
 wurde, zählt einmal.
+
+---
+
+## 78. Tabs, Filter, Ordner: zehn Fehler behoben
+
+Gemeldet: Mit vielen offenen Humanoids einen Ordner gewählt - es kam keine
+neue XSI dazu, und die Ansicht sprang vom letzten Tab zu `_humanoid_ani`.
+Ursache war der Knopf neben "XSI hinzufügen": Er sucht .car-Dateien, nicht
+XSI. Im Ordner `_humanoid_ani` fand er dessen schon offene `_humanoid.car`
+und sprang zu ihrem Tab. Das Menü "XSI hinzufügen > Ordner..." war richtig
+(auch mit 25 Tabs geprüft).
+
+Was sich ändert:
+
+- Der Knopf heißt jetzt **"Skript-Ordner öffnen"**. Schon offene Skripte
+  überspringt er; die Ansicht bleibt, wo sie ist. Findet er kein neues
+  Skript, aber .xsi-Dateien, bietet ein Hinweis unten rechts
+  "Zu <Skript> hinzufügen" an - ein Klick, und sie landen im Skript auf dem
+  Bildschirm.
+- Der Suchfilter gilt je Tab. Bisher galt er in allen Tabs, und im anderen
+  Tab war "alles weg".
+- Würde ein Filter die eben hinzugefügten Zeilen verstecken, wird er
+  zurückgesetzt (steht im Protokoll).
+- In ein Skript, das nicht gelesen werden konnte, wird nichts eingefügt.
+- Ein geänderter Tab, per Mittelklick geschlossen und dann "Nein": Die
+  Ansicht bleibt bei ihm.
+- "Speichern unter" bleibt beim Tab.
+- Dieselbe .car in anderer Schreibweise (Groß/klein, `/` statt `\`) öffnet
+  keinen zweiten Tab mehr.
+- Eine angefangene Loop/Speed-Eingabe in der Zelle landet nicht mehr im
+  anderen Skript, wenn der Tab von außen wechselt (Doppelklick auf eine .car
+  im Explorer).
+- "XSI hinzufügen > Ordner..." mit mehreren Ordnern: Die Zusammenfassung
+  zählt Dateien, nicht Skripte.
+- Dateien, die ins Fenster gezogen werden, während eine Rückfrage offen ist
+  (z. B. "Löschen?"), warten, bis sie beantwortet ist. Vorher traf das
+  Löschen danach eine andere Zeile.
+
+---
+
+## 79. Projekte (wie in Visual Studio)
+
+Ein Projekt ist eine Sammlung von Skripten, die zusammen auf- und zugehen -
+wie eine Projektmappe in Visual Studio. Es steht in einer kleinen Textdatei
+`<Name>.g2cproj`, die du ablegst, wo du willst.
+
+**Anlegen:** Die Skripte öffnen, die dazugehören sollen (z. B. per
+"Skript-Ordner öffnen" alle 25 Humanoids), dann **Datei > Neues Projekt...**
+und einen Namen wählen. Alle offenen Tabs kommen ins Projekt.
+
+**Öffnen:** **Datei > Projekt öffnen...**, **Datei > Zuletzt verwendete
+Projekte**, die Liste "Projekte" auf der Startseite, oder die `.g2cproj` ins
+Fenster ziehen. Die Tabs, die gerade offen sind, gehen dabei zu (mit
+Rückfrage bei ungespeicherten Änderungen), dann öffnet g2c die Tabs des
+Projekts - genau die, die beim letzten Mal offen waren, mit dem aktiven Tab
+von damals.
+
+**Beim Start** kommt das Projekt wieder, das beim Beenden offen war.
+
+**Projekt-Explorer** (rechts, ein- und ausblenden unter **Ansicht**):
+
+- listet alle Skripte des Projekts; offene normal, geschlossene grau,
+  fehlende Dateien rot;
+- Klick: zum Tab springen, oder das Skript wieder öffnen;
+- Rechtsklick: Öffnen bzw. Tab schließen, Im Explorer zeigen, **Aus Projekt
+  entfernen**;
+- "Skripte..." und "Ordner..." öffnen weitere Skripte, "Alle öffnen" holt
+  alle geschlossenen zurück.
+
+Was du bei offenem Projekt öffnest oder neu anlegst, gehört automatisch
+dazu. Einen Tab schließen nimmt das Skript **nicht** aus dem Projekt - dafür
+ist "Aus Projekt entfernen" da.
+
+Das Projekt merkt sich außerdem die Assetwurzel, die Referenz-GLA und den
+Ausgabeordner jedes Skripts. Pfade unterhalb des Projektordners stehen
+relativ in der Datei: Liegt die `.g2cproj` z. B. in
+`C:\jka_animations\md\base\models\players`, kannst du den ganzen Ordner
+verschieben oder weitergeben, und das Projekt findet seine Skripte am neuen
+Ort.
+
+**Datei > Projekt schließen** schließt das Projekt mit seinen Tabs. Der
+Fenstertitel zeigt immer, welches Projekt offen ist.
+
+---
+
+## 80. Zweite Fehlersuche: zwölf Fehler behoben
+
+Alle zwölf wurden erst mit einem Test nachgewiesen, dann behoben (Liste in
+`docs/BUGS.md`). Was du davon merkst:
+
+- **Referenz-GLA:** g2c trägt sie nicht mehr selbst ein. Jedes Skript baut
+  auf der GLA aus seinem eigenen `-makeskel`. Bisher übernahm g2c die GLA des
+  ersten geöffneten Skripts und baute damit alle anderen - bei dir stand
+  `_humanoid/_humanoid.gla` fest drin. Für die Varianten mit eigenem Skelett
+  (`_humanoid_sbd` hat 43 Knochen, `_humanoid_deka` 59) war das falsch. Ein
+  so eingetragener Pfad wird beim Start einmal entfernt (steht im Protokoll);
+  einen selbst gewählten Pfad lässt g2c stehen.
+- **`$include`** wird beim Bauen und Prüfen jetzt mitgelesen, wie auf der
+  Kommandozeile.
+- **Abmelden / Windows-Neustart:** Mit ungespeicherten Änderungen hält g2c
+  das Abmelden an und fragt. Tabs, Projekt und Einstellungen werden auch
+  dann gespeichert.
+- **Speed 0** lässt sich nicht mehr eintragen (rückwärts: negativ).
+- **Filter und Auswahl:** Was der Filter ausblendet, ist nicht mehr
+  ausgewählt - Löschen, Ausschneiden und Speed treffen nur sichtbare Zeilen.
+- **Ausgabeordner "Leeren"** bleibt geleert.
+- **In ModView öffnen** findet die gebaute GLM.
+- **Abhängige bauen** setzt nur bei den abhängigen Modellen einen
+  Ausgabeordner.
+- Tabwechsel per Maus, Framezahlen nach dem ersten Setzen der Assetwurzel und
+  das Verschieben von Kommentaren an der letzten Zeile verhalten sich jetzt
+  wie erwartet.

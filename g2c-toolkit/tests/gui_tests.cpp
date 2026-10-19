@@ -18,6 +18,8 @@
 #include <tuple>
 #include <iterator>
 #include <functional>
+#include <chrono>
+#include <thread>
 namespace fs=std::filesystem;
 
 // Create a small but valid .xsi.
@@ -35,6 +37,7 @@ static void makeXsi(const fs::path& p) {
 }
 int fails=0;
 void ck(bool c,const char*m){ if(!c){printf("  FEHLER: %s\n",m);fails++;} }
+void ck(bool c,const std::string& m){ ck(c,m.c_str()); }
 
 // --- Updater ----------------------------------------------------------------
 //
@@ -1940,6 +1943,256 @@ int main(){
     ck(sc.trailingComments[0]=="// TRENNER","Text unverändert");
 
     fs::remove_all(dd);
+  }
+
+  // Found by a second code review on 2026-10-19. Each check describes the
+  // CORRECT behaviour and was first run against the old code to prove the bug.
+  {
+    namespace fs = std::filesystem;
+    const fs::path fx = fs::temp_directory_path() / "g2c_review2";
+    fs::remove_all(fx);
+    const auto put = [](const fs::path& p, const std::string& text) {
+      fs::create_directories(p.parent_path());
+      std::ofstream(p, std::ios::binary) << text;
+    };
+    const auto lower = [](std::string s) {
+      for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      return s;
+    };
+    g2::gui::Platform p;
+    std::vector<std::string> launched;
+    p.launch = [&](const std::string&, const std::string& arg) {
+      launched.push_back(arg);
+      return true;
+    };
+    g2::gui::App a(std::move(p));
+    while (!a.documents().empty()) a.closeDocument(0);
+    auto& st = a.settings();
+    const std::string oldBase = st.baseDir, oldRef = st.referenceGla, oldMv = st.modelViewPath;
+    st.baseDir.clear();
+    st.referenceGla.clear();
+    const auto idx = [&](const fs::path& path) {
+      for (std::size_t k = 0; k < a.documents().size(); ++k)
+        if (a.documents()[k].path == path.string()) return k;
+      return a.documents().size();
+    };
+    const auto mentions = [&](std::size_t doc, const std::string& what) {
+      for (const auto& is : a.documents()[doc].validation.issues)
+        if (lower(is.message).find(what) != std::string::npos || lower(is.sequence).find(what) != std::string::npos)
+          return true;
+      return false;
+    };
+
+    // R1: a GUI build and check read the script without its $include files.
+    {
+      put(fx / "inc" / "shared.car", "$aseanimgrab inc1.xsi\n$aseanimgrab inc2.xsi\n");
+      const fs::path mainCar = fx / "inc" / "main.car";
+      put(mainCar, "$aseanimgrabinit\n$include shared.car\n$aseanimgrab own.xsi\n$aseanimgrabfinalize\n");
+      a.openCar(mainCar.string());
+      a.validateDocument(idx(mainCar), true);
+      ck(mentions(idx(mainCar), "own"), "R1 Vorbedingung: fehlende eigene Datei wird gemeldet");
+      ck(mentions(idx(mainCar), "inc1"), "R1 Prüfen/Bauen sieht die Sequenzen aus $include (fehlende inc1.xsi)");
+    }
+
+    // R2: the reference GLA guessed from the first script was kept for all.
+    {
+      const fs::path base = fx / "ref" / "base";
+      for (const char* c : {"a", "b"}) {
+        put(base / "models" / "players" / c / (std::string(c) + ".car"),
+            std::string("$aseanimgrabinit\n$aseanimgrab models/players/") + c + "/x.xsi\n$aseanimgrabfinalize\n"
+            "$aseanimconvertmdx_noask models/players/" + c + "/root -makeskel models/players/" + c + "/" + c + "\n");
+        put(base / "models" / "players" / c / (std::string(c) + ".gla"), "dummy");
+      }
+      a.openCar((base / "models" / "players" / "a" / "a.car").string());
+      a.openCar((base / "models" / "players" / "b" / "b.car").string());
+      ck(st.referenceGla.empty(),
+         "R2 Referenz-GLA nicht vom ersten Skript festgeschrieben (sonst baut b mit dem Skelett von a: " + st.referenceGla + ")");
+      st.baseDir.clear();
+      st.referenceGla.clear();
+    }
+
+    // R3: pasted rows keep the line number of their old script.
+    {
+      put(fx / "ln" / "ok1.xsi", "x");
+      put(fx / "ln" / "ok2.xsi", "x");
+      const fs::path X = fx / "ln" / "x.car", Y = fx / "ln" / "y.car";
+      put(X, "$aseanimgrabinit\n$aseanimgrab ok1.xsi\n$aseanimgrab ok2.xsi\n$aseanimgrabfinalize\n");
+      put(Y, "$aseanimgrabinit\n$aseanimgrab ok1.xsi -enum Y_ONE\n$aseanimgrab fehlt.xsi\n$aseanimgrabfinalize\n");
+      a.openCar(X.string());
+      a.openCar(Y.string());
+      a.copyGrabs(idx(Y), {1});
+      a.pasteGrabs(idx(X), 2);
+      a.validateDocument(idx(X), true);
+      a.activate(static_cast<int>(idx(X)));
+      a.setRowFilterForTest(1);
+      ck(a.documents()[idx(X)].script.grabs.size() == 3 && a.rowShownForTest(idx(X), 2),
+         "R3 Vorbedingung: eingefügte Zeile mit fehlender Datei ist markiert");
+      ck(!a.rowShownForTest(idx(X), 1), "R3 nur die eingefügte Zeile ist markiert, nicht OK2 mit derselben alten Zeilennummer");
+      a.setRowFilterForTest(0);
+    }
+
+    // R4: "Clear" on the output folder came back after reopening.
+    {
+      const fs::path S = fx / "out" / "s.car";
+      put(S, "$aseanimgrabinit\n$aseanimgrab s.xsi\n$aseanimgrabfinalize\n");
+      a.openCar(S.string());
+      a.documents()[idx(S)].outputDir = (fx / "out" / "D").string();
+      a.closeDocument(idx(S));
+      a.openCar(S.string());
+      ck(a.documents()[idx(S)].outputDir == (fx / "out" / "D").string(), "R4 Vorbedingung: Ausgabeordner gemerkt");
+      a.documents()[idx(S)].outputDir.clear();
+      a.closeDocument(idx(S));
+      a.openCar(S.string());
+      ck(a.documents()[idx(S)].outputDir.empty(), "R4 geleerter Ausgabeordner bleibt leer (Fehler: der alte kommt zurück)");
+    }
+
+    // R8: "Open in ModView" looked for <-makeskel or out>.glm, the build
+    // writes <name of the .car>.glm.
+    {
+      const fs::path M = fx / "mv" / "model.car";
+      put(M, "$aseanimgrab_gla models/players/_humanoid/_humanoid\n$aseanimconvertmdx_noask models/players/kyle/root\n");
+      put(fx / "mv" / "out" / "model.glm", "glm");
+      a.openCar(M.string());
+      a.documents()[idx(M)].outputDir = (fx / "mv" / "out").string();
+      st.modelViewPath = M.string();   // any existing file stands in for ModView
+      launched.clear();
+      const bool ok = a.openInModView(idx(M));
+      ck(ok && !launched.empty() && launched.back().find("model.glm") != std::string::npos,
+         "R8 ModView bekommt die GLM, die der Bau schreibt (model.glm)");
+      st.modelViewPath = oldMv;
+    }
+
+    // R11: "Build dependent models" gave every open tab an output folder.
+    {
+      const fs::path base = fx / "dep" / "base";
+      put(base / "models" / "mini" / "mini.car",
+          "$aseanimgrabinit\n$aseanimgrab models/anims/w.xsi\n$aseanimgrabfinalize\n"
+          "$aseanimconvertmdx_noask models/root -makeskel models/mini/mini\n");
+      put(base / "dep" / "dep.car", "$aseanimgrab_gla models/mini/mini\n$aseanimgrabinit\n$aseanimgrabfinalize\n");
+      const fs::path other = fx / "dep" / "other" / "other.car";
+      put(other, "$aseanimgrabinit\n$aseanimgrab o.xsi\n$aseanimgrabfinalize\n");
+      st.baseDir = base.string();
+      a.openCar((base / "models" / "mini" / "mini.car").string());
+      a.openCar(other.string());
+      a.documents()[idx(other)].outputDir.clear();
+      const std::size_t n = a.buildDependents(idx(base / "models" / "mini" / "mini.car"));
+      for (int k = 0; k < 3000 && a.buildRunning(); ++k) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      ck(n == 1, "R11 Vorbedingung: ein abhängiges Modell gefunden");
+      ck(a.documents()[idx(other)].outputDir.empty(), "R11 Abhängige bauen setzt keinen Ausgabeordner bei unbeteiligten Tabs");
+      st.baseDir.clear();
+    }
+
+    // R12: a comment moved down below the last row landed after the
+    // existing trailing comments.
+    {
+      const fs::path C = fx / "cm" / "c.car";
+      put(C, "$aseanimgrabinit\n$aseanimgrab a.xsi\n// C\n$aseanimgrab b.xsi\n// T1\n// T2\n$aseanimgrabfinalize\n");
+      a.openCar(C.string());
+      auto& sc = a.documents()[idx(C)].script;
+      ck(sc.trailingComments.size() == 2 && sc.grabs.size() == 2 && sc.grabs[1].commentsBefore.size() == 1,
+         "R12 Vorbedingung: zwei Kommentare hinter der letzten Zeile");
+      a.moveComment(idx(C), 1, 0, false);
+      ck(sc.trailingComments.size() == 3 && sc.trailingComments[0] == "// C",
+         "R12 Kommentar nach unten: direkt unter die letzte Zeile, vor T1 und T2");
+    }
+
+    while (!a.documents().empty()) a.closeDocument(0);
+    st.baseDir = oldBase;
+    st.referenceGla = oldRef;
+    fs::remove_all(fx);
+  }
+
+  // Projects: scripts that open together, like a Visual Studio solution.
+  {
+    namespace fs = std::filesystem;
+    const fs::path pr = fs::temp_directory_path() / "g2c_projtest";
+    fs::remove_all(pr);
+    const char* body = "$aseanimgrabinit\n$aseanimgrab a.xsi\n$aseanimgrabfinalize\n";
+    for (const char* sub : {"chars/a", "chars/b", "chars/c"}) {
+      fs::create_directories(pr / sub);
+      std::ofstream(pr / sub / "_humanoid.car") << body;
+    }
+    const auto car = [&](const fs::path& base, const char* c) { return (base / "chars" / c / "_humanoid.car").string(); };
+    const std::string A = car(pr, "a"), B = car(pr, "b"), C = car(pr, "c");
+    const std::string file = (pr / "meins.g2cproj").string();
+    const auto readAll = [](const std::string& p) {
+      std::ifstream f(p);
+      return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    };
+    const auto indexOf = [](g2::gui::App& a, const std::string& p) {
+      for (std::size_t k = 0; k < a.documents().size(); ++k)
+        if (a.documents()[k].path == p) return static_cast<int>(k);
+      return -1;
+    };
+    {
+      g2::gui::Platform p;
+      g2::gui::App a(std::move(p));
+      while (!a.documents().empty()) a.closeDocument(0);
+      a.openCar(A);
+      a.openCar(B);
+      ck(a.newProject((pr / "meins").string()), "Projekt aus den offenen Tabs angelegt (.g2cproj ergänzt)");
+      ck(a.project().path == fs::absolute(file).string() && a.project().name == "meins" && a.project().scripts.size() == 2,
+         "Projekt: Name aus dem Dateinamen, zwei Skripte");
+      const std::string text = readAll(file);
+      ck(text.rfind("# g2c project", 0) == 0 && text.find("script=chars") != std::string::npos &&
+             text.find(pr.string()) == std::string::npos,
+         "Projektdatei: Kennzeile, Pfade relativ zur Datei");
+      a.openCar(C);
+      ck(a.project().scripts.size() == 3, "bei offenem Projekt geöffnetes Skript gehört dazu");
+      a.documents()[static_cast<std::size_t>(indexOf(a, A))].outputDir = (pr / "out_a").string();
+      a.closeDocument(static_cast<std::size_t>(indexOf(a, C)));
+      ck(a.project().scripts.size() == 3, "Tab schließen lässt das Skript im Projekt");
+      a.activate(indexOf(a, B));
+      ck(!a.newProject(file), "vorhandene Projektdatei wird nicht überschrieben");
+      ck(a.project().scripts.size() == 3, "abgelehntes neues Projekt lässt das offene stehen");
+    }  // on exit: project and settings saved
+    {
+      g2::gui::Platform p;
+      g2::gui::App a(std::move(p));
+      ck(a.project().name == "meins" && a.documents().size() == 2 && indexOf(a, C) < 0,
+         "Neustart: das Projekt kommt mit genau seinen offenen Tabs zurück");
+      ck(a.activeTab() == indexOf(a, B), "Neustart: der aktive Tab des Projekts");
+      ck(indexOf(a, A) >= 0 && a.documents()[static_cast<std::size_t>(indexOf(a, A))].outputDir == (pr / "out_a").string(),
+         "Neustart: Ausgabeordner aus dem Projekt");
+      ck(a.removeFromProject(C) && a.project().scripts.size() == 2 && readAll(file).find("chars\\c") == std::string::npos,
+         "Skript aus dem Projekt entfernt (auch in der Datei)");
+      a.closeProject();
+      ck(a.project().path.empty() && a.documents().empty(), "Projekt schließen schließt seine Tabs");
+
+      // Moved along with its data: relative paths find the new place.
+      fs::create_directories(pr / "moved");
+      fs::copy(pr / "chars", pr / "moved" / "chars", fs::copy_options::recursive);
+      fs::copy_file(file, pr / "moved" / "meins.g2cproj");
+      ck(a.openProject((pr / "moved" / "meins.g2cproj").string()) && a.documents().size() == 2 &&
+             indexOf(a, car(pr / "moved", "a")) >= 0 && indexOf(a, A) < 0,
+         "verschobenes Projekt öffnet die Skripte am neuen Ort");
+
+      // An unsaved change: the switch waits for the question.
+      g2::gui::touch(a.documents()[0]);
+      a.openProject(file);
+      ck(a.project().path.find("moved") != std::string::npos && a.documents().size() == 2,
+         "ungespeicherte Änderung: erst fragen, noch nicht gewechselt");
+      a.documents()[0].dirty = false;
+      ck(a.openProject(file) && a.project().path == fs::absolute(file).string() && indexOf(a, A) >= 0 &&
+             indexOf(a, car(pr / "moved", "a")) < 0,
+         "ohne ungespeicherte Änderung: sofort gewechselt, die alten Tabs zu");
+      ck(!a.openProject(A) && a.project().name == "meins", "eine .car ist kein Projekt, das offene bleibt");
+
+      // A script gone from disk: the rest opens, the project keeps it.
+      a.closeProject();
+      fs::remove(B);
+      ck(a.openProject(file) && a.documents().size() == 1 && a.project().scripts.size() == 2,
+         "fehlendes Skript: der Rest öffnet, das Projekt behält es");
+      a.closeProject();
+    }
+    {
+      g2::gui::Platform p;
+      g2::gui::App a(std::move(p));
+      ck(a.project().path.empty() && a.documents().empty(), "nach Projekt schließen startet g2c ohne Projekt");
+      ck(!a.recentProjects().empty() && a.recentProjects().front() == fs::absolute(file).string(),
+         "zuletzt verwendete Projekte, das letzte vorn");
+    }
+    fs::remove_all(pr);
   }
 
   testUpdater();
