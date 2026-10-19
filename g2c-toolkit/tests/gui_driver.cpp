@@ -1844,13 +1844,14 @@ int main(int argc, char** argv) {
                 if (s.size() > 4 && s.compare(s.size() - 4, 4, ".xsi") == 0) s.resize(s.size() - 4);
                 return s;
             };
+            // By file name alone, whatever the folder - and each name once.
             std::set<std::string> grabbed;
-            for (const auto& g : d.script.grabs) grabbed.insert(key(g.file));
+            for (const auto& g : d.script.grabs) grabbed.insert(key(fs::path(g.file).filename().string()));
             std::size_t expected = 0;
             std::error_code ec;
             for (fs::recursive_directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
                 if (it->is_regular_file() && key(it->path().extension().string()) == ".xsi" &&
-                    !grabbed.count(key(fs::relative(it->path(), base).generic_string())))
+                    grabbed.insert(key(it->path().filename().string())).second)
                     ++expected;
             const std::size_t before = d.script.grabs.size();
             app->addXsiFolder(folder.string(), false);
@@ -3267,6 +3268,55 @@ int main(int argc, char** argv) {
         D.frames(3);
         check(app->project().name == "zwei" && app->documents().size() == 1 && app->documents()[0].path.find("p3.car") != std::string::npos,
               "Verwerfen: anderes Projekt mit seinem Tab offen");
+    });
+
+    // =====================================================================
+    step("17c. Pfade ersetzen");
+    guardedStep("Pfade ersetzen", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        const fs::path rp = work / "pfade";
+        writeText(rp / "p.car", "$aseanimgrabinit\n$aseanimgrab models/alt/x.xsi\n$aseanimgrab models/alt/y.xsi\n"
+                                "$aseanimgrab models/sonst/z.xsi\n$aseanimgrabfinalize\n");
+        const std::string pp = (rp / "p.car").string();
+        app->openCar(pp);
+        D.frames(3);
+        D.menu(tr(S::MenuEdit), tr(S::ReplacePaths));
+        D.frames(3);
+        const Item* f = D.findIf([](const Item& i) { return i.label == tr(S::ReplaceFind) && i.window.find("pathdlg") != std::string::npos; });
+        const Item* r = D.findIf([](const Item& i) { return i.label == tr(S::ReplaceWith) && i.window.find("pathdlg") != std::string::npos; });
+        check(f && r, "Bearbeiten > Pfade ersetzen: Dialog mit Suchen und Ersetzen");
+        if (f) {
+            D.click(f);
+            D.type("models/ALT/");
+        }
+        if (r) {
+            D.click(r);
+            D.type("models/neu/");
+        }
+        D.frames(3);
+        // The preview line is plain text, which the driver does not see: the
+        // same function the dialog shows, and the button it enables.
+        std::size_t k0 = 0;
+        for (std::size_t i = 0; i < app->documents().size(); ++i)
+            if (app->documents()[i].path == pp) k0 = i;
+        const auto pv = app->previewPathReplace(k0, "models/ALT/", "models/neu/");
+        const Item* apply = D.find(tr(S::ReplaceApply), "pathdlg");
+        check(pv.matched == 2 && pv.foundAfter == 0 && apply != nullptr, "Vorschau 2 betroffen, Knopf Ersetzen da");
+        D.click(apply);
+        D.frames(3);
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < app->documents().size(); ++i)
+            if (app->documents()[i].path == pp) k = i;
+        const auto& G = app->documents()[k].script.grabs;
+        check(!D.popupOpen() && G.size() == 3 && G[0].file == "models/neu/x.xsi" && G[1].file == "models/neu/y.xsi" &&
+                  G[2].file == "models/sonst/z.xsi",
+              "Ersetzen: zwei Pfade geändert, der dritte nicht");
+        app->closeDocument(k);
+        D.frames(2);
     });
 
     // =====================================================================

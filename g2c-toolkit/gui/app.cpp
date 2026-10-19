@@ -261,6 +261,124 @@ bool App::moveComment(std::size_t doc, std::size_t grab, std::size_t line, bool 
     return true;
 }
 
+// A path compared the Windows way: case and slash direction don't matter.
+// The length stays the same, so a position found in this form is the
+// position in the original.
+static std::string pathCompareForm(std::string s) {
+    for (auto& ch : s) ch = ch == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return s;
+}
+
+static bool replaceInPath(std::string& path, const std::string& find, const std::string& replaceWith) {
+    if (find.empty()) return false;
+    const std::size_t pos = pathCompareForm(path).find(pathCompareForm(find));
+    if (pos == std::string::npos) return false;
+    std::string with = replaceWith;
+    std::replace(with.begin(), with.end(), '\\', '/');
+    path = path.substr(0, pos) + with + path.substr(pos + find.size());
+    return true;
+}
+
+std::size_t App::replaceInPaths(std::size_t doc, const std::string& find, const std::string& replaceWith) {
+    if (doc >= docs_.size() || !docs_[doc].loadError.empty()) return 0;
+    Document& d = docs_[doc];
+    std::size_t n = 0;
+    for (auto& g : d.script.grabs)
+        if (replaceInPath(g.file, find, replaceWith)) ++n;
+    if (n) {
+        touch(d);
+        frameRecheck_ = true;   // the frame column reads the new paths
+    }
+    return n;
+}
+
+App::PathReplaceStats App::previewPathReplace(std::size_t doc, const std::string& find,
+                                              const std::string& replaceWith) const {
+    PathReplaceStats st;
+    if (doc >= docs_.size() || !docs_[doc].loadError.empty() || find.empty()) return st;
+    const Document& d = docs_[doc];
+    car::Script sc = d.script;
+    std::vector<std::size_t> rows;
+    for (std::size_t i = 0; i < sc.grabs.size(); ++i)
+        if (replaceInPath(sc.grabs[i].file, find, replaceWith)) rows.push_back(i);
+    st.matched = rows.size();
+    if (rows.empty()) return st;
+    // Resolved the way the build resolves them.
+    car::BuildOptions bo;
+    bo.baseDir = settings_.baseDir;
+    std::vector<std::string> resolved;
+    car::findMissingFiles(sc, d.path, bo, &resolved);
+    for (const std::size_t i : rows)
+        if (i < resolved.size() && !resolved[i].empty()) ++st.foundAfter;
+    return st;
+}
+
+// Edit > Replace paths. After a folder was renamed, every row named the old
+// one: "missing" everywhere - or worse, a file of the same name in whatever
+// now carries the old folder name.
+void App::drawPathReplaceDialog() {
+    if (!pathDlgOpen_) return;
+    if (otherModalOpen("###pathdlg")) return;
+    if (!ImGui::IsPopupOpen("###pathdlg")) ImGui::OpenPopup("###pathdlg");
+    if (!ImGui::BeginPopupModal((std::string(tr(S::ReplacePathsTitle)) + "###pathdlg").c_str(), nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    const float k = settings_.dpiScale > 0.0f ? settings_.dpiScale : 1.0f;
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 560.0f * k);
+    hintText(tr(S::ReplacePathsHint));
+    ImGui::PopTextWrapPos();
+    ImGui::SetNextItemWidth(460.0f * k);
+    ImGui::InputText(tr(S::ReplaceFind), pathFind_, sizeof(pathFind_));
+    ImGui::SetNextItemWidth(460.0f * k);
+    ImGui::InputText(tr(S::ReplaceWith), pathRepl_, sizeof(pathRepl_));
+    ImGui::Checkbox(tr(S::ReplaceAllScripts), &pathAll_);
+
+    std::vector<std::size_t> targets;
+    if (pathAll_) {
+        for (std::size_t i = 0; i < docs_.size(); ++i) targets.push_back(i);
+    } else if (active_ >= 0 && active_ < static_cast<int>(docs_.size())) {
+        targets.push_back(static_cast<std::size_t>(active_));
+    }
+    std::string key = std::string(pathFind_) + '\x1f' + pathRepl_ + '\x1f' + settings_.baseDir;
+    for (const std::size_t t : targets) key += '\x1f' + docs_[t].path + '#' + std::to_string(docs_[t].rev);
+    if (key != pathPreviewKey_) {
+        pathPreview_ = PathReplaceStats{};
+        for (const std::size_t t : targets) {
+            const auto s = previewPathReplace(t, pathFind_, pathRepl_);
+            pathPreview_.matched += s.matched;
+            pathPreview_.foundAfter += s.foundAfter;
+        }
+        pathPreviewKey_ = key;
+    }
+    if (pathFind_[0]) {
+        const std::size_t missing = pathPreview_.matched - pathPreview_.foundAfter;
+        const ImVec4 col = pathPreview_.matched == 0 ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)
+                           : missing == 0           ? ImVec4(0.4f, 0.9f, 0.5f, 1.0f)
+                                                    : ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
+        ImGui::TextColored(col, "%s", trf(S::ReplacePreview, pathPreview_.matched, pathPreview_.foundAfter, missing).c_str());
+    }
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!pathFind_[0] || pathPreview_.matched == 0);
+    if (ImGui::Button(tr(S::ReplaceApply))) {
+        std::size_t rows = 0, scripts = 0;
+        for (const std::size_t t : targets) {
+            const std::size_t n = replaceInPaths(t, pathFind_, pathRepl_);
+            rows += n;
+            if (n) ++scripts;
+        }
+        log(LogLine::Kind::Good, trf(S::LogPathsReplaced, rows, scripts));
+        pathDlgOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button(tr(S::BtnCancel)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        pathDlgOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 std::vector<std::string> App::askFolders(const char* purpose, const char* title) {
     const auto it = lastDirs_.find(purpose);
     const std::string start = it == lastDirs_.end() ? std::string() : it->second;
@@ -1904,55 +2022,25 @@ void App::drawCloseDialog() {
     ImGui::EndPopup();
 }
 
-// When two .xsi paths name the same file: absolute, normalised, lower case
-// (Windows ignores case) and without the extension (Carcass appends ".XSI" to
-// a grab that has none).
-static std::string xsiFileKey(const fs::path& p) {
-    std::error_code ec;
-    const fs::path a = p.is_absolute() ? p : fs::absolute(p, ec);
-    std::string k = a.lexically_normal().generic_string();
+// What "already in the script" means for "Only new XSI": the FILE NAME,
+// whatever folder it is in - lower case (Windows ignores case) and without
+// ".xsi" (Carcass appends ".XSI" to a grab that has none).
+//
+// Not the path: after a folder was renamed, the .car names the same walk
+// under another path than the folder it is picked from now, and the import
+// brought every one of them a second time. Two files of the same name would
+// also end up as the same sequence in the animation.cfg.
+static std::string xsiNameKey(const std::string& file) {
+    std::string k = fs::path(file).filename().string();
     std::transform(k.begin(), k.end(), k.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (k.size() > 4 && k.compare(k.size() - 4, 4, ".xsi") == 0) k.resize(k.size() - 4);
     return k;
 }
 
-// The same for the text of a grab line: two lines with the same path are the
-// same grab even if no file is found under it.
-static std::string grabTextKey(const std::string& file) {
-    std::string k = fs::path(file).lexically_normal().generic_string();
-    std::transform(k.begin(), k.end(), k.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (k.size() > 4 && k.compare(k.size() - 4, 4, ".xsi") == 0) k.resize(k.size() - 4);
-    return "|" + k;
-}
-
 std::set<std::string> App::grabbedXsiKeys(const Document& d) const {
-    // Resolved the way the build resolves them ($basedir, asset root, folder
-    // of the .car, default extension) - "already in the .car" must mean the
-    // file the build would read.
-    car::BuildOptions bo;
-    bo.baseDir = settings_.baseDir;
-    std::vector<std::string> resolved;
-    car::findMissingFiles(d.script, d.path, bo, &resolved);
-    const fs::path carDir = fs::path(d.path).parent_path();
     std::set<std::string> keys;
-    for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
-        const std::string& file = d.script.grabs[i].file;
-        keys.insert(grabTextKey(file));
-        if (!resolved[i].empty()) {
-            keys.insert(xsiFileKey(resolved[i]));
-            continue;
-        }
-        // Not on disk (yet): every place the build would look.
-        const fs::path f(file);
-        if (f.is_absolute()) {
-            keys.insert(xsiFileKey(f));
-        } else {
-            keys.insert(xsiFileKey(carDir / f));
-            if (!settings_.baseDir.empty()) keys.insert(xsiFileKey(fs::path(settings_.baseDir) / f));
-        }
-    }
+    for (const auto& g : d.script.grabs) keys.insert(xsiNameKey(g.file));
     return keys;
 }
 
@@ -2016,16 +2104,12 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
             car::GrabDirective g;
             g.file = storedName(good[i]);
             if (settings_.onlyNewXsi) {
-                // Also catches the same file twice in one go (overlapping
-                // folders).
-                const std::string byFile = xsiFileKey(good[i]);
-                const std::string byText = grabTextKey(g.file);
-                if (have.count(byFile) || have.count(byText)) {
+                // Also catches the same name twice in one go (two folders).
+                const std::string key = xsiNameKey(good[i]);
+                if (!have.insert(key).second) {
                     ++skipped;
                     continue;
                 }
-                have.insert(byFile);
-                have.insert(byText);
             }
             d.script.grabs.push_back(std::move(g));
             used[i] = 1;
@@ -2279,7 +2363,8 @@ void App::openPathsNow(const std::vector<std::string>& paths) {
 }
 
 bool App::otherModalOpen(const char* mine) const {
-    for (const char* id : {"###closedlg", "###overwrite", "###speeddlg", "###modeldlg", "confirmdel", "###carpick"})
+    for (const char* id : {"###closedlg", "###overwrite", "###speeddlg", "###modeldlg", "confirmdel", "###carpick",
+                           "###pathdlg"})
         if (std::strcmp(id, mine) != 0 && ImGui::IsPopupOpen(id)) return true;
     return false;
 }
@@ -3119,6 +3204,9 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem(withIcon(ICON_REDO, tr(S::Redo)), "Ctrl+Y", false, canRedo())) redo();
         ImGui::Separator();
         if (ImGui::MenuItem(withIcon(ICON_SEARCH, tr(S::Palette)), "Ctrl+K")) paletteRequest_ = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem(withIcon(ICON_EDIT, tr(S::ReplacePaths)), nullptr, false, !docs_.empty()))
+            openPathReplaceDialog();
         ImGui::EndMenu();
     }
 
@@ -5105,6 +5193,7 @@ void App::drawPalette() {
     add(tr(S::OpenFolder), "Ctrl+Shift+O", [this] { openFolderDialog(); });
     add(tr(S::NewCar), "Ctrl+N", [this] { newCarDialog(); });
     add(tr(S::NewProject), "", [this] { newProjectDialog(); });
+    add(tr(S::ReplacePaths), "", [this] { openPathReplaceDialog(); }, have);
     add(tr(S::OpenProject), "", [this] { openProjectDialog(); });
     add(tr(S::CloseProject), "", [this] { closeProject(); }, !project_.path.empty());
     for (const auto& r : recentProjects_)
@@ -7244,6 +7333,7 @@ void App::draw() {
         drawCloseDialog();
         drawOverwriteDialog();
         drawSpeedDialog();
+        drawPathReplaceDialog();
         drawModelDialog();
         drawCarPickDialog();
         drawPalette();
