@@ -239,6 +239,19 @@ Where something could not be verified, it is documented rather than assumed.
 
 Format details were worked out against Raven's own asset files. No code from other tools was used.
 
+## License
+
+g2c is free software under the **GNU General Public License, version 2** (GPLv2) - see [`LICENSE`](LICENSE). Copyright (C) 2026 DennisH.
+
+The Ghoul2 file formats are Raven's work: `mdx_format.h` and `matcomp.cpp` were released by Raven in 2013 under GPLv2 with the Jedi Academy source code. g2c reimplements the formats; Carcass's behaviour was worked out by analysing `carcass.exe` and checked against Raven's own files. GPLv2 matches that release and OpenJK.
+
+Bundled third-party code keeps its own, GPLv2-compatible license:
+
+- [Dear ImGui](https://github.com/ocornut/imgui) - MIT (`g2c-toolkit/third_party/imgui/LICENSE.txt`)
+- [stb_image](https://github.com/nothings/stb) - public domain or MIT (header of `stb_image.h`)
+
+No game assets from Raven are included.
+
 ---
 
 ## Feedback
