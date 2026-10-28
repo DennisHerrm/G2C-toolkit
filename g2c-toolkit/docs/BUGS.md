@@ -405,3 +405,9 @@ Prozesstest mit einer portablen Kopie), alle 12 schlugen an; erst dann behoben.
 | Fehler | Folge | Test |
 |---|---|---|
 | "Nur neue XSI" verglich Pfade, nicht Dateinamen | nach dem Umbenennen eines Ordners stand jede Animation unter anderem Pfad in der .car - der ganze Ordner (z. B. Anakin) kam ein zweites Mal hinein, mit doppelten Sequenznamen | gui_tests "Nur neue XSI: gleicher Dateiname aus anderem Ordner" (vorher 5 Fehler) |
+
+## Oktober 2026: Scale 0 beim Export
+
+| Fehler | Folge | Test |
+|---|---|---|
+| Der Export in der Oberfläche nahm bei Scale 0 in der GLA 0.64 statt 1.0 (Bau, Referenzskelett und Kommandozeile nehmen 1.0) | eine solche GLA wäre 1/0.64 = 1.56-mal zu groß exportiert worden; unter 119 echten GLAs hat keine Scale 0, es trat also nie auf | gui_tests "Scale 0 in der GLA wird wie 1.0 (100 %) exportiert" (schlug vorher an) |
