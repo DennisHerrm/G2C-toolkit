@@ -69,6 +69,7 @@ jobs:
           New-Item -ItemType Directory -Force dist, pkg | Out-Null
           Copy-Item build\Release\g2c.exe, build\Release\g2c-cli.exe pkg\
           Copy-Item README.md pkg\README.md
+          Copy-Item LICENSE pkg\LICENSE.txt
           Copy-Item g2c-toolkit\ANLEITUNG.md, g2c-toolkit\docs\BUGS.md pkg\
           Compress-Archive -Path pkg\* -DestinationPath "dist\g2c-$v-win64.zip"
           Copy-Item build\Release\g2c.exe, build\Release\g2c-cli.exe dist\
