@@ -1110,7 +1110,9 @@ std::size_t App::exportSequences(const std::vector<std::size_t>& rows, const std
     fs::create_directories(dir, ec);
 
     xsiexp::ExportOptions opt;
-    opt.scale = extract_.gla.skeleton.scale > 0.0f ? extract_.gla.skeleton.scale : 0.64f;
+    // A scale of 0 means 100 %, as in the build and on the command line.
+    // 0.64 here exported such a GLA 1.56 times too large.
+    opt.scale = extract_.gla.skeleton.scale > 0.0f ? extract_.gla.skeleton.scale : 1.0f;
     opt.origin = extract_.origin;
     opt.basePose = extract_.basePose;
     opt.version = extract_.xsiVersion;

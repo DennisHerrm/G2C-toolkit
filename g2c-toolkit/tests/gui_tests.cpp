@@ -1301,6 +1301,39 @@ int main(){
     }
   }
 
+  // A GLA with scale 0 is exported at 100 %, like everywhere else (build,
+  // reference skeleton, command line). The GUI export used to take 0.64 and
+  // wrote such a file 1/0.64 = 1.56 times too large.
+  {
+    const fs::path sz = fs::temp_directory_path()/"g2c_scale0";
+    fs::remove_all(sz);
+    std::string xsi[2];
+    const float scales[2] = {1.0f, 0.0f};
+    for (int k = 0; k < 2; ++k) {
+      const fs::path dir = sz/(k ? "null" : "eins");
+      fs::create_directories(dir);
+      g2::Skeleton sk; sk.name="s"; sk.scale=scales[k];
+      { g2::Bone b; b.name="model_root"; b.basePose=g2::Mat3x4::identity(); sk.bones.push_back(b); }
+      { g2::Bone b; b.name="pelvis"; b.parent=0; b.basePose=g2::Mat3x4::identity();
+        b.basePose.m[0][3]=3.0f; b.basePose.m[2][3]=40.0f; sk.bones.push_back(b); }
+      g2::AnimationFrames af; af.numBones=2;
+      for (int f=0; f<10; ++f) { auto m=sk.bones[1].basePose; m.m[1][3]=static_cast<float>(f); af.matrices.push_back(g2::Mat3x4::identity()); af.matrices.push_back(m); }
+      { std::ofstream o(dir/"_humanoid.gla", std::ios::binary);
+        const auto w=g2::writeMdxa(sk,af);
+        o.write((const char*)w.data.data(), (std::streamsize)w.data.size()); }
+      { std::ofstream o(dir/"animation.cfg"); o<<"BOTH_TEST 0 10 -1 20\n"; }
+      g2::gui::Platform pz;
+      g2::gui::App az(std::move(pz));
+      ck(az.loadGlaForExtract((dir/"_humanoid.gla").string()) && az.extract().seqs.size()==1,
+         "Scale 0: Vorbedingung GLA und Sequenz geladen");
+      ck(az.exportSequences({0}, (dir/"out").string())==1, "Scale 0: Vorbedingung exportiert");
+      std::ifstream in(dir/"out"/"BOTH_TEST.xsi");
+      xsi[k] = std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    ck(!xsi[0].empty() && xsi[0]==xsi[1], "Scale 0 in der GLA wird wie 1.0 (100 %) exportiert, nicht wie 0.64");
+    fs::remove_all(sz);
+  }
+
   // Compare two humanoids: which sequences are missing on the other side?
   {
     const fs::path cr = fs::temp_directory_path()/"g2c_compare";
