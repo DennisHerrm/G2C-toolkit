@@ -106,10 +106,21 @@ g2c check _humanoid.gla    # Struktur pruefen, Requantisierungsfehler messen
 
 ## Lizenz und Herkunft
 
-Das Binaerformat ist Ravens Werk. `mdx_format.h` und `matcomp.cpp` stehen unter
-GPLv2 (Copyright Raven Software / Activision / OpenJK-Beitragende). Dieser Code
-implementiert das Format neu und uebernimmt keinen Raven-Quellcode; die
-Feldreihenfolgen in `include/g2/format.h` sind zwangslaeufig identisch, weil sie
-das On-Disk-Layout beschreiben.
+g2c steht unter der **GNU General Public License, Version 2** (GPLv2), siehe
+`LICENSE`. Copyright (C) 2026 DennisH.
 
-Wer daraus etwas veroeffentlicht, sollte die GPLv2-Frage vorher klaeren.
+Das Binaerformat ist Ravens Werk. `mdx_format.h` und `matcomp.cpp` hat Raven
+2013 mit dem Jedi-Academy-Quellcode unter GPLv2 veroeffentlicht (Copyright
+Raven Software / Activision / OpenJK-Beitragende). Dieser Code implementiert
+das Format neu; die Feldreihenfolgen in `include/g2/format.h` sind
+zwangslaeufig identisch, weil sie das On-Disk-Layout beschreiben. Das
+Verhalten von Carcass ist aus der Analyse von `carcass.exe` abgeleitet und
+gegen Ravens Dateien geprueft. GPLv2 passt dazu und zu OpenJK.
+
+Fremdbibliotheken mit eigener Lizenz, beide mit GPLv2 vertraeglich:
+
+- Dear ImGui - MIT, `third_party/imgui/LICENSE.txt`
+- stb_image - Public Domain oder MIT, Kopf von `third_party/stb/stb_image.h`
+
+Spieldaten von Raven (Modelle, Animationen) gehoeren nicht zum Projekt und
+liegen ihm nicht bei.
