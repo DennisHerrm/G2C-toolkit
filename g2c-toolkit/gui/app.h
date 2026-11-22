@@ -179,6 +179,11 @@ struct Settings {
     // copy/paste or the sequence dialog, which this does not touch).
     bool onlyNewXsi = true;
 
+    // Adding a folder puts a heading with its name above its first row -
+    // "////// _humanoid_academy1 //////", the form of Raven's "Root Pose"
+    // line - so the animations of one folder stay recognisable as a block.
+    bool folderHeadings = true;
+
     // Create a .car.bak on the first save.
     //
     // Only ONCE per file - the original state before the first edit is what
@@ -432,7 +437,9 @@ public:
     void closeDocument(std::size_t index);
 
     // Appends files as $aseanimgrab. `toAll` distributes them to all tabs.
-    std::size_t addXsiFiles(const std::vector<std::string>& files, bool toAll);
+    // A `heading` goes as a comment line above the first row each script
+    // gets.
+    std::size_t addXsiFiles(const std::vector<std::string>& files, bool toAll, const std::string& heading = {});
 
     void validateDocument(std::size_t index, bool light = false);
     void validateAll();
@@ -502,6 +509,8 @@ public:
 
     // Append all .xsi files of a folder - recursively, sorted.
     std::size_t addXsiFolder(const std::string& folder, bool toAll);
+    // Several folders through addXsiFolder, with one summary.
+    std::size_t addXsiFolders(const std::vector<std::string>& dirs, bool toAll);
     // File names (lower case, without ".xsi") of every .xsi the script grabs,
     // whatever their folder; used by Settings::onlyNewXsi.
     std::set<std::string> grabbedXsiKeys(const Document& d) const;
@@ -798,8 +807,6 @@ private:
     void openPathsNow(const std::vector<std::string>& paths);
     // Index of the tab holding this file, whatever the spelling; -1 if none.
     int  docIndexOf(const std::string& path) const;
-    // Several folders through addXsiFolder, with one summary.
-    std::size_t addXsiFolders(const std::vector<std::string>& dirs, bool toAll);
     // "Open script folder" found nothing new: offer its .xsi for the script
     // on screen.
     void offerFolderXsi(const std::vector<std::string>& roots);

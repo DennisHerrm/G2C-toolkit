@@ -4249,3 +4249,30 @@ lagen 676 davon nur dort ("fehlt"), und 125 hätte der Bau aus dem neuen
 
 Leerzeichen im Ordnernamen sind kein Problem: g2c setzt solche Pfade beim
 Speichern in Anführungszeichen.
+
+---
+
+## 82. Überschrift je Ordner
+
+Neben "Nur neue XSI" steht das Häkchen **Überschrift je Ordner** (von Haus
+aus an). Fügst du über **XSI hinzufügen > Ordner...** Ordner ein, bekommt
+jeder Ordner über seine erste Animation eine Trennzeile mit seinem Namen -
+in derselben Form wie die Zeile "Root Pose":
+
+    ////////////////////////////////////////// _humanoid_academy1 //////////////////////////////////////////
+
+So bleiben z. B. die Cutscene-Animationen von `_humanoid_academy1` bis
+`_humanoid_academy6` gleich als Blöcke getrennt. Mehrere Ordner auf einmal
+markieren geht wie bisher (Strg/Umschalt im Dialog).
+
+- Die Ordner kommen nach Namen sortiert hinein (academy1 vor academy2), die
+  Dateien darin wie im Explorer: `both_cin_1`, `2`, ... `10`, `16`. Bisher
+  kamen `both_cin_10` bis `16` vor `both_cin_1`, und die Ordner in der
+  Reihenfolge, in der der Dialog sie liefert.
+- Bringt ein Ordner nichts Neues (alles schon drin), kommt auch keine
+  Überschrift.
+- Mit "... zu allen offenen Skripten" bekommt jedes Skript die Überschrift
+  über seiner ersten neuen Zeile.
+- `root` bleibt mit seiner "Root Pose"-Zeile ganz unten.
+- Die Trennzeile ist ein normaler Kommentar: per Rechtsklick verschieben,
+  bearbeiten oder löschen.

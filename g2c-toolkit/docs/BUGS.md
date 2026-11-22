@@ -411,3 +411,9 @@ Prozesstest mit einer portablen Kopie), alle 12 schlugen an; erst dann behoben.
 | Fehler | Folge | Test |
 |---|---|---|
 | Der Export in der Oberfläche nahm bei Scale 0 in der GLA 0.64 statt 1.0 (Bau, Referenzskelett und Kommandozeile nehmen 1.0) | eine solche GLA wäre 1/0.64 = 1.56-mal zu groß exportiert worden; unter 119 echten GLAs hat keine Scale 0, es trat also nie auf | gui_tests "Scale 0 in der GLA wird wie 1.0 (100 %) exportiert" (schlug vorher an) |
+
+## November 2026: Reihenfolge beim Ordner-Hinzufügen
+
+| Fehler | Folge | Test |
+|---|---|---|
+| Dateien eines Ordners als Text sortiert, Ordner in Dialog-Reihenfolge | `both_cin_10` bis `16` landeten vor `both_cin_1`; markierte Ordner kamen in Klickreihenfolge (academy6 vor academy1) | gui_tests "Ordner hinzufügen: Reihenfolge wie im Explorer" (schlug vorher an), Treiber 17d |
