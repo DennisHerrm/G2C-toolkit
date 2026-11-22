@@ -443,6 +443,7 @@ void App::saveSettings() const {
     f << "newskel=" << (settings_.newSkeleton ? 1 : 0) << "\n";
     f << "framestep=" << settings_.frameStep << "\n";
     f << "onlynewxsi=" << (settings_.onlyNewXsi ? 1 : 0) << "\n";
+    f << "folderheadings=" << (settings_.folderHeadings ? 1 : 0) << "\n";
     f << "mode=" << static_cast<int>(mode_) << "\n";
     f << "bottomopen=" << (bottomOpen_[0] ? 1 : 0) << (bottomOpen_[1] ? 1 : 0) << (bottomOpen_[2] ? 1 : 0) << "\n";
     f << "showsettings=" << (showSettings_ ? 1 : 0) << "\n";
@@ -545,6 +546,7 @@ void App::loadSettings() {
         else if (key == "newskel") settings_.newSkeleton = asBool();
         else if (key == "framestep") settings_.frameStep = std::clamp(std::atoi(val.c_str()), 1, 1000);
         else if (key == "onlynewxsi") settings_.onlyNewXsi = asBool();
+        else if (key == "folderheadings") settings_.folderHeadings = asBool();
         // Reopen in the mode the program was closed in.
         else if (key == "mode") mode_ = static_cast<Mode>(std::clamp(std::atoi(val.c_str()), 0, 2));
         else if (key == "pvglm") {
@@ -636,8 +638,37 @@ static std::string pathKey(const std::string& p) {
     return k;
 }
 
-// All .xsi of a tree, sorted - otherwise the order of the sequences depends
-// on how the file system returns them.
+// Explorer's order: runs of digits compare as numbers (both_cin_2 before
+// both_cin_10), the rest without regard to case. Plain string order put
+// both_cin_10 ... 16 in front of both_cin_1.
+static bool naturalLess(const std::string& a, const std::string& b) {
+    std::size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        const unsigned char ca = static_cast<unsigned char>(a[i]), cb = static_cast<unsigned char>(b[j]);
+        if (std::isdigit(ca) && std::isdigit(cb)) {
+            std::size_t ie = i, je = j;
+            while (ie < a.size() && std::isdigit(static_cast<unsigned char>(a[ie]))) ++ie;
+            while (je < b.size() && std::isdigit(static_cast<unsigned char>(b[je]))) ++je;
+            std::size_t is = i, js = j;   // leading zeros don't count
+            while (is + 1 < ie && a[is] == '0') ++is;
+            while (js + 1 < je && b[js] == '0') ++js;
+            if (ie - is != je - js) return ie - is < je - js;
+            if (const int c = a.compare(is, ie - is, b, js, je - js); c != 0) return c < 0;
+            i = ie;
+            j = je;
+            continue;
+        }
+        const int la = std::tolower(ca), lb = std::tolower(cb);
+        if (la != lb) return la < lb;
+        ++i;
+        ++j;
+    }
+    if (i < a.size() || j < b.size()) return a.size() - i < b.size() - j;
+    return a < b;   // equal but for case or zeros: still one fixed order
+}
+
+// All .xsi of a tree, in Explorer's order - otherwise the order of the
+// sequences depends on how the file system returns them.
 static std::vector<std::string> collectXsi(const std::string& folder) {
     std::vector<std::string> files;
     std::error_code ec;
@@ -658,8 +689,18 @@ static std::vector<std::string> collectXsi(const std::string& folder) {
             if (ext == ".xsi") files.push_back(e.path().string());
         }
     }
-    std::sort(files.begin(), files.end());
+    std::sort(files.begin(), files.end(), naturalLess);
     return files;
+}
+
+// "////// _humanoid_academy1 //////" - the form of Raven's "Root Pose" line:
+// 42 slashes, the name, 42 slashes.
+static std::string folderHeading(const std::string& folder) {
+    const fs::path p(folder);
+    std::string name = p.filename().string();
+    if (name.empty()) name = p.parent_path().filename().string();   // "C:\x\" ends in a slash
+    const std::string bar(42, '/');
+    return bar + " " + name + " " + bar;
 }
 
 int App::docIndexOf(const std::string& path) const {
@@ -2046,7 +2087,7 @@ std::set<std::string> App::grabbedXsiKeys(const Document& d) const {
     return keys;
 }
 
-std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) {
+std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll, const std::string& heading) {
     lastAddedFiles_ = 0;
     if (docs_.empty() || files.empty()) return 0;
 
@@ -2113,6 +2154,9 @@ std::size_t App::addXsiFiles(const std::vector<std::string>& files, bool toAll) 
                     continue;
                 }
             }
+            // The heading above the first row this script gets - not above a
+            // file it already had.
+            if (n == 0 && !heading.empty()) g.commentsBefore.push_back(heading);
             d.script.grabs.push_back(std::move(g));
             used[i] = 1;
             ++n;
@@ -2220,14 +2264,18 @@ std::size_t App::addXsiFolder(const std::string& folder, bool toAll) {
         return 0;
     }
     log(LogLine::Kind::Info, trf(S::LogXsiInFolder, files.size(), folder.c_str()));
-    return addXsiFiles(files, toAll);
+    return addXsiFiles(files, toAll, settings_.folderHeadings ? folderHeading(folder) : std::string());
 }
 
 std::size_t App::addXsiFolders(const std::vector<std::string>& dirs, bool toAll) {
     // Counted per file: addXsiFolder answers with the scripts it touched, and
     // the summary used to print that number as "files".
     std::size_t files = 0;
-    for (const auto& dir : dirs) {
+    // By name, like Explorer - the dialog hands them over in click order
+    // (academy6 before academy1).
+    std::vector<std::string> sorted = dirs;
+    std::sort(sorted.begin(), sorted.end(), naturalLess);
+    for (const auto& dir : sorted) {
         addXsiFolder(dir, toAll);
         files += lastAddedFiles_;
     }
@@ -3371,6 +3419,9 @@ void App::drawToolbar() {
     ImGui::SameLine();
     ImGui::Checkbox(tr(S::OnlyNewXsi), &settings_.onlyNewXsi);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::OnlyNewXsiTooltip));
+    ImGui::SameLine();
+    ImGui::Checkbox(tr(S::FolderHeadings), &settings_.folderHeadings);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::FolderHeadingsTip));
     ImGui::EndDisabled();
 
     if (busy) {

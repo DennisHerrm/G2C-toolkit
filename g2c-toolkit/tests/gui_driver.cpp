@@ -3320,6 +3320,49 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
+    step("17d. XSI-Ordner mit Überschrift je Ordner");
+    guardedStep("Ordner-Ueberschrift", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        const fs::path oh = work / "ordnerkopf";
+        writeText(oh / "h.car", "$aseanimgrabinit\n$aseanimgrab models/a/walk.xsi\n$aseanimgrab models/root.xsi\n"
+                                "$aseanimgrabfinalize\n");
+        writeText(oh / "_humanoid_academy2" / "both_x_b.xsi", "xsi 0300txt 0032\n");
+        writeText(oh / "_humanoid_academy1" / "both_x_a.xsi", "xsi 0300txt 0032\n");
+        const std::string hp = (oh / "h.car").string();
+        app->openCar(hp);
+        D.frames(3);
+        const Item* cb = D.find(tr(S::FolderHeadings), "##main");
+        check(cb != nullptr, "Häkchen \"Überschrift je Ordner\" in der Werkzeugleiste");
+        if (cb && !app->settings().folderHeadings) {
+            D.click(cb);
+            D.frames(2);
+        }
+        check(app->settings().folderHeadings, "Überschrift je Ordner ist an");
+        // Two folders at once, handed over in the "wrong" order.
+        nextFolders.push_back({(oh / "_humanoid_academy2").string(), (oh / "_humanoid_academy1").string()});
+        D.click(D.findIconButton((std::string(tr(S::BtnAddXsi)) + "    ").c_str(), "##main"));
+        D.frames(2);
+        D.click(D.findEnds(tr(S::AddXsiMenuFolder)));
+        D.frames(3);
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < app->documents().size(); ++i)
+            if (app->documents()[i].path == hp) k = i;
+        const auto& G = app->documents()[k].script.grabs;
+        const std::string bar(42, '/');
+        check(G.size() == 4 && G[1].derivedName() == "BOTH_X_A" && G[2].derivedName() == "BOTH_X_B" &&
+                  G[1].commentsBefore == std::vector<std::string>{bar + " _humanoid_academy1 " + bar} &&
+                  G[2].commentsBefore == std::vector<std::string>{bar + " _humanoid_academy2 " + bar} &&
+                  G[3].derivedName() == "ROOT",
+              "XSI hinzufügen > Ordner (zwei auf einmal): academy1 vor academy2, je mit Überschrift, root unten");
+        app->closeDocument(k);
+        D.frames(2);
+    });
+
+    // =====================================================================
     step("18. Alle schließen");
     guardedStep("Schließen", [&] {
         if (app->documents().empty()) return;

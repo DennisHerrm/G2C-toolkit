@@ -1436,6 +1436,16 @@ constexpr Entry kTable[] = {
     {S::ReplaceApply, "Ersetzen", "Replace", "替换", "置換"},
     {S::LogPathsReplaced, "%zu Pfad(e) in %zu Skript(en) ersetzt", "%zu path(s) replaced in %zu script(s)",
      "已替换 %zu 个路径（%zu 个脚本）", "%zu 件のパスを置換しました（スクリプト %zu 件）"},
+    {S::FolderHeadings, "Überschrift je Ordner", "Heading per folder", "每个文件夹加标题", "フォルダーごとに見出し"},
+    {S::FolderHeadingsTip,
+     "Beim Hinzufügen eines Ordners kommt über seine erste Animation eine Trennzeile mit seinem Namen,\n"
+     "z. B. ////// _humanoid_academy1 ////// - wie die Zeile \"Root Pose\". So bleibt jeder Ordner ein Block.",
+     "When a folder is added, a divider with its name goes above its first animation,\n"
+     "e.g. ////// _humanoid_academy1 ////// - like the \"Root Pose\" line. Each folder stays a block.",
+     "添加文件夹时，在其第一个动画上方插入带文件夹名的分隔行，\n"
+     "例如 ////// _humanoid_academy1 ////// - 与 \"Root Pose\" 行相同。每个文件夹保持为一个块。",
+     "フォルダーを追加すると、最初のアニメーションの上にフォルダー名入りの区切り行が入ります。\n"
+     "例: ////// _humanoid_academy1 ////// - \"Root Pose\" 行と同じ形です。フォルダーごとにまとまります。"},
 };
 
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(S::Count),

@@ -162,6 +162,7 @@ enum class S {
     LogRefGlaNowAuto, SpeedZero, ShutdownBlocked,
     ReplacePaths, ReplacePathsTitle, ReplacePathsHint, ReplaceFind, ReplaceWith, ReplaceAllScripts, ReplacePreview,
     ReplaceApply, LogPathsReplaced,
+    FolderHeadings, FolderHeadingsTip,
 
     Count
 };

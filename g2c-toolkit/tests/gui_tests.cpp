@@ -2183,6 +2183,80 @@ int main(){
     fs::remove_all(nx);
   }
 
+  // Adding folders (2026-11, the Academy cutscenes): files and folders in
+  // Explorer order - both_cin_1, 2 ... 10, not 10 ... 16 before 1 - and the
+  // folders sorted by name, not in the order the dialog hands them over.
+  {
+    namespace fs = std::filesystem;
+    const fs::path fh = fs::temp_directory_path() / "g2c_folderhead";
+    fs::remove_all(fh);
+    const auto put = [](const fs::path& f, const std::string& text) {
+      fs::create_directories(f.parent_path());
+      std::ofstream(f, std::ios::binary) << text;
+    };
+    for (const char* n : {"1", "2", "10"})
+      put(fh / "_humanoid_academy1" / (std::string("both_cin_") + n + "_academy1.xsi"), "xsi 0300txt 0032\n");
+    put(fh / "_humanoid_academy2" / "both_cin_1_academy2.xsi", "xsi 0300txt 0032\n");
+    const fs::path car = fh / "h" / "_humanoid.car";
+    const std::string rootPose = std::string(42, '/') + " Root Pose " + std::string(42, '/');
+    put(car, "$aseanimgrabinit\n$aseanimgrab models/a/walk.xsi\n" + rootPose +
+                 "\n$aseanimgrab models/root.xsi\n$aseanimgrabfinalize\n");
+    g2::gui::Platform p;
+    g2::gui::App a(std::move(p));
+    while (!a.documents().empty()) a.closeDocument(0);
+    const bool oldOnlyNew = a.settings().onlyNewXsi;
+    a.settings().onlyNewXsi = true;
+    a.openCar(car.string());
+    a.addXsiFolders({(fh / "_humanoid_academy2").string(), (fh / "_humanoid_academy1").string()}, false);
+    std::vector<std::string> order;
+    for (const auto& g : a.documents()[0].script.grabs) order.push_back(g.derivedName());
+    const std::vector<std::string> want = {"WALK", "BOTH_CIN_1_ACADEMY1", "BOTH_CIN_2_ACADEMY1", "BOTH_CIN_10_ACADEMY1",
+                                           "BOTH_CIN_1_ACADEMY2", "ROOT"};
+    std::string got;
+    for (const auto& n : order) got += n + " ";
+    ck(order == want, "Ordner hinzufügen: Reihenfolge wie im Explorer (1, 2, 10; academy1 vor academy2): " + got);
+
+    // Each folder with its name as a heading above its first row.
+    const auto heading = [](const char* n) { return std::string(42, '/') + " " + n + " " + std::string(42, '/'); };
+    {
+      const auto& G = a.documents()[0].script.grabs;
+      ck(G.size() == 6 && G[1].commentsBefore == std::vector<std::string>{heading("_humanoid_academy1")} &&
+             G[2].commentsBefore.empty() && G[4].commentsBefore == std::vector<std::string>{heading("_humanoid_academy2")},
+         "Überschrift je Ordner: Ordnername über der ersten Animation jedes Ordners");
+      ck(!G[5].commentsBefore.empty() && G[5].commentsBefore.back() == rootPose, "Root Pose bleibt bei root, ganz unten");
+    }
+    a.saveDocument(0);
+    {
+      std::ifstream in(car);
+      const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      ck(text.find(heading("_humanoid_academy1") + "\n$aseanimgrab ") != std::string::npos ||
+             text.find(heading("_humanoid_academy1") + "\r\n$aseanimgrab ") != std::string::npos,
+         "Überschrift steht in der .car direkt über der ersten Zeile");
+    }
+    // Nothing new from a folder: no second heading.
+    a.addXsiFolder((fh / "_humanoid_academy1").string(), false);
+    {
+      std::size_t headings = 0;
+      for (const auto& g : a.documents()[0].script.grabs)
+        for (const auto& cm : g.commentsBefore) headings += cm == heading("_humanoid_academy1");
+      ck(a.documents()[0].script.grabs.size() == 6 && headings == 1, "Ordner ohne neue Datei: keine zweite Überschrift");
+    }
+    // Switched off: no heading.
+    put(fh / "_humanoid_academy3" / "both_cin_1_academy3.xsi", "xsi 0300txt 0032\n");
+    const bool oldHeadings = a.settings().folderHeadings;
+    a.settings().folderHeadings = false;
+    a.addXsiFolder((fh / "_humanoid_academy3").string(), false);
+    {
+      const auto& G = a.documents()[0].script.grabs;
+      ck(G.size() == 7 && G[5].derivedName() == "BOTH_CIN_1_ACADEMY3" && G[5].commentsBefore.empty(),
+         "Überschrift je Ordner ausgeschaltet: keine Trennzeile");
+    }
+    a.settings().folderHeadings = oldHeadings;
+    a.settings().onlyNewXsi = oldOnlyNew;
+    while (!a.documents().empty()) a.closeDocument(0);
+    fs::remove_all(fh);
+  }
+
   // Edit > Replace paths: after a folder was renamed.
   {
     namespace fs = std::filesystem;
