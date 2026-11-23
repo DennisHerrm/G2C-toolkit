@@ -141,6 +141,16 @@ struct Document {
     char filter[128] = {0};
     int  rowFilter = 0;
 
+    // Folded blocks, by the text of their heading, and - worked out from
+    // them - which rows a folded block hides (0 shown, -1 hidden, k > 0 the
+    // block's first row with its heading at comment line k-1). Redone when
+    // the script or the folds change. Not saved: folding is a view.
+    std::set<std::string>     folded;
+    std::uint64_t             foldGen = 0;
+    mutable std::vector<int>  foldMask;
+    mutable std::uint64_t     foldMaskRev = ~0ull;
+    mutable std::uint64_t     foldMaskGen = ~0ull;
+
     void syncSelection() { selected.assign(script.grabs.size(), 0); }
 };
 
@@ -472,6 +482,28 @@ public:
 
     // Is this the ROOT grab?
     static bool isRootGrab(const car::GrabDirective& g);
+
+    // --- Blocks ---------------------------------------------------------------
+    //
+    // A heading comment - "////// _humanoid_yavin2 //////", three or more
+    // slashes and a name - starts a block that runs up to the next row with
+    // a heading. Blocks fold like functions in Notepad++ and move as a whole.
+    struct RowBlock {
+        std::size_t first = 0;   // rows, inclusive
+        std::size_t last = 0;
+        std::size_t line = 0;    // the heading in grabs[first].commentsBefore
+        bool        root = false;
+    };
+    static bool                  isHeadingLine(const std::string& comment);
+    static std::vector<RowBlock> rowBlocks(const car::Script& s);
+    // Rows and target of moving block k up (dir < 0) or down. false if it
+    // can't go there: root's block stays at the end, and nothing goes above
+    // the first block (rows without a heading there would join it).
+    static bool blockMoveRows(const std::vector<RowBlock>& blocks, std::size_t k, int dir,
+                              std::vector<std::size_t>& rows, std::size_t& before);
+    bool moveRowBlock(std::size_t doc, std::size_t block, int dir);
+    void setBlockFolded(std::size_t doc, std::size_t block, bool fold);
+    void foldAllBlocks(std::size_t doc, bool fold);
 
     // Deletes the given rows. Processed in descending order so the indices
     // don't shift under the loop.
@@ -831,6 +863,8 @@ private:
 
     // Table rows the filter currently shows.
     bool rowVisible(const Document& d, std::size_t i) const;
+    int  foldStateOf(const Document& d, std::size_t i) const;
+    static void setFolded(Document& d, const std::string& heading, bool fold);
     std::string askSaveFile(const char* purpose, const char* title, const char* filter,
                             const char* defaultExt);
 
