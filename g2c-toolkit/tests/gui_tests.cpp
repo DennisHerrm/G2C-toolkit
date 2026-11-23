@@ -2257,6 +2257,70 @@ int main(){
     fs::remove_all(fh);
   }
 
+  // Blocks under heading comments: found, folded, moved as a whole.
+  {
+    namespace fs = std::filesystem;
+    const fs::path fb = fs::temp_directory_path() / "g2c_blocks";
+    fs::remove_all(fb);
+    fs::create_directories(fb);
+    const auto H = [](const char* n) { return std::string(42, '/') + " " + n + " " + std::string(42, '/'); };
+    {
+      std::ofstream(fb / "b.car", std::ios::binary)
+          << "$aseanimgrabinit\n$aseanimgrab a.xsi -enum PRE_A\n" << H("EINS") << "\n$aseanimgrab b1.xsi -enum EINS_1\n"
+          << "$aseanimgrab b2.xsi -enum EINS_2\n" << H("ZWEI") << "\n$aseanimgrab c1.xsi -enum ZWEI_1\n"
+          << std::string(42, '/') << "\n$aseanimgrab c2.xsi -enum ZWEI_2\n" << H("Root Pose")
+          << "\n$aseanimgrab root.xsi\n$aseanimgrabfinalize\n";
+    }
+    g2::gui::Platform p;
+    g2::gui::App a(std::move(p));
+    while (!a.documents().empty()) a.closeDocument(0);
+    a.openCar((fb / "b.car").string());
+    auto& d = a.documents()[0];
+    const auto order = [&] {
+      std::string s;
+      for (const auto& g : d.script.grabs) s += (g.enumName ? *g.enumName : g.derivedName()) + " ";
+      return s;
+    };
+    ck(g2::gui::App::isHeadingLine(H("EINS")) && !g2::gui::App::isHeadingLine(std::string(42, '/')) &&
+           !g2::gui::App::isHeadingLine("// Notiz"),
+       "Blöcke: Überschrift erkannt, reine Schrägstriche und // Notiz nicht");
+    auto B = g2::gui::App::rowBlocks(d.script);
+    ck(B.size() == 3 && B[0].first == 1 && B[0].last == 2 && B[1].first == 3 && B[1].last == 4 && B[2].first == 5 &&
+           B[2].root && !B[1].root,
+       "Blöcke: EINS (2 Zeilen), ZWEI (2, der Trenner gehört dazu), Root Pose (root)");
+
+    a.activate(0);
+    a.setBlockFolded(0, 1, true);
+    ck(a.rowShownForTest(0, 1) && a.rowShownForTest(0, 2) && !a.rowShownForTest(0, 3) && !a.rowShownForTest(0, 4) &&
+           a.rowShownForTest(0, 5),
+       "Zuklappen versteckt genau die Zeilen des Blocks");
+    std::snprintf(d.filter, sizeof(d.filter), "%s", "zwei");
+    ck(a.rowShownForTest(0, 3) && a.rowShownForTest(0, 4), "mit Filter ist Zuklappen aus: Treffer bleiben sichtbar");
+    d.filter[0] = '\0';
+
+    ck(a.moveRowBlock(0, 1, -1) && order() == "PRE_A ZWEI_1 ZWEI_2 EINS_1 EINS_2 ROOT ",
+       "Block nach oben: ZWEI als Ganzes vor EINS - " + order());
+    B = g2::gui::App::rowBlocks(d.script);
+    ck(d.script.grabs[1].commentsBefore.back() == H("ZWEI") && d.script.grabs[3].commentsBefore.back() == H("EINS") &&
+           d.script.grabs[2].commentsBefore.size() == 1,
+       "Block nach oben: Überschriften und Trenner wandern mit");
+    ck(!a.rowShownForTest(0, 1) && !a.rowShownForTest(0, 2) && a.rowShownForTest(0, 3),
+       "verschobener Block bleibt zugeklappt");
+    ck(!a.moveRowBlock(0, 0, -1), "erster Block geht nicht über Zeilen ohne Überschrift");
+    ck(!a.moveRowBlock(0, 1, +1) && !a.moveRowBlock(0, 2, -1), "nichts unter root, root-Block bleibt unten");
+    ck(a.moveRowBlock(0, 0, +1) && order() == "PRE_A EINS_1 EINS_2 ZWEI_1 ZWEI_2 ROOT ", "Block nach unten - " + order());
+    a.foldAllBlocks(0, true);
+    ck(a.rowShownForTest(0, 0) && !a.rowShownForTest(0, 1) && !a.rowShownForTest(0, 3) && !a.rowShownForTest(0, 5),
+       "Alle Blöcke zu");
+    a.foldAllBlocks(0, false);
+    ck(a.rowShownForTest(0, 2) && a.rowShownForTest(0, 4) && a.rowShownForTest(0, 5), "Alle Blöcke auf");
+    a.saveDocument(0);
+    const auto back = g2::car::parseFile((fb / "b.car").string());
+    ck(back.grabs.size() == 6 && back.grabs[1].commentsBefore.back() == H("EINS"), "gespeichert und wieder gelesen");
+    while (!a.documents().empty()) a.closeDocument(0);
+    fs::remove_all(fb);
+  }
+
   // Edit > Replace paths: after a folder was renamed.
   {
     namespace fs = std::filesystem;

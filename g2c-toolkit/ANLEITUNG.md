@@ -4276,3 +4276,31 @@ markieren geht wie bisher (Strg/Umschalt im Dialog).
 - `root` bleibt mit seiner "Root Pose"-Zeile ganz unten.
 - Die Trennzeile ist ein normaler Kommentar: per Rechtsklick verschieben,
   bearbeiten oder löschen.
+
+---
+
+## 83. Blöcke zuklappen und verschieben
+
+Jede Überschrift wie `////// _humanoid_yavin2 //////` oder
+`////// Root Pose //////` - mindestens drei Schrägstriche und ein Name -
+beginnt einen **Block**. Er reicht bis zur nächsten Überschrift. Eine Zeile
+nur aus Schrägstrichen ist ein normaler Trenner und gehört zum Block.
+
+- **Pfeil links** an der Überschrift: Klick klappt den Block zu (wie in
+  Notepad++). Zugeklappt steht dahinter, wie viele Animationen er hat.
+- **Alle Blöcke zu / Alle Blöcke auf**: Knöpfe rechts neben den
+  Filter-Chips - bei 2600 Zeilen siehst du so nur noch die Überschriften.
+- **Verschieben**: einen zugeklappten Block an seiner Überschrift auf eine
+  andere Überschrift ziehen - obere Hälfte davor, untere Hälfte danach. Oder
+  Rechtsklick auf die Überschrift: **Block nach oben / nach unten**.
+- Rechtsklick bietet auch **Zeilen des Blocks auswählen** (z. B. zum
+  Kopieren oder Löschen des ganzen Blocks).
+- `root` mit seiner "Root Pose" bleibt immer ganz unten; über den ersten
+  Block geht nichts (Zeilen ohne Überschrift davor würden sonst zu ihm
+  gehören).
+- Bei aktivem Filter ist Zuklappen aus, damit kein Treffer versteckt bleibt.
+- Zeilen in einem zugeklappten Block sind nie ausgewählt - Löschen trifft
+  nichts, was man nicht sieht. Springt eine Meldung in einen zugeklappten
+  Block, klappt er auf.
+- Zuklappen ist nur Ansicht: in der .car ändert sich nichts. Verschieben
+  ändert die Reihenfolge (rückgängig mit Strg+Z).

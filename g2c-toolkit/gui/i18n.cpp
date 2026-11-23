@@ -1446,6 +1446,20 @@ constexpr Entry kTable[] = {
      "例如 ////// _humanoid_academy1 ////// - 与 \"Root Pose\" 行相同。每个文件夹保持为一个块。",
      "フォルダーを追加すると、最初のアニメーションの上にフォルダー名入りの区切り行が入ります。\n"
      "例: ////// _humanoid_academy1 ////// - \"Root Pose\" 行と同じ形です。フォルダーごとにまとまります。"},
+    {S::BlockFold, "Block zuklappen", "Fold block", "折叠块", "ブロックを折りたたむ"},
+    {S::BlockUnfold, "Block aufklappen", "Unfold block", "展开块", "ブロックを展開"},
+    {S::BlockUp, "Block nach oben", "Move block up", "块上移", "ブロックを上へ"},
+    {S::BlockDown, "Block nach unten", "Move block down", "块下移", "ブロックを下へ"},
+    {S::BlockSelect, "Zeilen des Blocks auswählen", "Select the block's rows", "选择块中的行", "ブロックの行を選択"},
+    {S::FoldAll, "Alle Blöcke zu", "Fold all blocks", "全部折叠", "すべて折りたたむ"},
+    {S::UnfoldAll, "Alle Blöcke auf", "Unfold all blocks", "全部展开", "すべて展開"},
+    {S::BlockCount, "(%zu Animationen)", "(%zu animations)", "（%zu 个动画）", "（アニメーション %zu 件）"},
+    {S::BlockFoldTip,
+     "Klick: Block zuklappen. Zugeklappt lässt er sich als Ganzes auf eine andere Überschrift ziehen.",
+     "Click: fold the block. Folded, it can be dragged as a whole onto another heading.",
+     "点击：折叠此块。折叠后可整体拖到另一个标题上。",
+     "クリック: ブロックを折りたたみます。折りたたむと、まとめて別の見出しへドラッグできます。"},
+    {S::BlockUnfoldTip, "Klick: Block aufklappen", "Click: unfold the block", "点击：展开此块", "クリック: ブロックを展開"},
 };
 
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(S::Count),

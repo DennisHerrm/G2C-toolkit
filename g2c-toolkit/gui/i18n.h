@@ -163,6 +163,8 @@ enum class S {
     ReplacePaths, ReplacePathsTitle, ReplacePathsHint, ReplaceFind, ReplaceWith, ReplaceAllScripts, ReplacePreview,
     ReplaceApply, LogPathsReplaced,
     FolderHeadings, FolderHeadingsTip,
+    BlockFold, BlockUnfold, BlockUp, BlockDown, BlockSelect, FoldAll, UnfoldAll, BlockCount, BlockFoldTip,
+    BlockUnfoldTip,
 
     Count
 };

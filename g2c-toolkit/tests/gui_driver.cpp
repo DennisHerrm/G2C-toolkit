@@ -3363,6 +3363,85 @@ int main(int argc, char** argv) {
     });
 
     // =====================================================================
+    step("17e. Blöcke zuklappen und verschieben");
+    guardedStep("Bloecke", [&] {
+        for (int tries = 0; tries < 3 && D.popupOpen(); ++tries) {
+            D.escape();
+            D.frames(2);
+        }
+        app->setMode(g2::gui::App::Mode::Build);
+        const auto H = [](const char* n) { return std::string(42, '/') + " " + n + " " + std::string(42, '/'); };
+        const fs::path bp = work / "bloecke" / "b.car";
+        writeText(bp, "$aseanimgrabinit\n$aseanimgrab a.xsi -enum PRE_A\n" + H("EINS") +
+                          "\n$aseanimgrab b1.xsi -enum EINS_1\n$aseanimgrab b2.xsi -enum EINS_2\n" + H("ZWEI") +
+                          "\n$aseanimgrab c1.xsi -enum ZWEI_1\n$aseanimgrab c2.xsi -enum ZWEI_2\n" + H("Root Pose") +
+                          "\n$aseanimgrab root.xsi\n$aseanimgrabfinalize\n");
+        const std::string pth = bp.string();
+        app->openCar(pth);
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < app->documents().size(); ++i)
+            if (app->documents()[i].path == pth) k = i;
+        app->activate(static_cast<int>(k));
+        D.frames(3);
+        auto& doc = app->documents()[k];
+        const auto order = [&] {
+            std::string s;
+            for (const auto& g : doc.script.grabs) s += (g.enumName ? *g.enumName : g.derivedName()) + " ";
+            return s;
+        };
+        const auto heading = [&](const std::string& t) { return D.findIf([&](const Item& i) { return i.label == t; }); };
+
+        // The arrow left of the first heading folds its block.
+        const Item* arrow = D.findIf([](const Item& i) { return i.label == "##fold"; });
+        check(arrow != nullptr, "Pfeil links an der Überschrift");
+        if (arrow) D.click(arrow);
+        D.frames(3);
+        check(!D.row("EINS_1") && !D.row("EINS_2") && D.row("ZWEI_1") && D.row("PRE_A"),
+              "Klick auf den Pfeil klappt den Block zu");
+
+        // A selected row inside a block that gets folded is no longer selected.
+        D.clickRow(D.row("ZWEI_1"));
+        D.frames(2);
+        app->setBlockFolded(k, 1, true);
+        D.frames(3);
+        std::size_t sel = 0;
+        for (const char c : doc.selected) sel += c ? 1 : 0;
+        check(sel == 0, "Zeilen in einem zugeklappten Block sind nicht ausgewählt");
+
+        // Right button on a heading: move the block.
+        D.click(heading(H("ZWEI")), 1);
+        D.frames(2);
+        D.click(D.findEnds(tr(S::BlockUp)));
+        D.frames(3);
+        check(order() == "PRE_A ZWEI_1 ZWEI_2 EINS_1 EINS_2 ROOT ", "Rechtsklick > Block nach oben - " + order());
+
+        // Drag the folded EINS onto the upper half of ZWEI: back in front.
+        {
+            const Item* src = heading(H("EINS"));
+            const Item* dst = heading(H("ZWEI"));
+            if (src && dst) {
+                const Item s = *src, t = *dst;
+                D.dragPath(Driver::center(s), {ImVec2(Driver::center(t).x, t.bb.Min.y + 2.0f)});
+            }
+            D.frames(3);
+            check(src && dst && order() == "PRE_A EINS_1 EINS_2 ZWEI_1 ZWEI_2 ROOT ",
+                  "zugeklappten Block auf eine Überschrift gezogen - " + order());
+        }
+
+        // Fold all / unfold all next to the chips.
+        D.click(D.find(tr(S::UnfoldAll)));
+        D.frames(2);
+        D.click(D.find(tr(S::FoldAll)));
+        D.frames(3);
+        check(D.row("PRE_A") && !D.row("EINS_1") && !D.row("ZWEI_2") && !D.row("ROOT"), "Alle Blöcke zu");
+        D.click(D.find(tr(S::UnfoldAll)));
+        D.frames(3);
+        check(D.row("EINS_1") && D.row("ZWEI_2") && D.row("ROOT"), "Alle Blöcke auf");
+        app->closeDocument(k);
+        D.frames(2);
+    });
+
+    // =====================================================================
     step("18. Alle schließen");
     guardedStep("Schließen", [&] {
         if (app->documents().empty()) return;

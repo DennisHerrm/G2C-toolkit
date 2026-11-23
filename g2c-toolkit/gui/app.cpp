@@ -3742,8 +3742,110 @@ bool App::rowHasIssue(const Document& d, std::size_t i) const {
     return false;
 }
 
+bool App::isHeadingLine(const std::string& comment) {
+    // "////// name //////": three or more slashes, then a name. A line of
+    // slashes alone is a plain divider, "// note" an ordinary comment.
+    std::size_t a = 0;
+    while (a < comment.size() && (comment[a] == ' ' || comment[a] == '\t')) ++a;
+    std::size_t s = a;
+    while (s < comment.size() && comment[s] == '/') ++s;
+    if (s - a < 3) return false;
+    for (std::size_t k = s; k < comment.size(); ++k)
+        if (comment[k] != '/' && comment[k] != ' ' && comment[k] != '\t') return true;
+    return false;
+}
+
+// The last heading among the comment lines above a row: it is the one right
+// above the row, the one that starts its block.
+static int lastHeadingIndex(const std::vector<std::string>& lines) {
+    for (std::size_t k = lines.size(); k-- > 0;)
+        if (App::isHeadingLine(lines[k])) return static_cast<int>(k);
+    return -1;
+}
+
+std::vector<App::RowBlock> App::rowBlocks(const car::Script& s) {
+    std::vector<RowBlock> out;
+    for (std::size_t i = 0; i < s.grabs.size(); ++i) {
+        const int h = lastHeadingIndex(s.grabs[i].commentsBefore);
+        if (h < 0) continue;
+        if (!out.empty()) out.back().last = i - 1;
+        RowBlock b;
+        b.first = b.last = i;
+        b.line = static_cast<std::size_t>(h);
+        out.push_back(b);
+    }
+    if (!out.empty()) out.back().last = s.grabs.size() - 1;
+    for (auto& b : out)
+        for (std::size_t r = b.first; r <= b.last; ++r)
+            if (isRootGrab(s.grabs[r])) b.root = true;
+    return out;
+}
+
+bool App::blockMoveRows(const std::vector<RowBlock>& blocks, std::size_t k, int dir,
+                        std::vector<std::size_t>& rows, std::size_t& before) {
+    if (k >= blocks.size() || blocks[k].root) return false;
+    if (dir < 0) {
+        if (k == 0) return false;
+        before = blocks[k - 1].first;
+    } else {
+        if (k + 1 >= blocks.size() || blocks[k + 1].root) return false;
+        before = blocks[k + 1].last + 1;
+    }
+    rows.clear();
+    for (std::size_t r = blocks[k].first; r <= blocks[k].last; ++r) rows.push_back(r);
+    return true;
+}
+
+bool App::moveRowBlock(std::size_t doc, std::size_t block, int dir) {
+    if (doc >= docs_.size()) return false;
+    std::vector<std::size_t> rows;
+    std::size_t before = 0;
+    if (!blockMoveRows(rowBlocks(docs_[doc].script), block, dir, rows, before)) return false;
+    return moveGrabs(doc, rows, before) > 0;
+}
+
+void App::setFolded(Document& d, const std::string& heading, bool fold) {
+    if (fold) d.folded.insert(heading);
+    else d.folded.erase(heading);
+    ++d.foldGen;
+}
+
+void App::setBlockFolded(std::size_t doc, std::size_t block, bool fold) {
+    if (doc >= docs_.size()) return;
+    Document& d = docs_[doc];
+    const auto blocks = rowBlocks(d.script);
+    if (block < blocks.size())
+        setFolded(d, d.script.grabs[blocks[block].first].commentsBefore[blocks[block].line], fold);
+}
+
+void App::foldAllBlocks(std::size_t doc, bool fold) {
+    if (doc >= docs_.size()) return;
+    Document& d = docs_[doc];
+    d.folded.clear();
+    if (fold)
+        for (const auto& b : rowBlocks(d.script)) d.folded.insert(d.script.grabs[b.first].commentsBefore[b.line]);
+    ++d.foldGen;
+}
+
+int App::foldStateOf(const Document& d, std::size_t i) const {
+    if (d.folded.empty()) return 0;
+    if (d.foldMaskRev != d.rev || d.foldMaskGen != d.foldGen || d.foldMask.size() != d.script.grabs.size()) {
+        d.foldMask.assign(d.script.grabs.size(), 0);
+        for (const auto& b : rowBlocks(d.script)) {
+            if (!d.folded.count(d.script.grabs[b.first].commentsBefore[b.line])) continue;
+            d.foldMask[b.first] = static_cast<int>(b.line) + 1;
+            for (std::size_t r = b.first + 1; r <= b.last; ++r) d.foldMask[r] = -1;
+        }
+        d.foldMaskRev = d.rev;
+        d.foldMaskGen = d.foldGen;
+    }
+    return i < d.foldMask.size() ? d.foldMask[i] : 0;
+}
+
 bool App::rowVisible(const Document& d, std::size_t i) const {
-    if (d.filter[0] == '\0' && d.rowFilter == 0) return true;
+    // Without a filter only a folded block hides rows; with one, folding is
+    // off - a match must not stay hidden in a folded block.
+    if (d.filter[0] == '\0' && d.rowFilter == 0) return foldStateOf(d, i) == 0;
     if (i >= d.script.grabs.size()) return false;
     const auto& g = d.script.grabs[i];
     const std::string name = g.enumName ? *g.enumName : g.derivedName();
@@ -3854,6 +3956,11 @@ void App::drawSequenceTable(Document& d) {
         }
     }
 
+    // Blocks under heading comments: fold arrows, moving them as a whole.
+    const std::vector<RowBlock> blocks = rowBlocks(d.script);
+    std::vector<int> blockAt(d.script.grabs.size(), -1);
+    for (std::size_t b = 0; b < blocks.size(); ++b) blockAt[blocks[b].first] = static_cast<int>(b);
+
     // Quick filters with their counts: the rows that need attention are one
     // click away.
     {
@@ -3884,6 +3991,14 @@ void App::drawSequenceTable(Document& d) {
             if (on) ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::ChipTip));
             if (hit) d.rowFilter = c;
+            ImGui::SameLine();
+        }
+        if (!blocks.empty() && d.filter[0] == '\0' && d.rowFilter == 0) {
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::FoldAll))) foldAllBlocks(static_cast<std::size_t>(active_), true);
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr(S::UnfoldAll))) foldAllBlocks(static_cast<std::size_t>(active_), false);
             ImGui::SameLine();
         }
         ImGui::NewLine();
@@ -3927,15 +4042,26 @@ void App::drawSequenceTable(Document& d) {
     // What the filter hides is not selected: "Delete 2 selected" also deleted
     // a row nobody could see. (Shift-click and dragging already only pick
     // visible rows.)
-    if (hasFilter)
+    // The same for rows in a folded block.
+    if (hasFilter || !d.folded.empty())
         for (std::size_t i = 0; i < d.selected.size(); ++i)
             if (d.selected[i] && !rowVisible(d, i)) d.selected[i] = 0;
     const std::vector<int> targets = targetFrames(d);
+    // A jump (message, command search) into a folded block opens it.
+    if (jumpToRow_ >= 0 && !hasFilter && foldStateOf(d, static_cast<std::size_t>(jumpToRow_)) != 0)
+        for (const auto& b : blocks)
+            if (b.first <= static_cast<std::size_t>(jumpToRow_) && static_cast<std::size_t>(jumpToRow_) <= b.last)
+                setFolded(d, d.script.grabs[b.first].commentsBefore[b.line], false);
 
     for (std::size_t i = 0; i < d.script.grabs.size(); ++i) {
         auto& g = d.script.grabs[i];
         const std::string name = g.enumName ? *g.enumName : g.derivedName();
-        if (!rowVisible(d, i)) continue;
+        // Folded: the block's first row shows its comment lines up to the
+        // heading, the rest of the block nothing.
+        const int fold = hasFilter ? 0 : foldStateOf(d, i);
+        if (fold < 0) continue;
+        if (fold == 0 && !rowVisible(d, i)) continue;
+        const int headCi = hasFilter ? -1 : lastHeadingIndex(g.commentsBefore);
 
         // Show comment lines above the sequence.
         //
@@ -3943,6 +4069,7 @@ void App::drawSequenceTable(Document& d) {
         // and it would only be visible in the finished animation.cfg, i.e.
         // too late to fix.
         for (std::size_t ci = 0; ci < g.commentsBefore.size(); ++ci) {
+            if (fold > 0 && static_cast<int>(ci) > fold - 1) break;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
@@ -3989,26 +4116,75 @@ void App::drawSequenceTable(Document& d) {
                 }
             } else {
                 const std::string& c = g.commentsBefore[ci];
+                // The heading of a block: an arrow on the left folds it, as
+                // in Notepad++.
+                const bool head = static_cast<int>(ci) == headCi && blockAt[i] >= 0;
+                const bool isFolded = head && d.folded.count(c) > 0;
+                const RowBlock* blk = head ? &blocks[static_cast<std::size_t>(blockAt[i])] : nullptr;
+                if (head) {
+                    const float hgt = ImGui::GetTextLineHeight();
+                    if (ImGui::InvisibleButton("##fold", ImVec2(hgt, hgt))) setFolded(d, c, !isFolded);
+                    const ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
+                    const ImVec2 ce((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+                    const float r = hgt * 0.28f;
+                    const ImU32 col =
+                        ImGui::GetColorU32(ImVec4(0.48f, 0.68f, 0.95f, ImGui::IsItemHovered() ? 1.0f : 0.80f));
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    if (isFolded)
+                        dl->AddTriangleFilled(ImVec2(ce.x - r * 0.6f, ce.y - r), ImVec2(ce.x - r * 0.6f, ce.y + r),
+                                              ImVec2(ce.x + r * 0.8f, ce.y), col);
+                    else
+                        dl->AddTriangleFilled(ImVec2(ce.x - r, ce.y - r * 0.6f), ImVec2(ce.x + r, ce.y - r * 0.6f),
+                                              ImVec2(ce.x, ce.y + r * 0.8f), col);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", tr(isFolded ? S::BlockUnfoldTip : S::BlockFoldTip));
+                    ImGui::SameLine(0.0f, 4.0f * settings_.dpiScale);
+                }
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.68f, 0.95f, 0.90f));
                 textSelectable(c.empty() ? " " : c,
                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
                 ImGui::PopStyleColor();
+                const bool rowHovered = ImGui::IsItemHovered();
 
                 // Drag like a sequence.
                 //
                 // Separate ID "g2c_cmt": a separator must not be swappable with
-                // a sequence, and vice versa.
-                if (!hasFilter &&
+                // a sequence, and vice versa. A folded block is dragged as a
+                // whole ("g2c_blk") - except root's, which stays at the end.
+                if (!hasFilter && !(isFolded && blk->root) &&
                     ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
-                    const std::size_t payload[3] = {static_cast<std::size_t>(active_), i, ci};
-                    ImGui::SetDragDropPayload("g2c_cmt", payload, sizeof(payload));
-                    ImGui::TextUnformatted(c.empty() ? " " : c.c_str());
+                    if (isFolded) {
+                        const std::size_t payload[2] = {static_cast<std::size_t>(active_),
+                                                        static_cast<std::size_t>(blockAt[i])};
+                        ImGui::SetDragDropPayload("g2c_blk", payload, sizeof(payload));
+                        ImGui::Text("%s  %s", c.c_str(), trf(S::BlockCount, blk->last - blk->first + 1).c_str());
+                    } else {
+                        const std::size_t payload[3] = {static_cast<std::size_t>(active_), i, ci};
+                        ImGui::SetDragDropPayload("g2c_cmt", payload, sizeof(payload));
+                        ImGui::TextUnformatted(c.empty() ? " " : c.c_str());
+                    }
                     ImGui::EndDragDropSource();
                 }
                 if (!hasFilter && ImGui::BeginDragDropTarget()) {
                     // Above comment line ci or below it.
                     const bool below = dropBelow();
                     const std::size_t at = below ? ci + 1 : ci;
+                    // A folded block onto a heading: before that block, or -
+                    // in the lower half of a folded one - after it.
+                    if (head)
+                        if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_blk", kDropFlags)) {
+                            const auto* q = static_cast<const std::size_t*>(pl->Data);
+                            const std::size_t to = static_cast<std::size_t>(blockAt[i]);
+                            if (q[0] == static_cast<std::size_t>(active_) && q[1] < blocks.size() && q[1] != to) {
+                                const bool after = below && isFolded && !blk->root;
+                                drawDropLine(after, settings_.dpiScale);
+                                if (pl->IsDelivery()) {
+                                    std::vector<std::size_t> rows;
+                                    for (std::size_t r = blocks[q[1]].first; r <= blocks[q[1]].last; ++r) rows.push_back(r);
+                                    pendingBlock_ = {rows, after ? blk->last + 1 : blk->first, 0};
+                                }
+                            }
+                        }
                     if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("g2c_cmt", kDropFlags)) {
                         const auto* q = static_cast<const std::size_t*>(pl->Data);
                         if (q[0] == static_cast<std::size_t>(active_)) {
@@ -4039,13 +4215,13 @@ void App::drawSequenceTable(Document& d) {
                     ImGui::EndDragDropTarget();
                 }
 
-                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                if (rowHovered && ImGui::IsMouseDoubleClicked(0)) {
                     editCommentGrab_ = static_cast<int>(i);
                     focusEditField_ = true;
                     editCommentLine_ = static_cast<int>(ci);
                     std::snprintf(editCommentBuf_, sizeof(editCommentBuf_), "%s", c.c_str());
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(S::CommentEditHint));
+                if (rowHovered) ImGui::SetTooltip("%s", tr(S::CommentEditHint));
 
                 // Right-click on the comment line: delete.
                 if (ImGui::BeginPopupContextItem("cctx")) {
@@ -4062,11 +4238,40 @@ void App::drawSequenceTable(Document& d) {
                             d.script.grabs[i].commentsBefore.begin() + static_cast<long>(ci));
                         touch(d);
                     }
+                    if (head) {
+                        const std::size_t bk = static_cast<std::size_t>(blockAt[i]);
+                        std::vector<std::size_t> upRows, downRows;
+                        std::size_t upBefore = 0, downBefore = 0;
+                        const bool canUp = blockMoveRows(blocks, bk, -1, upRows, upBefore);
+                        const bool canDown = blockMoveRows(blocks, bk, +1, downRows, downBefore);
+                        ImGui::Separator();
+                        if (ImGui::MenuItem(tr(isFolded ? S::BlockUnfold : S::BlockFold))) setFolded(d, c, !isFolded);
+                        if (ImGui::MenuItem(tr(S::BlockUp), nullptr, false, canUp)) pendingBlock_ = {upRows, upBefore, 0};
+                        if (ImGui::MenuItem(tr(S::BlockDown), nullptr, false, canDown))
+                            pendingBlock_ = {downRows, downBefore, 0};
+                        if (ImGui::MenuItem(tr(S::BlockSelect))) {
+                            // Open first: rows in a folded block are never
+                            // selected.
+                            setFolded(d, c, false);
+                            std::fill(d.selected.begin(), d.selected.end(), char{0});
+                            for (std::size_t r = blk->first; r <= blk->last && r < d.selected.size(); ++r) d.selected[r] = 1;
+                            selAnchor_ = static_cast<int>(blk->first);
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem(tr(S::FoldAll))) foldAllBlocks(static_cast<std::size_t>(active_), true);
+                        if (ImGui::MenuItem(tr(S::UnfoldAll))) foldAllBlocks(static_cast<std::size_t>(active_), false);
+                    }
                     ImGui::EndPopup();
+                }
+                // Last: drag and the context menu belong to the line itself.
+                if (isFolded) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled(tr(S::BlockCount), blk->last - blk->first + 1);
                 }
             }
             ImGui::PopID();
         }
+        if (fold > 0) continue;   // folded: the row itself is hidden
 
         ImGui::TableNextRow();
         ImGui::PushID(static_cast<int>(i));
